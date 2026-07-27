@@ -685,8 +685,8 @@ const I18N = {
     pullData:'获取', pullTooltip:'从云端拉取当前公会最新数据。个人端必须先获取才能上传，避免覆盖别人。',
     upload:'上传', uploadTooltip:'把当前本地数据同步到云端。会长端会强制覆盖远端；个人端仅按角色名合并本人这条。',
     uploadOk:'已上传到云端', uploadFail:'上传失败', uploading:'正在上传，请稍候…',
-    pullOverwriteConfirm:'本地有未上传的改动，继续获取会用云端数据覆盖本地。是否继续？',
     needClickUpload:'请点右上角"上传"按钮同步到云端。',
+    importDetail:'导入完成：新增 {added} 位，更新 {updated} 位，本地共 {total} 位。',
     notPulled:'未获取', pulledAtLabel:'已获取',
     pullFirstAlert:'请先点击右上角"获取"按钮，从云端拉取当前公会数据，然后再上传本人数据（避免覆盖他人）。',
     importNeedPullHint:'已加载到本地。请先点右上角"获取"按钮从云端拉取当前数据，之后再点"上传"，本人这条会以角色名为主键合并进云端。',
@@ -723,8 +723,8 @@ const I18N = {
     pullData:'Pull', pullTooltip:'Fetch the latest guild data from cloud. Members must pull before uploading, to avoid overwriting others.',
     upload:'Upload', uploadTooltip:'Sync local data to cloud. Leader overwrites the remote; member merges only their own entry by name.',
     uploadOk:'Uploaded to cloud', uploadFail:'Upload failed', uploading:'Uploading, please wait…',
-    pullOverwriteConfirm:'You have unsaved local changes. Pulling will overwrite them with cloud data. Continue?',
     needClickUpload:'Click the top-right "Upload" button to sync to the cloud.',
+    importDetail:'Import done: +{added} added, {updated} updated, {total} total locally.',
     notPulled:'Not pulled', pulledAtLabel:'Pulled',
     pullFirstAlert:'Please click the "Pull" button first to fetch the latest guild data before uploading your own data (to avoid overwriting others).',
     importNeedPullHint:'Loaded locally. Please click the top-right "Pull" button first, then click "Upload" — your entry will be merged into the cloud by character name.',
@@ -1664,6 +1664,7 @@ function importJson() {
       if (parsedList.length > 0) {
         // 遍历现有 members：如果 JSON 里包含该 name → 用新的替换（沿用原 id）；否则保留原样
         const merged = [];
+        let updated = 0;
         (state.members || []).forEach(old => {
           const nm = old && old.name ? String(old.name).trim() : '';
           if (nm && parsedByName[nm]) {
@@ -1671,12 +1672,14 @@ function importJson() {
             np.id = old.id; // 关键：沿用旧 id，UI 里 index 不动
             merged.push(np);
             delete parsedByName[nm];
+            updated++;
           } else {
             merged.push(old);
           }
         });
         // 剩下的 parsed 都是本地没有的名字 → 追加到末尾，分配递增 id
-        Object.values(parsedByName).forEach(np => {
+        const addedList = Object.values(parsedByName);
+        addedList.forEach(np => {
           np.id = nextTempId++;
           merged.push(np);
         });
@@ -1692,16 +1695,18 @@ function importJson() {
             try { localStorage.setItem('mwi_self_name', selfName); } catch(e) {}
           }
         }
-        // 别名，让下方 alert 分支照旧
-        const newMembers = parsedList;
         renderAll();
         saveData();
+        const detail = t('importDetail')
+          .replace('{added}', addedList.length)
+          .replace('{updated}', updated)
+          .replace('{total}', state.members.length);
         if (state.isShared && !isGuildLeader() && !state.hasPulled) {
-          alert(t('importNeedPullHint'));
+          alert(detail+'\n'+t('importNeedPullHint'));
         } else if (state.isShared) {
-          alert(t('importSuccess')+': '+newMembers.length+'\n'+t('needClickUpload'));
+          alert(detail+'\n'+t('needClickUpload'));
         } else {
-          alert(t('importSuccess')+': '+newMembers.length);
+          alert(detail);
         }
       } else {
         alert(t('importFailed'));
@@ -2053,20 +2058,46 @@ function updateConnectionStatus() {
 // 这样保证本地数据是在服务端"最新版本"之上做的增量修改，"本人这条以 name 为主键覆盖同名条目"不会把别人抹掉。
 async function pullFromServer() {
   if (!state.isShared || !state.binId) { alert(t('notShared')); return; }
-  // 拉取会覆盖本地未上传的改动，先提示
-  if (state.dirty) {
-    if (!confirm(t('pullOverwriteConfirm'))) return;
-  }
+  // 关键：如果本地有未上传的改动（比如刚 import 完的本人数据），
+  // 先把它快照出来，pull 完成后按 name 合并回去，不允许云端把本地编辑冲掉。
+  const localHasDirty = !!state.dirty;
+  const localMembersSnap = localHasDirty ? (state.members || []).slice() : null;
+  const localTrialsSnap  = localHasDirty ? (state.trials  || []).slice() : null;
   const ok = await loadFromBin();
-  if (ok) {
-    renderAll();
-    if (state.members.length > 0) calculate();
-    clearDirty();
-    const badge = document.getElementById('pull-status');
-    if (badge) { badge.textContent = t('pullSuccess'); badge.className = 'pull-status ok'; setTimeout(updatePullStatus, 1600); }
+  if (!ok) { alert(t('pullFailed')); return; }
+  if (localMembersSnap) {
+    // 云端 pull 下来后的 state.members = 云端最新；这里把 localMembersSnap 里的每一条按 name 合并回去
+    const remoteByName = {};
+    (state.members || []).forEach(p => { if (p && p.name) remoteByName[String(p.name).trim()] = p; });
+    let maxId = -1;
+    (state.members || []).forEach(p => { const n = Number(p.id); if (isFinite(n) && n > maxId) maxId = n; });
+    const merged = (state.members || []).slice();
+    localMembersSnap.forEach(lp => {
+      if (!lp || !lp.name) return;
+      const nm = String(lp.name).trim();
+      const remote = remoteByName[nm];
+      if (remote) {
+        // 本地是"最新编辑 / 刚导入"的版本，用本地覆盖云端；沿用云端稳定 id
+        lp.id = remote.id;
+        const idx = merged.indexOf(remote);
+        if (idx >= 0) merged[idx] = lp; else merged.push(lp);
+      } else {
+        // 云端没有的本地新成员 → 追加末尾，分配 id
+        lp.id = ++maxId;
+        merged.push(lp);
+      }
+    });
+    merged.sort((a, b) => (a.id|0) - (b.id|0));
+    state.members = merged;
+    if (localTrialsSnap && localTrialsSnap.length) state.trials = localTrialsSnap;
+    // dirty 依然保留：本地这些改动仍未同步到云端，用户还得点"上传"
   } else {
-    alert(t('pullFailed'));
+    clearDirty();
   }
+  renderAll();
+  if (state.members.length > 0) calculate();
+  const badge = document.getElementById('pull-status');
+  if (badge) { badge.textContent = t('pullSuccess'); badge.className = 'pull-status ok'; setTimeout(updatePullStatus, 1600); }
 }
 async function refreshFromServer() { return pullFromServer(); }
 
