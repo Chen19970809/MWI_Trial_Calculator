@@ -54,6 +54,11 @@ h2 { font-size:16px; margin:10px 0 8px; color:var(--text-muted); }
 .btn-sm { padding:3px 8px; font-size:12px; }
 .btn-icon { padding:6px 10px; font-size:16px; line-height:1; }
 .connection-status { font-size:12px; color:var(--text-muted); padding:2px 8px; border-radius:3px; background:var(--conn-bg); }
+.pull-status { font-size:12px; padding:2px 8px; border-radius:3px; background:var(--conn-bg); color:var(--text-muted); display:none; }
+.pull-status.warn { color:#c25e00; background:#fff2e0; border:1px solid #f3c98a; }
+.pull-status.ok { color:#1a7f37; background:#e6f4ea; border:1px solid #a6d8b5; }
+#btn-pull.warn { background:#c25e00; color:#fff; border-color:#c25e00; animation:pull-pulse 1.6s ease-in-out infinite; }
+@keyframes pull-pulse { 0%,100% { box-shadow:0 0 0 0 rgba(194,94,0,.55);} 50% { box-shadow:0 0 0 6px rgba(194,94,0,0);} }
 
 /* Trial Config */
 .trial-section { padding:10px 20px; }
@@ -619,11 +624,12 @@ table.member-table td.loadout-cell.loadout-empty { color:var(--text-faint); font
   <div class="header-left">
     <h1 id="h1-title">MWI 试炼计算器</h1>
     <span class="connection-status" id="conn-status">离线模式</span>
+    <span class="pull-status" id="pull-status" title=""></span>
   </div>
   <div class="header-right">
     <button class="btn btn-icon" id="btn-lang" onclick="toggleLang()">中/EN</button>
     <button class="btn btn-icon" id="btn-theme" onclick="toggleTheme()">🌙</button>
-    <button class="btn" id="btn-refresh" onclick="refreshFromServer()" style="display:none">🔄</button>
+    <button class="btn" id="btn-pull" onclick="pullFromServer()" style="display:none" title="">🔄 <span id="btn-pull-label">获取</span></button>
     <button class="btn" id="btn-share" onclick="openShareDialog()">共享设置</button>
     <button class="btn" id="btn-import-json" onclick="importJson()">导入</button>
     <span id="export-script-links" class="export-script-links"></span>
@@ -666,6 +672,12 @@ const I18N = {
     noEquip:'未选择装备', passes:'次通关', people:'人', offlineMode:'离线模式',
     connected:'已连接', guildName:'公会名称', password:'访问密码 (用于加密数据)',
     masterKey:'jsonbin.io Master Key (会长填写)',
+    pullData:'获取', pullTooltip:'从云端拉取当前公会最新数据。个人端必须先获取才能上传，避免覆盖别人。',
+    notPulled:'未获取', pulledAtLabel:'已获取',
+    pullFirstAlert:'请先点击右上角"获取"按钮，从云端拉取当前公会数据，然后再上传本人数据（避免覆盖他人）。',
+    importNeedPullHint:'已加载到本地。请先点右上角"获取"按钮从云端拉取当前数据，之后本人这条会以角色名为主键合并进云端。',
+    pullSuccess:'已拉取云端最新数据', pullFailed:'拉取失败，请检查密码或网络',
+    uploadedSelf:'本人数据已按角色名合并上传', notShared:'尚未加入共享空间',
     shareHint:'会长创建共享空间后，生成分享链接发给成员。成员打开链接即可查看/更新数据，无需注册。',
     currentUrl:'当前共享链接', createShare:'创建共享', closeBtn:'关闭',
     shareCreated:'共享空间已创建！复制链接发给公会成员。', linkCopied:'链接已复制',
@@ -692,6 +704,12 @@ const I18N = {
     noEquip:'No equipment selected', passes:'passes', people:'people', offlineMode:'Offline',
     connected:'Connected', guildName:'Guild Name', password:'Access Password (for encryption)',
     masterKey:'jsonbin.io Master Key (for guild leader)',
+    pullData:'Pull', pullTooltip:'Fetch the latest guild data from cloud. Members must pull before uploading, to avoid overwriting others.',
+    notPulled:'Not pulled', pulledAtLabel:'Pulled',
+    pullFirstAlert:'Please click the "Pull" button first to fetch the latest guild data before uploading your own data (to avoid overwriting others).',
+    importNeedPullHint:'Loaded locally. Please click the top-right "Pull" button first, then your data will be merged into the cloud by character name.',
+    pullSuccess:'Latest cloud data pulled', pullFailed:'Pull failed, check password or network',
+    uploadedSelf:'Your data has been merged into the cloud by name', notShared:'Not in a shared space',
     shareHint:'After the leader creates a shared space, share the link with members. Members can view/update data without registration.',
     currentUrl:'Current Share URL', createShare:'Create Share', closeBtn:'Close',
     shareCreated:'Share space created! Copy the link to share with guild members.', linkCopied:'Link copied',
@@ -759,7 +777,12 @@ let state = {
   isShared: false,
   // 配装列表头选中的 settingSuffix（PascalCase，如 Milking/Foraging/…/Goblin），
   // 决定成员表格里"配装"列每一行显示的是谁的哪套配装。默认挤奶。
-  selectedLoadoutSuffix: 'Milking'
+  selectedLoadoutSuffix: 'Milking',
+  // 本人姓名（用于个人端上传时按 name 主键覆盖同名条目）。默认取 importJson 后 members[0].name，也可持久化到 localStorage。
+  selfName: '',
+  // 是否已从云端拉取过一次数据。个人端必须先拉取再上传，避免覆盖别人。会话级，不持久化。
+  hasPulled: false,
+  lastPullTs: 0
 };
 let pickerState = { memberId:null, slot:null, iconId:null, enhance:0 };
 
@@ -1123,9 +1146,40 @@ function updateStaticText() {
   document.getElementById('btn-calculate').textContent = t('calculate');
   document.getElementById('btn-lang').textContent = t('language');
   document.getElementById('btn-theme').textContent = t('theme');
+  const pullLbl = document.getElementById('btn-pull-label');
+  if (pullLbl) pullLbl.textContent = t('pullData');
+  const pullBtn = document.getElementById('btn-pull');
+  if (pullBtn) pullBtn.title = t('pullTooltip');
   const connEl = document.getElementById('conn-status');
   if (!state.isShared) connEl.textContent = t('offlineMode');
   else connEl.textContent = t('connected')+': '+state.guild;
+  updatePullStatus();
+}
+
+// 顶部"未获取 / 已获取 hh:mm:ss"徽标 + 获取按钮的状态样式。个人端未拉取时按钮高亮闪烁。
+function updatePullStatus() {
+  const badge = document.getElementById('pull-status');
+  const btn = document.getElementById('btn-pull');
+  if (!badge || !btn) return;
+  if (!state.isShared) {
+    badge.style.display = 'none';
+    badge.className = 'pull-status';
+    return;
+  }
+  badge.style.display = '';
+  if (state.hasPulled) {
+    const d = new Date(state.lastPullTs || Date.now());
+    const hh = String(d.getHours()).padStart(2,'0');
+    const mm = String(d.getMinutes()).padStart(2,'0');
+    const ss = String(d.getSeconds()).padStart(2,'0');
+    badge.textContent = t('pulledAtLabel')+' '+hh+':'+mm+':'+ss;
+    badge.className = 'pull-status ok';
+    btn.classList.remove('warn');
+  } else {
+    badge.textContent = t('notPulled');
+    badge.className = 'pull-status warn';
+    if (!isGuildLeader()) btn.classList.add('warn'); else btn.classList.remove('warn');
+  }
 }
 
 function isGuildLeader() {
@@ -1250,6 +1304,8 @@ function loadPrefs() {
     if (theme === 'dark' || theme === 'light') state.theme = theme;
     const loadoutSuffix = localStorage.getItem('mwi_loadout_suffix');
     if (loadoutSuffix) state.selectedLoadoutSuffix = loadoutSuffix;
+    const selfName = localStorage.getItem('mwi_self_name');
+    if (selfName) state.selfName = selfName;
   } catch(e) {}
   document.documentElement.setAttribute('data-theme', state.theme);
 }
@@ -1409,7 +1465,13 @@ function calculate() {
   if (state.members.length === 0) { alert(t('addMembersFirst')); return; }
   const t0 = performance.now();
   state.result = runAssignment(state.members, state.trials);
-  state.assignment = state.result.assignment;
+  // runAssignment 返回的 assignment 是 Array(P)，assignment[k] = 第 k 个 people 分到的 trialIdx。
+  // 为了兼容"稀疏 / 稳定的 person.id"，转成 { [person.id]: trialIdx } map，
+  // renderMemberTable 用 state.assignment[p.id] 才不会错位。
+  const arr = state.result.assignment || [];
+  const map = {};
+  state.members.forEach((p, k) => { map[p.id] = arr[k]; });
+  state.assignment = map;
   const t1 = performance.now();
   renderAssignmentResults();
   const bar = document.getElementById('summary-bar');
@@ -1481,17 +1543,44 @@ function importJson() {
         alert('JSON parse error: ' + e.message);
         return;
       }
+      // 为了让"每次更新的人员在 list 中的 index（p.id）不变"：
+      //   1) 同名的成员沿用原来的 id（本地缓存里已经存在的同名成员）；
+      //   2) 陌生成员分配一个"追加 id" = 当前最大 id + 1，永不复用被删掉的 id；
+      //   3) 最终 mergeState 里如果远端已经有同 name 的 id，会进一步校正为远端的 id，保证跨浏览器一致。
+      const oldByName = {};
+      (state.members || []).forEach(p => { if (p && p.name) oldByName[String(p.name).trim()] = p; });
+      let nextTempId = (state.members || []).reduce((mx, p) => Math.max(mx, Number(p.id) || 0), -1) + 1;
       const newMembers = [];
       for (const profile of membersData) {
         const m = parseMemberFromProfile(profile);
-        if (m) {
-          m.id = newMembers.length > 0 ? newMembers[newMembers.length-1].id + 1 : 0;
-          newMembers.push(m);
-        }
+        if (!m) continue;
+        const nm = String(m.name || '').trim();
+        const exist = nm && oldByName[nm];
+        m.id = exist ? exist.id : (nextTempId++);
+        newMembers.push(m);
       }
       if (newMembers.length > 0) {
+        // 按 id 升序保持稳定顺序
+        newMembers.sort((a, b) => (a.id|0) - (b.id|0));
         state.members = newMembers;
-        renderAll(); saveData();
+        // 单成员脚本导出的 JSON 只有 1 条 —— 那条就是"本人"；即便是多条也把第一条视为本人（会长端此时通常不需要 selfName 语义，留空亦可）。
+        // selfName 用于 saveToBin 时按 name 主键把这条覆盖进云端。
+        const selfName = ((newMembers[0].name || '') + '').trim();
+        if (selfName) {
+          state.selfName = selfName;
+          try { localStorage.setItem('mwi_self_name', selfName); } catch(e) {}
+        }
+        // 打上更新时间戳，保证服务端按 _ts 合并时本地这条被优先。
+        newMembers.forEach(p => { p._ts = Date.now(); });
+        renderAll();
+        // 个人端 & 已进入共享空间 & 还没拉取过 → 先提醒去点"获取"，避免上传覆盖别人。
+        if (state.isShared && !isGuildLeader() && !state.hasPulled) {
+          alert(t('importNeedPullHint'));
+          // 只写本地，不触发 saveToBin（saveData 里已做门槛）
+          saveData();
+        } else {
+          saveData();
+        }
         alert(t('importSuccess')+': '+newMembers.length);
       } else {
         alert(t('importFailed'));
@@ -1508,7 +1597,15 @@ function getStorageKey() { return 'mwi_trial_'+(state.guild||'default'); }
 function saveData() {
   const data = JSON.stringify({ guild:state.guild, members:state.members, trials:state.trials });
   try { localStorage.setItem(getStorageKey(), data); } catch(e) {}
-  if (state.isShared && state.binId && state.encKey) saveToBin(data);
+  if (state.isShared && state.binId && state.encKey) {
+    // 个人端未拉取过 → 只保留本地，跳过云端上传。避免把别人写覆盖成本地空快照。
+    // 会长端不受此限制（TA 就是权威源，进入即可写）。
+    if (!isGuildLeader() && !state.hasPulled) {
+      console.warn('[MWI] 未拉取云端数据，本次仅写入本地。请先点顶部"获取"按钮。');
+      return;
+    }
+    saveToBin(data);
+  }
 }
 function loadData() {
   try {
@@ -1549,34 +1646,88 @@ function saveToBin(data) {
       const rec = await encryptRecord(dataToSave, state.encKey);
       const pHeaders = {'Content-Type':'application/json'};
       if (mk) pHeaders['X-Master-Key'] = mk;
-      await fetch(BIN_BASE+'/'+state.binId, {
+      const putResp = await fetch(BIN_BASE+'/'+state.binId, {
         method:'PUT', headers:pHeaders,
         body: JSON.stringify(rec)
       });
       // Sync merged result back to local state (picks up others' changes)
+      const prevSig = (state.members || []).map(p => p && p.id).join(',');
       state.members = merged.members;
       state.trials = merged.trials;
+      const newSig = (state.members || []).map(p => p && p.id).join(',');
+      if (prevSig !== newSig) {
+        // 服务端有新增/减少成员，或 id 顺序有变化 —— 重绘表格让 UI 顺序跟着更新（按 id 稳定升序）
+        try { renderTableHeader(); renderMemberTable(); renderSummary(); } catch(e) {}
+      }
+      if (putResp && putResp.ok) {
+        // 顶部 pull 徽标 flash "本人数据已按角色名合并上传"
+        const badge = document.getElementById('pull-status');
+        if (badge) { badge.textContent = t('uploadedSelf'); badge.className = 'pull-status ok'; clearTimeout(window.__mwiPullFlashTimer); window.__mwiPullFlashTimer = setTimeout(updatePullStatus, 1800); }
+      }
     } catch(e) { console.error('Save failed:', e); }
     isSaving = false;
   }, 2000);
 }
 
+// 合并本地与远端 members / trials。
+//   * **name** 作主键去重；**id 作稳定索引**，全体成员用完全体（remote ∪ local）里的最大 id 递增分配缺失 id。
+//   * 本人（state.selfName）无条件用本地版本覆盖，但 id 沿用远端已有的（保证跨浏览器同一个人 id 不变）。
+//   * 其他成员：远端优先，本地 _ts 更新则本地覆盖，但 id 沿用远端。
+//   * 本地新增（remote 没有的 name）追加，id = 当前最大 id + 1，永不复用。
+//   * 输出按 id 升序。
+//   * trials 仍按 _ts 时间戳合并。
 function mergeState(local, remote) {
   if (!remote || !remote.members) return local;
-  // Build remote member map
-  const rMap = {};
-  remote.members.forEach(p => { rMap[p.id] = p; });
-  // Merge: for each local member, if remote has newer _ts, take remote
-  const mergedMembers = local.members.map(p => {
-    const r = rMap[p.id];
-    if (r && r._ts && (!p._ts || r._ts > p._ts)) return r;
-    return p;
+  const selfName = ((state.selfName || '') + '').trim();
+  const byName = {}; // name -> member (远端优先)
+  const remoteIdByName = {}; // 记录远端已有的 id，用来给本地/本人这条稳定沿用
+
+  (remote.members || []).forEach(p => {
+    if (!p) return;
+    const n = ((p.name || '') + '').trim();
+    if (!n) return;
+    byName[n] = p;
+    if (typeof p.id === 'number' && isFinite(p.id)) remoteIdByName[n] = p.id;
   });
-  // Add remote members not present locally (added by others)
-  const localIds = new Set(local.members.map(p => p.id));
-  remote.members.forEach(p => { if (!localIds.has(p.id)) mergedMembers.push(p); });
-  // Merge trials by _ts
-  const mergedTrials = local.trials.map((trial, i) => {
+
+  (local.members || []).forEach(p => {
+    if (!p) return;
+    const n = ((p.name || '') + '').trim();
+    if (!n) return;
+    const remoteId = remoteIdByName[n];
+    if (selfName && n === selfName) {
+      // 本人：本地覆盖远端；id 沿用远端已有的稳定 id；远端没有 → 抹掉本地 id，让后面统一"追加分配"避免撞号
+      if (remoteId != null) p.id = remoteId; else delete p.id;
+      byName[n] = p;
+    } else {
+      const r = byName[n];
+      if (!r) {
+        // 远端不存在的新成员：清空本地 id 交给后面"追加分配"，避免与远端某人 id 撞车
+        delete p.id;
+        byName[n] = p;
+        return;
+      }
+      const lts = Number(p._ts || 0), rts = Number(r._ts || 0);
+      if (lts > rts) {
+        // 本地更新覆盖远端；id 沿用远端稳定 id
+        p.id = r.id;
+        byName[n] = p;
+      }
+    }
+  });
+
+  // 给还没有 id 的成员（比如从没上传过的新人）分配"追加 id"= 当前所有 id 的 max+1
+  const all = Object.values(byName);
+  let maxId = -1;
+  all.forEach(p => { if (typeof p.id === 'number' && isFinite(p.id) && p.id > maxId) maxId = p.id; });
+  all.forEach(p => {
+    if (typeof p.id !== 'number' || !isFinite(p.id)) p.id = ++maxId;
+  });
+
+  // 输出按 id 升序 —— UI 遍历数组的顺序即是 index 顺序，"index 不变"由此保证
+  const mergedMembers = all.slice().sort((a, b) => (a.id|0) - (b.id|0));
+
+  const mergedTrials = (local.trials || []).map((trial, i) => {
     const r = remote.trials && remote.trials[i];
     if (r && r._ts && (!trial._ts || r._ts > trial._ts)) return r;
     return trial;
@@ -1597,6 +1748,15 @@ async function loadFromBin() {
       const dec = await decryptRecord(json.record, state.encKey);
       const data = JSON.parse(dec);
       Object.assign(state, data);
+      // 防御性：如果服务端存的是旧数据（未按 id 排好或有缺 id），这里补齐 id 并按 id 排序。
+      if (Array.isArray(state.members)) {
+        let maxId = -1;
+        state.members.forEach(p => { if (typeof p.id === 'number' && isFinite(p.id) && p.id > maxId) maxId = p.id; });
+        state.members.forEach(p => { if (typeof p.id !== 'number' || !isFinite(p.id)) p.id = ++maxId; });
+        state.members.sort((a, b) => (a.id|0) - (b.id|0));
+      }
+      state.hasPulled = true;
+      state.lastPullTs = Date.now();
       return true;
     }
   } catch(e) { console.error('Load failed:', e); }
@@ -1740,25 +1900,33 @@ async function createShare() {
 }
 function updateConnectionStatus() {
   const el = document.getElementById('conn-status');
-  const refreshBtn = document.getElementById('btn-refresh');
+  const pullBtn = document.getElementById('btn-pull');
   if (state.isShared) {
     el.textContent = t('connected')+': '+state.guild;
-    if (refreshBtn) refreshBtn.style.display = '';
+    if (pullBtn) pullBtn.style.display = '';
   } else {
     el.textContent = t('offlineMode');
-    if (refreshBtn) refreshBtn.style.display = 'none';
+    if (pullBtn) pullBtn.style.display = 'none';
   }
+  updatePullStatus();
 }
 
-async function refreshFromServer() {
-  if (!state.isShared || !state.binId) return;
+// 手动从云端拉取最新数据。个人端必须先执行过此函数（或 init 时自动 load 成功）才允许后续上传，
+// 这样保证本地数据是在服务端"最新版本"之上做的增量修改，"本人这条以 name 为主键覆盖同名条目"不会把别人抹掉。
+async function pullFromServer() {
+  if (!state.isShared || !state.binId) { alert(t('notShared')); return; }
   clearTimeout(saveTimer);
   const ok = await loadFromBin();
   if (ok) {
     renderAll();
     if (state.members.length > 0) calculate();
+    const badge = document.getElementById('pull-status');
+    if (badge) { badge.textContent = t('pullSuccess'); badge.className = 'pull-status ok'; setTimeout(updatePullStatus, 1600); }
+  } else {
+    alert(t('pullFailed'));
   }
 }
+async function refreshFromServer() { return pullFromServer(); }
 
 // === Init ===
 async function init() {
