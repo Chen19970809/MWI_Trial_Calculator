@@ -1641,37 +1641,60 @@ function importJson() {
         alert('JSON parse error: ' + e.message);
         return;
       }
-      // 为了让"每次更新的人员在 list 中的 index（p.id）不变"：
-      //   1) 同名的成员沿用原来的 id（本地缓存里已经存在的同名成员）；
-      //   2) 陌生成员分配一个"追加 id" = 当前最大 id + 1，永不复用被删掉的 id；
-      //   3) 最终 mergeState 里如果远端已经有同 name 的 id，会进一步校正为远端的 id，保证跨浏览器一致。
+      // 导入 = 把 JSON 里的成员**合并进当前本地已有的 members**（关键：不再整块替换）。
+      //   1) 本地已有同 name → 就地替换那一条，**保留原来的 id/index**；
+      //   2) 本地没有的名字 → 追加到末尾，分配 id = 当前最大 id + 1（永不复用被删掉的 id）；
+      //   3) 上传时会长端强推本地、个人端按 name 主键合并，本地这份完整列表即最终版本。
+      // 这样避免了"会长导入 1 个人 → 本地只剩 1 个 → 上传把云端也清成 1 个"的问题。
       const oldByName = {};
       (state.members || []).forEach(p => { if (p && p.name) oldByName[String(p.name).trim()] = p; });
       let nextTempId = (state.members || []).reduce((mx, p) => Math.max(mx, Number(p.id) || 0), -1) + 1;
-      const newMembers = [];
+      const now = Date.now();
+      const parsedByName = {};
+      const parsedList = [];
       for (const profile of membersData) {
         const m = parseMemberFromProfile(profile);
         if (!m) continue;
         const nm = String(m.name || '').trim();
-        const exist = nm && oldByName[nm];
-        m.id = exist ? exist.id : (nextTempId++);
-        newMembers.push(m);
+        if (!nm) continue;
+        m._ts = now;
+        parsedByName[nm] = m;
+        parsedList.push(m);
       }
-      if (newMembers.length > 0) {
+      if (parsedList.length > 0) {
+        // 遍历现有 members：如果 JSON 里包含该 name → 用新的替换（沿用原 id）；否则保留原样
+        const merged = [];
+        (state.members || []).forEach(old => {
+          const nm = old && old.name ? String(old.name).trim() : '';
+          if (nm && parsedByName[nm]) {
+            const np = parsedByName[nm];
+            np.id = old.id; // 关键：沿用旧 id，UI 里 index 不动
+            merged.push(np);
+            delete parsedByName[nm];
+          } else {
+            merged.push(old);
+          }
+        });
+        // 剩下的 parsed 都是本地没有的名字 → 追加到末尾，分配递增 id
+        Object.values(parsedByName).forEach(np => {
+          np.id = nextTempId++;
+          merged.push(np);
+        });
         // 按 id 升序保持稳定顺序
-        newMembers.sort((a, b) => (a.id|0) - (b.id|0));
-        state.members = newMembers;
-        // 单成员脚本导出的 JSON 只有 1 条 —— 那条就是"本人"；即便是多条也把第一条视为本人（会长端此时通常不需要 selfName 语义，留空亦可）。
-        // selfName 用于 saveToBin 时按 name 主键把这条覆盖进云端。
-        const selfName = ((newMembers[0].name || '') + '').trim();
-        if (selfName) {
-          state.selfName = selfName;
-          try { localStorage.setItem('mwi_self_name', selfName); } catch(e) {}
+        merged.sort((a, b) => (a.id|0) - (b.id|0));
+        state.members = merged;
+        // 只有导入的是单人 JSON 才把它当作"本人"（个人端场景）；多人 JSON 视为会长在批量导入，
+        // 不动 selfName，避免误把公会里的某个人当成自己。
+        if (parsedList.length === 1) {
+          const selfName = String(parsedList[0].name || '').trim();
+          if (selfName) {
+            state.selfName = selfName;
+            try { localStorage.setItem('mwi_self_name', selfName); } catch(e) {}
+          }
         }
-        // 打上更新时间戳，保证服务端按 _ts 合并时本地这条被优先。
-        newMembers.forEach(p => { p._ts = Date.now(); });
+        // 别名，让下方 alert 分支照旧
+        const newMembers = parsedList;
         renderAll();
-        // 只写本地缓存；云端同步一律走"上传"按钮，避免误覆盖别人。
         saveData();
         if (state.isShared && !isGuildLeader() && !state.hasPulled) {
           alert(t('importNeedPullHint'));
