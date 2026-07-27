@@ -65,6 +65,16 @@ h2 { font-size:16px; margin:10px 0 8px; color:var(--text-muted); }
 .trial-cards { display:grid; grid-template-columns:repeat(4,1fr); gap:12px; }
 @media(max-width:1000px){ .trial-cards{grid-template-columns:repeat(2,1fr);} }
 @media(max-width:600px){ .trial-cards{grid-template-columns:1fr;} }
+.global-buff-section { padding:8px 20px 0 20px; }
+.global-buff-section h3 { font-size:13px; font-weight:600; margin:0 0 6px 0; color:var(--text-muted); display:flex; align-items:center; gap:6px; }
+.global-buff-hint { font-size:11px; color:var(--text-faint); font-weight:400; cursor:help; }
+.global-buff-hint::before { content:'ℹ'; display:inline-block; width:14px; height:14px; line-height:14px; text-align:center; border:1px solid var(--border); border-radius:50%; }
+.global-buff-bar { display:flex; flex-wrap:wrap; gap:14px; align-items:center; }
+.global-buff-item { display:inline-flex; align-items:center; gap:6px; padding:4px 10px; border:1px solid var(--border); border-radius:4px; background:var(--conn-bg); font-size:12px; color:var(--text); cursor:pointer; }
+.global-buff-item .global-buff-icon { font-size:14px; line-height:1; }
+.global-buff-item input { width:48px; padding:2px 6px; border:1px solid var(--border); border-radius:3px; background:var(--input-bg); color:var(--text); font-size:12px; text-align:center; }
+.global-buff-item input:focus { outline:none; border-color:var(--accent); }
+.global-buff-item .global-buff-unit { color:var(--text-faint); font-size:11px; }
 .trial-card { background:var(--surface); border:1px solid var(--border); border-radius:8px; padding:12px; display:flex; flex-direction:column; gap:8px; }
 .trial-card-header { display:flex; align-items:center; gap:8px; }
 .trial-skill-icon { width:40px; height:40px; cursor:pointer; border:2px solid transparent; border-radius:6px; transition:border-color .15s; }
@@ -647,6 +657,30 @@ table.member-table td.loadout-cell.loadout-empty { color:var(--text-faint); font
   </div>
 </div>
 
+<div class="global-buff-section">
+  <h3 id="h3-global-buff">全局加成 <span class="global-buff-hint" id="global-buff-hint" title=""></span></h3>
+  <div class="global-buff-bar">
+    <label class="global-buff-item" title="">
+      <span class="global-buff-icon">⛏</span>
+      <span class="global-buff-label" id="gb-lbl-gathering">采集数量</span>
+      <input type="number" min="0" max="99" step="1" id="gb-input-gathering" onchange="updateGlobalBuff('gathering', this.value)">
+      <span class="global-buff-unit" id="gb-unit-gathering">级</span>
+    </label>
+    <label class="global-buff-item" title="">
+      <span class="global-buff-icon">🏭</span>
+      <span class="global-buff-label" id="gb-lbl-production">生产效率</span>
+      <input type="number" min="0" max="99" step="1" id="gb-input-production" onchange="updateGlobalBuff('production', this.value)">
+      <span class="global-buff-unit" id="gb-unit-production">级</span>
+    </label>
+    <label class="global-buff-item" title="">
+      <span class="global-buff-icon">⚒</span>
+      <span class="global-buff-label" id="gb-lbl-enhancingSpeed">强化速度</span>
+      <input type="number" min="0" max="99" step="1" id="gb-input-enhancingSpeed" onchange="updateGlobalBuff('enhancingSpeed', this.value)">
+      <span class="global-buff-unit" id="gb-unit-enhancingSpeed">级</span>
+    </label>
+  </div>
+</div>
+
 <div class="trial-section">
   <h2 id="h2-trial">试炼配置</h2>
   <div class="trial-cards" id="trial-cards"></div>
@@ -694,6 +728,12 @@ const I18N = {
     uploadedSelf:'本人数据已按角色名合并上传', notShared:'尚未加入共享空间',
     indexCol:'序号', indexTooltip:'成员在列表中的序号（0 开始）。会长可修改此列以插入方式重排成员。',
     leaderOnly:'仅会长可执行此操作',
+    globalBuffs:'全局加成',
+    globalBuffsTip:'手动输入你所在服务器/账号的全局 buff 等级，每级 +{pct}%。仅本地保存，不会同步到共享空间；每个玩家按自己实际情况填即可。',
+    buffGathering:'采集数量', buffGatheringTip:'仅对采集类技能（挤奶/采摘/伐木）的双倍产出概率生效，每级 +{pct}%。',
+    buffProduction:'生产效率', buffProductionTip:'仅对生产类技能（奶酪锻造/制作/缝纫/烹饪/冲泡/炼金）的效率生效，每级 +{pct}%。',
+    buffEnhancingSpeed:'强化速度', buffEnhancingSpeedTip:'仅对强化技能的动作速度生效，每级 +{pct}%。',
+    levelUnit:'级',
     shareHint:'会长创建共享空间后，生成分享链接发给成员。成员打开链接即可查看/更新数据，无需注册。',
     currentUrl:'当前共享链接', createShare:'创建共享', closeBtn:'关闭',
     shareCreated:'共享空间已创建！复制链接发给公会成员。', linkCopied:'链接已复制',
@@ -732,6 +772,12 @@ const I18N = {
     uploadedSelf:'Your data has been merged into the cloud by name', notShared:'Not in a shared space',
     indexCol:'Idx', indexTooltip:'Position of the member in the list (0-based). Leader can edit this to reorder members (insert semantics).',
     leaderOnly:'Guild leader only',
+    globalBuffs:'Global Buffs',
+    globalBuffsTip:'Enter your server/account global buff levels manually. Each level = +{pct}%. Stored locally only, not synced to the shared space.',
+    buffGathering:'Gathering Qty', buffGatheringTip:'Applies only to gathering skills (Milking/Foraging/Woodcutting) as double-drop chance. +{pct}% per level.',
+    buffProduction:'Production Eff', buffProductionTip:'Applies only to production skills (Cheesesmithing/Crafting/Tailoring/Cooking/Brewing/Alchemy) as efficiency. +{pct}% per level.',
+    buffEnhancingSpeed:'Enhancing Spd', buffEnhancingSpeedTip:'Applies only to the Enhancing skill as action speed. +{pct}% per level.',
+    levelUnit:'lv',
     shareHint:'After the leader creates a shared space, share the link with members. Members can view/update data without registration.',
     currentUrl:'Current Share URL', createShare:'Create Share', closeBtn:'Close',
     shareCreated:'Share space created! Copy the link to share with guild members.', linkCopied:'Link copied',
@@ -806,7 +852,13 @@ let state = {
   hasPulled: false,
   lastPullTs: 0,
   // 本地是否有未上传到云端的改动（编辑成员/导入/改 index 等都会置 true；上传成功后清零）。
-  dirty: false
+  dirty: false,
+  // 全局 buff（每级 % 由 GLOBAL_BUFF_PCT_PER_LEVEL 决定，默认 1%/级）：
+  //   gathering       → 采集数量（仅采集类技能生效：挤奶/采摘/伐木）
+  //   production      → 生产效率（仅生产类技能：奶酪/制作/缝纫/烹饪/冲泡/炼金）
+  //   enhancingSpeed  → 强化速度（仅强化技能）
+  // 每个玩家自己在 UI 上手动输入等级；仅本地持久化，不同步到云端（每个人可以按自己实际情况填）。
+  globalBuffs: { gathering: 0, production: 0, enhancingSpeed: 0 }
 };
 let pickerState = { memberId:null, slot:null, iconId:null, enhance:0 };
 
@@ -853,6 +905,9 @@ function skillIdToPascalCase(skillId) {
     .join('');
 }
 const GATHERING_SKILL_IDS = new Set(['milking','foraging','woodcutting']);
+const PRODUCTION_SKILL_IDS = new Set(['cheesesmithing','crafting','tailoring','cooking','brewing','alchemy']);
+// 全局 buff 每级 % 值（默认 1%/级；MWI 社区大厅 buff 与游戏内实际数值如有出入，改这里即可）
+const GLOBAL_BUFF_PCT_PER_LEVEL = 0.01;
 
 // 从 person.loadouts 里挑当前技能对应的那份 loadout。
 // 匹配规则：usedBy[].settingSuffix === PascalCase(skillId)（生活技能就是 Milking/Foraging/...）
@@ -902,9 +957,11 @@ function computeSkillBonusesForPerson(person, skillIdx) {
   const zero = { speedBonus:0, efficiencyBonus:0, successBonus:0, gatheringBonus:0, skillLevelBonus:0 };
   const useNewData = person && (Array.isArray(person.loadouts) || person.actionTypeBuffs);
   if (!useNewData) {
-    // 兜底：老成员（手动添加 / 旧格式 JSON），继续走 equipment 近似公式
+    // 兜底：老成员（手动添加 / 旧格式 JSON），继续走 equipment 近似公式；全局 buff 也叠上
     const b = computeMemberBonuses(person && person.equipment);
-    return b[skillId] || zero;
+    const combined = Object.assign({}, b[skillId] || zero);
+    addGlobalBuffsToCombined(combined, skillId);
+    return combined;
   }
 
   // (a) 装备加成：找 usedBy 匹配当前技能的迷宫配装；找不到 → 0
@@ -921,13 +978,31 @@ function computeSkillBonusesForPerson(person, skillIdx) {
     skillLevelBonus: Number(rawBuff.skillLevelBonus) || 0,
   } : zero;
 
-  return {
+  const combined = {
     speedBonus:      equipBonuses.speedBonus      + buffBonuses.speedBonus,
     efficiencyBonus: equipBonuses.efficiencyBonus + buffBonuses.efficiencyBonus,
     successBonus:    equipBonuses.successBonus    + buffBonuses.successBonus,
     gatheringBonus:  equipBonuses.gatheringBonus  + buffBonuses.gatheringBonus,
     skillLevelBonus: equipBonuses.skillLevelBonus + buffBonuses.skillLevelBonus,
   };
+  // (c) 手动输入的全局 buff：按技能分类叠加相应比例
+  addGlobalBuffsToCombined(combined, skillId);
+  return combined;
+}
+
+// 把 state.globalBuffs 的等级换算成加成，叠到 combined 上。仅对相应技能分类生效。
+function addGlobalBuffsToCombined(combined, skillId) {
+  const gb = state.globalBuffs || {};
+  const step = GLOBAL_BUFF_PCT_PER_LEVEL;
+  if (GATHERING_SKILL_IDS.has(skillId)) {
+    combined.gatheringBonus += (Number(gb.gathering) || 0) * step;
+  }
+  if (PRODUCTION_SKILL_IDS.has(skillId)) {
+    combined.efficiencyBonus += (Number(gb.production) || 0) * step;
+  }
+  if (skillId === 'enhancing') {
+    combined.speedBonus += (Number(gb.enhancingSpeed) || 0) * step;
+  }
 }
 
 function successRate(personLv, targetLv, successBonus) {
@@ -1162,6 +1237,31 @@ function updateSelectedLoadoutSuffix(suffix) {
   renderMemberTable();
 }
 
+// 全局 buff 等级更新：写 state + localStorage + 重新计算与渲染。
+// 三个 buff 只影响相应技能类别，因此改任一都可能改变最优分配 → 直接重新 calculate。
+function updateGlobalBuff(key, val) {
+  if (!state.globalBuffs) state.globalBuffs = { gathering:0, production:0, enhancingSpeed:0 };
+  const n = Math.max(0, Math.floor(Number(val) || 0));
+  state.globalBuffs[key] = n;
+  try { localStorage.setItem('mwi_global_buffs', JSON.stringify(state.globalBuffs)); } catch(e) {}
+  // 已经有过一次分配 → 用新加成重算；没有分配也刷新一下成员表以便未来渲染时能反映
+  if (state.members && state.members.length > 0 && state.result) {
+    calculate();
+  } else {
+    renderMemberTable();
+    renderSummary();
+  }
+  syncGlobalBuffInputs();
+}
+function syncGlobalBuffInputs() {
+  const gb = state.globalBuffs || { gathering:0, production:0, enhancingSpeed:0 };
+  const map = { gathering:'gb-input-gathering', production:'gb-input-production', enhancingSpeed:'gb-input-enhancingSpeed' };
+  for (const k in map) {
+    const el = document.getElementById(map[k]);
+    if (el && el !== document.activeElement) el.value = Number(gb[k] || 0);
+  }
+}
+
 function renderTableHeader() {
   const thead = document.getElementById('member-thead');
   let html = '<tr>';
@@ -1192,6 +1292,23 @@ function updateStaticText() {
   document.getElementById('h1-title').textContent = t('title');
   document.getElementById('h2-trial').textContent = t('trialConfig');
   document.getElementById('h2-member').firstChild.textContent = t('memberData') + ' ';
+  const gbTitle = document.getElementById('h3-global-buff');
+  if (gbTitle) gbTitle.firstChild.textContent = t('globalBuffs') + ' ';
+  const gbHint = document.getElementById('global-buff-hint');
+  if (gbHint) gbHint.title = t('globalBuffsTip').replace('{pct}', (GLOBAL_BUFF_PCT_PER_LEVEL*100).toFixed(1));
+  const gbMap = [
+    ['gathering',       'buffGathering',      'buffGatheringTip'],
+    ['production',      'buffProduction',     'buffProductionTip'],
+    ['enhancingSpeed',  'buffEnhancingSpeed', 'buffEnhancingSpeedTip'],
+  ];
+  for (const [k, lblKey, tipKey] of gbMap) {
+    const l = document.getElementById('gb-lbl-'+k); if (l) l.textContent = t(lblKey);
+    const u = document.getElementById('gb-unit-'+k); if (u) u.textContent = t('levelUnit');
+    const inp = document.getElementById('gb-input-'+k);
+    const item = inp && inp.parentElement;
+    if (item) item.title = t(tipKey).replace('{pct}', (GLOBAL_BUFF_PCT_PER_LEVEL*100).toFixed(1));
+  }
+  syncGlobalBuffInputs();
   document.getElementById('btn-add-member').textContent = '+ '+t('addMember');
   document.getElementById('btn-share').textContent = t('share');
   document.getElementById('btn-import-json').textContent = t('importData');
@@ -1380,6 +1497,19 @@ function loadPrefs() {
     if (loadoutSuffix) state.selectedLoadoutSuffix = loadoutSuffix;
     const selfName = localStorage.getItem('mwi_self_name');
     if (selfName) state.selfName = selfName;
+    const rawGB = localStorage.getItem('mwi_global_buffs');
+    if (rawGB) {
+      try {
+        const obj = JSON.parse(rawGB);
+        if (obj && typeof obj === 'object') {
+          state.globalBuffs = {
+            gathering:      Math.max(0, Number(obj.gathering)      || 0),
+            production:     Math.max(0, Number(obj.production)     || 0),
+            enhancingSpeed: Math.max(0, Number(obj.enhancingSpeed) || 0),
+          };
+        }
+      } catch(e) {}
+    }
   } catch(e) {}
   document.documentElement.setAttribute('data-theme', state.theme);
 }
