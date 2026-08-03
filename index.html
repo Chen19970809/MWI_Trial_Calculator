@@ -1756,6 +1756,79 @@ function parseMemberFromProfile(profile) {
   }
   return { name, levels, equipment };
 }
+// 合并式导入：把 JSON 里的成员**合并进当前本地已有的 members**（关键：不再整块替换）。
+//   1) 本地已有同 name → 就地替换那一条，**保留原来的 id/index**；
+//   2) 本地没有的名字 → 追加到末尾，分配 id = 当前最大 id + 1（永不复用被删掉的 id）；
+//   3) 上传时会长端强推本地、个人端按 name 主键合并，本地这份完整列表即最终版本。
+// 这样避免了"会长导入 1 个人 → 本地只剩 1 个 → 上传把云端也清成 1 个"的问题。
+// importJson() 和"数据导出脚本直送"（URL hash #mwiImport）共用本函数。
+function mergeImportedMembers(membersData) {
+  const oldByName = {};
+  (state.members || []).forEach(p => { if (p && p.name) oldByName[String(p.name).trim()] = p; });
+  let nextTempId = (state.members || []).reduce((mx, p) => Math.max(mx, Number(p.id) || 0), -1) + 1;
+  const now = Date.now();
+  const parsedByName = {};
+  const parsedList = [];
+  for (const profile of membersData) {
+    const m = parseMemberFromProfile(profile);
+    if (!m) continue;
+    const nm = String(m.name || '').trim();
+    if (!nm) continue;
+    m._ts = now;
+    parsedByName[nm] = m;
+    parsedList.push(m);
+  }
+  if (parsedList.length === 0) {
+    alert(t('importFailed'));
+    return;
+  }
+  // 遍历现有 members：如果 JSON 里包含该 name → 用新的替换（沿用原 id）；否则保留原样
+  const merged = [];
+  let updated = 0;
+  (state.members || []).forEach(old => {
+    const nm = old && old.name ? String(old.name).trim() : '';
+    if (nm && parsedByName[nm]) {
+      const np = parsedByName[nm];
+      np.id = old.id; // 关键：沿用旧 id，UI 里 index 不动
+      merged.push(np);
+      delete parsedByName[nm];
+      updated++;
+    } else {
+      merged.push(old);
+    }
+  });
+  // 剩下的 parsed 都是本地没有的名字 → 追加到末尾，分配递增 id
+  const addedList = Object.values(parsedByName);
+  addedList.forEach(np => {
+    np.id = nextTempId++;
+    merged.push(np);
+  });
+  // 按 id 升序保持稳定顺序
+  merged.sort((a, b) => (a.id|0) - (b.id|0));
+  state.members = merged;
+  // 只有导入的是单人 JSON 才把它当作"本人"（个人端场景）；多人 JSON 视为会长在批量导入，
+  // 不动 selfName，避免误把公会里的某个人当成自己。
+  if (parsedList.length === 1) {
+    const selfName = String(parsedList[0].name || '').trim();
+    if (selfName) {
+      state.selfName = selfName;
+      try { localStorage.setItem('mwi_self_name', selfName); } catch(e) {}
+    }
+  }
+  renderAll();
+  saveData();
+  const detail = t('importDetail')
+    .replace('{added}', addedList.length)
+    .replace('{updated}', updated)
+    .replace('{total}', state.members.length);
+  if (state.isShared && !isGuildLeader() && !state.hasPulled) {
+    alert(detail+'\n'+t('importNeedPullHint'));
+  } else if (state.isShared) {
+    alert(detail+'\n'+t('needClickUpload'));
+  } else {
+    alert(detail);
+  }
+}
 function importJson() {
   const input = document.createElement('input');
   input.type = 'file'; input.accept = '.json';
@@ -1771,80 +1844,52 @@ function importJson() {
         alert('JSON parse error: ' + e.message);
         return;
       }
-      // 导入 = 把 JSON 里的成员**合并进当前本地已有的 members**（关键：不再整块替换）。
-      //   1) 本地已有同 name → 就地替换那一条，**保留原来的 id/index**；
-      //   2) 本地没有的名字 → 追加到末尾，分配 id = 当前最大 id + 1（永不复用被删掉的 id）；
-      //   3) 上传时会长端强推本地、个人端按 name 主键合并，本地这份完整列表即最终版本。
-      // 这样避免了"会长导入 1 个人 → 本地只剩 1 个 → 上传把云端也清成 1 个"的问题。
-      const oldByName = {};
-      (state.members || []).forEach(p => { if (p && p.name) oldByName[String(p.name).trim()] = p; });
-      let nextTempId = (state.members || []).reduce((mx, p) => Math.max(mx, Number(p.id) || 0), -1) + 1;
-      const now = Date.now();
-      const parsedByName = {};
-      const parsedList = [];
-      for (const profile of membersData) {
-        const m = parseMemberFromProfile(profile);
-        if (!m) continue;
-        const nm = String(m.name || '').trim();
-        if (!nm) continue;
-        m._ts = now;
-        parsedByName[nm] = m;
-        parsedList.push(m);
-      }
-      if (parsedList.length > 0) {
-        // 遍历现有 members：如果 JSON 里包含该 name → 用新的替换（沿用原 id）；否则保留原样
-        const merged = [];
-        let updated = 0;
-        (state.members || []).forEach(old => {
-          const nm = old && old.name ? String(old.name).trim() : '';
-          if (nm && parsedByName[nm]) {
-            const np = parsedByName[nm];
-            np.id = old.id; // 关键：沿用旧 id，UI 里 index 不动
-            merged.push(np);
-            delete parsedByName[nm];
-            updated++;
-          } else {
-            merged.push(old);
-          }
-        });
-        // 剩下的 parsed 都是本地没有的名字 → 追加到末尾，分配递增 id
-        const addedList = Object.values(parsedByName);
-        addedList.forEach(np => {
-          np.id = nextTempId++;
-          merged.push(np);
-        });
-        // 按 id 升序保持稳定顺序
-        merged.sort((a, b) => (a.id|0) - (b.id|0));
-        state.members = merged;
-        // 只有导入的是单人 JSON 才把它当作"本人"（个人端场景）；多人 JSON 视为会长在批量导入，
-        // 不动 selfName，避免误把公会里的某个人当成自己。
-        if (parsedList.length === 1) {
-          const selfName = String(parsedList[0].name || '').trim();
-          if (selfName) {
-            state.selfName = selfName;
-            try { localStorage.setItem('mwi_self_name', selfName); } catch(e) {}
-          }
-        }
-        renderAll();
-        saveData();
-        const detail = t('importDetail')
-          .replace('{added}', addedList.length)
-          .replace('{updated}', updated)
-          .replace('{total}', state.members.length);
-        if (state.isShared && !isGuildLeader() && !state.hasPulled) {
-          alert(detail+'\n'+t('importNeedPullHint'));
-        } else if (state.isShared) {
-          alert(detail+'\n'+t('needClickUpload'));
-        } else {
-          alert(detail);
-        }
-      } else {
-        alert(t('importFailed'));
-      }
+      mergeImportedMembers(membersData);
     };
     reader.readAsText(file, 'UTF-8');
   };
   input.click();
+}
+
+// === 数据导出脚本直送通道（URL hash #mwiImport）===
+// 「银河奶牛角色数据导出」脚本把 members 数组 base64url 编码后拼成
+//   <计算器URL>#mwiImport=<encoded>
+// 直接 window.open 打开本页。这里在 init() 里解析 hash、走与"导入 JSON"完全相同的
+// mergeImportedMembers() 合并逻辑，并用 history.replaceState 清掉 hash，避免刷新重复导入。
+const IMPORT_HASH_PARAM = 'mwiImport';
+function decodeImportPayload(encoded) {
+  const raw = String(encoded || '');
+  if (!raw) return null;
+  try {
+    const b64 = raw.replace(/-/g, '+').replace(/_/g, '/');
+    const binary = atob(b64);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+    const data = JSON.parse(new TextDecoder().decode(bytes));
+    return Array.isArray(data) ? data : null;
+  } catch (_) { return null; }
+}
+function tryImportFromHash() {
+  let hashRaw = '';
+  try { hashRaw = String(window.location.hash || '').replace(/^#/, ''); } catch (_) { return; }
+  if (!hashRaw) return;
+  const hashParams = new URLSearchParams(hashRaw);
+  const encoded = hashParams.get(IMPORT_HASH_PARAM);
+  if (!encoded) return;
+  // 先清 hash 再导入：即使合并中途出错，刷新页面也不会二次导入
+  hashParams.delete(IMPORT_HASH_PARAM);
+  const rest = hashParams.toString();
+  try {
+    const url = new URL(window.location.href);
+    url.hash = rest ? rest : '';
+    history.replaceState(null, '', url.toString());
+  } catch (_) { /* ignore */ }
+  const membersData = decodeImportPayload(encoded);
+  if (!membersData) {
+    alert(t('importFailed'));
+    return;
+  }
+  mergeImportedMembers(membersData);
 }
 
 
@@ -2259,6 +2304,9 @@ async function init() {
     if (!state.trials) state.trials = [{skill:0,max:20},{skill:1,max:20},{skill:2,max:20},{skill:3,max:20}];
     renderAll();
   }
+  // 数据导出脚本直送：若 URL hash 带 #mwiImport=...，走与"导入 JSON"相同的合并逻辑
+  // 放在 loadFromBin/loadData 之后，保证直送数据在共享模式下合并到最新云端快照上。
+  tryImportFromHash();
 }
 init();
 
