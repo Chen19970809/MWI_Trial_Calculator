@@ -83,8 +83,10 @@ h2 { font-size:16px; margin:10px 0 8px; color:var(--text-muted); }
 .trial-card-info { flex:1; }
 .trial-card-title { font-size:14px; font-weight:600; }
 .trial-skill-name { font-size:12px; color:var(--text-muted); }
-.trial-max-row { display:flex; align-items:center; gap:6px; font-size:12px; }
-.trial-max-row input { width:50px; padding:2px 4px; border:1px solid var(--border); border-radius:3px; font-size:12px; background:var(--input-bg); color:var(--text); }
+.trial-max-row, .trial-target-row { display:flex; align-items:center; gap:6px; font-size:12px; }
+.trial-max-row input, .trial-target-row select { padding:2px 4px; border:1px solid var(--border); border-radius:3px; font-size:12px; background:var(--input-bg); color:var(--text); }
+.trial-max-row input { width:50px; }
+.trial-target-row select { min-width:70px; }
 .view-tab { margin-right:4px; }
 .view-tab.active { background:var(--accent); color:#fff; border-color:var(--accent); }
 /* 分配结果视图：每个试炼 4 列为一组，组间加分隔线 */
@@ -741,6 +743,8 @@ const I18N = {
     createFailed:'创建失败，请检查 Master Key', addMembersFirst:'请先添加成员数据',
     importSuccess:'导入成功', importFailed:'未找到有效数据',
     teamWork:'团队工作能力', nextClearNeeds:'下1次还需', pts:'点', perSec:'点/秒',
+    targetLevel:'通关目标', estTime:'估算时间', reach:'到达',
+    cumulativeTime:'累计', singlePassTime:'单关',
     trial:'试炼', language:'中/EN', theme:'🌙',
     skillLabels:['挤奶','采摘','伐木','奶酪锻造','制作','缝纫','烹饪','冲泡','炼金','强化'],
     equipLabels:['主手','副手','头部','身体','手部','腿部','脚部','项链','耳环','戒指','袋子','背部','挤奶工具','采摘工具','伐木工具','奶酪锻造工具','制作工具','缝纫工具','烹饪工具','冲泡工具','炼金工具','强化工具'],
@@ -786,6 +790,8 @@ const I18N = {
     createFailed:'Creation failed, please check Master Key', addMembersFirst:'Please add member data first',
     importSuccess:'Imported successfully', importFailed:'No valid data found',
     teamWork:'Team Work', nextClearNeeds:'Next clear needs', pts:'pts', perSec:'pts/s',
+    targetLevel:'Clear Target', estTime:'Est. Time', reach:'Reach',
+    cumulativeTime:'Total', singlePassTime:'This pass',
     trial:'Trial', language:'中/EN', theme:'☀️',
     skillLabels:['Milking','Foraging','Woodcutting','Cheesesmithing','Crafting','Tailoring','Cooking','Brewing','Alchemy','Enhancing'],
     equipLabels:['Main Hand','Off Hand','Head','Body','Hands','Legs','Feet','Necklace','Earring','Ring','Pouch','Back','Milking Tool','Foraging Tool','Woodcutting Tool','Cheesesmithing Tool','Crafting Tool','Tailoring Tool','Cooking Tool','Brewing Tool','Alchemy Tool','Enhancing Tool'],
@@ -1050,6 +1056,62 @@ function computePasses(metricsList) {
 }
 
 function finalLv(metricsList) { return START_LV + LV_PER_PASS * computePasses(metricsList); }
+
+// 估算指定队伍（metricsList）从 START_LV 开始，通关到 targetLv（包含该级）需要的秒数。
+// 例如 targetLv=100 表示通关第 1 次（100→110），targetLv=190 表示通关 10 次（100→200）。
+// 累计时间可能超过一次试炼时长（TRIAL_DURATION），这里不再截断，直接返回真实累加秒数。
+function estimateTimeToLevel(metricsList, targetLv) {
+  if (!Array.isArray(metricsList) || metricsList.length === 0) return null;
+  const targetPass = Math.round((targetLv - START_LV) / LV_PER_PASS) + 1;
+  if (targetPass <= 0) return 0;
+  const countMult = 1 + COUNT_INFLATION * metricsList.length;
+  let T = START_LV, passes = 0, carry = 0, elapsed = 0;
+  while (passes < targetPass) {
+    let rate = 0;
+    for (const m of metricsList) rate += expectedRate(m, T);
+    if (rate <= 1e-9) return null;
+    const required = (BASE_TOTAL_PT + PT_GROWTH * passes) * countMult;
+    const diff = required - carry;
+    if (diff <= 0) {
+      carry -= required;
+      passes++;
+      T += LV_PER_PASS;
+      continue;
+    }
+    const tNeeded = diff / rate;
+    elapsed += tNeeded;
+    carry = carry + tNeeded * rate - required;
+    passes++;
+    T += LV_PER_PASS;
+  }
+  return elapsed;
+}
+
+function formatDuration(seconds) {
+  if (seconds === null || seconds === undefined || !Number.isFinite(seconds)) return '—';
+  if (seconds <= 0) return '0s';
+  const h = Math.floor(seconds / 3600);
+  const m = Math.floor((seconds % 3600) / 60);
+  const s = Math.floor(seconds % 60);
+  if (h > 0) return h + 'h' + (m < 10 ? '0' : '') + m + 'm';
+  if (m > 0) return m + 'm' + (s < 10 ? '0' : '') + s + 's';
+  return s + 's';
+}
+
+// 估算仅通关 targetLv 这一级（从 targetLv 打到 targetLv+LV_PER_PASS）所需秒数。
+// 与累计时间分开，方便用户判断"再升一级还要多久"。
+function estimateSinglePassTime(metricsList, targetLv) {
+  if (!Array.isArray(metricsList) || metricsList.length === 0) return null;
+  const passIndex = Math.round((targetLv - START_LV) / LV_PER_PASS);
+  if (passIndex < 0) return 0;
+  const countMult = 1 + COUNT_INFLATION * metricsList.length;
+  const T = START_LV + passIndex * LV_PER_PASS;
+  let rate = 0;
+  for (const m of metricsList) rate += expectedRate(m, T);
+  if (rate <= 1e-9) return null;
+  const required = (BASE_TOTAL_PT + PT_GROWTH * passIndex) * countMult;
+  return required / rate;
+}
 
 class MinCostFlow {
   constructor(n) { this.n=n; this.adj=Array.from({length:n},()=>[]); this.to=[]; this.cap=[]; this.cost=[]; }
@@ -1422,16 +1484,37 @@ function renderExportScriptLinks() {
   container.innerHTML = isGuildLeader() ? (guildBtn + singleBtn) : singleBtn;
 }
 
+function makeTargetLevelOptions(selected) {
+  const opts = [];
+  for (let lv = START_LV; lv <= 300; lv += LV_PER_PASS) {
+    const sel = lv === selected ? ' selected' : '';
+    opts.push('<option value="'+lv+'"'+sel+'>Lv'+lv+'</option>');
+  }
+  return opts.join('');
+}
+
+function updateTrialTargetLevel(trialIdx, value) {
+  state.trials[trialIdx].targetLevel = Math.max(START_LV, parseInt(value) || START_LV);
+  state.trials[trialIdx]._ts = Date.now();
+  saveData();
+  renderTrialCards();
+  renderMemberTable();
+}
+
 function renderTrialCards() {
   const container = document.getElementById('trial-cards');
   // 已按需求移除"每个试炼下面分配的 ID、等级展示区域"（原 trial-member-list），
   // 分配明细统一在成员区的《分配结果》视图里看；这里只保留试炼配置 + 汇总结果。
   container.innerHTML = state.trials.map((cfg, j) => {
+    const targetLv = cfg.targetLevel || START_LV;
     let resultHtml = '';
     if (state.result && state.result.cache[j]) {
       const c = state.result.cache[j];
       const rateStr = c.rateAtFinal.toFixed(1);
-      resultHtml = '<div class="trial-result">Lv'+c.finalLv+' &middot; '+c.passes+t('passes')+' &middot; '+c.list.length+'/'+c.max+t('people')+'<br>'+t('teamWork')+' '+c.sumWork+' &middot; ~'+rateStr+t('perSec')+' @ Lv'+c.finalLv+'<br>'+t('nextClearNeeds')+' '+c.reqNext+' '+t('pts')+'</div>';
+      const metrics = c.list.map(e => e.metrics);
+      const estTotal = estimateTimeToLevel(metrics, targetLv);
+      const estSingle = estimateSinglePassTime(metrics, targetLv);
+      resultHtml = '<div class="trial-result">'+t('reach')+' Lv'+c.finalLv+' &middot; '+c.passes+t('passes')+' &middot; '+c.list.length+'/'+c.max+t('people')+'<br>'+t('teamWork')+' '+c.sumWork+' &middot; ~'+rateStr+t('perSec')+' @ Lv'+c.finalLv+'<br>'+t('nextClearNeeds')+' '+c.reqNext+' '+t('pts')+'<br>'+t('targetLevel')+' '+targetLv+' &middot; '+t('cumulativeTime')+' '+formatDuration(estTotal)+' &middot; '+t('singlePassTime')+' '+formatDuration(estSingle)+'</div>';
     }
     return '<div class="trial-card">'+
       '<div class="trial-card-header">'+
@@ -1439,6 +1522,7 @@ function renderTrialCards() {
         '<div class="trial-card-info"><div class="trial-card-title">'+t('trial')+' '+(j+1)+'</div><div class="trial-skill-name">'+skillLabel(cfg.skill)+'</div></div>'+
       '</div>'+
       '<div class="trial-max-row"><label>'+t('maxMembers')+':</label><input type="number" value="'+cfg.max+'" min="1" max="80" onchange="updateTrialMax('+j+',this.value)"></div>'+
+      '<div class="trial-target-row"><label>'+t('targetLevel')+':</label><select onchange="updateTrialTargetLevel('+j+',this.value)">'+makeTargetLevelOptions(targetLv)+'</select></div>'+
       resultHtml+
     '</div>';
   }).join('');
@@ -1467,10 +1551,7 @@ function renderAssignmentTableBody(tbody) {
       const cfg = state.trials[j];
       const lv = Number(p.levels[cfg.skill]) || 0;
       const m = computePersonSkillMetrics(p, cfg.skill);
-      let targetLv = START_LV;
-      if (state.result && state.result.cache && state.result.cache[j]) {
-        targetLv = state.result.cache[j].finalLv;
-      }
+      const targetLv = cfg.targetLevel || START_LV;
       const sr = successRate(m.effLevel, targetLv, m.successBonus);
       const tip = 'Lv'+m.effLevel+' @ '+t('trial')+' '+(j+1)+' Lv'+targetLv;
       trialCells += '<td class="trial-lv-cell trial-group-start">'+lv+'</td>';
@@ -2396,12 +2477,14 @@ async function init() {
       loadedFromShare = await loadFromBin();
     }
     updateConnectionStatus();
-    if (!state.trials) state.trials = [{skill:0,max:20},{skill:1,max:20},{skill:2,max:20},{skill:3,max:20}];
+    if (!state.trials) state.trials = [{skill:0,max:20,targetLevel:START_LV},{skill:1,max:20,targetLevel:START_LV},{skill:2,max:20,targetLevel:START_LV},{skill:3,max:20,targetLevel:START_LV}];
+    state.trials.forEach(t => { if (!t.targetLevel) t.targetLevel = START_LV; });
     renderAll();
     if (loadedFromShare && state.members.length > 0) calculate();
   } else {
     loadData();
-    if (!state.trials) state.trials = [{skill:0,max:20},{skill:1,max:20},{skill:2,max:20},{skill:3,max:20}];
+    if (!state.trials) state.trials = [{skill:0,max:20,targetLevel:START_LV},{skill:1,max:20,targetLevel:START_LV},{skill:2,max:20,targetLevel:START_LV},{skill:3,max:20,targetLevel:START_LV}];
+    state.trials.forEach(t => { if (!t.targetLevel) t.targetLevel = START_LV; });
     renderAll();
   }
   // 数据导出脚本直送：若 URL hash 带 #mwiImport=...，走与"导入 JSON"相同的合并逻辑
