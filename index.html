@@ -85,12 +85,8 @@ h2 { font-size:16px; margin:10px 0 8px; color:var(--text-muted); }
 .trial-skill-name { font-size:12px; color:var(--text-muted); }
 .trial-max-row { display:flex; align-items:center; gap:6px; font-size:12px; }
 .trial-max-row input { width:50px; padding:2px 4px; border:1px solid var(--border); border-radius:3px; font-size:12px; background:var(--input-bg); color:var(--text); }
-.trial-member-list { max-height:100px; overflow-y:auto; border:1px solid var(--list-border); border-radius:4px; padding:4px; background:var(--list-bg); font-size:12px; }
-.trial-member-list:empty::after { content:attr(data-empty); color:var(--text-faint); display:block; text-align:center; padding:10px; }
-.trial-member-item { padding:2px 6px; border-radius:3px; display:flex; justify-content:space-between; }
-.trial-member-item:hover { background:var(--hover); }
-.trial-member-item .ml { color:var(--text-muted); }
-.trial-member-item .mr { color:var(--text-faint); }
+.view-tab { margin-right:4px; }
+.view-tab.active { background:var(--accent); color:#fff; border-color:var(--accent); }
 .trial-result { font-size:11px; font-weight:600; color:var(--accent); padding-top:4px; border-top:1px solid var(--list-border); line-height:1.5; }
 
 /* Member Table */
@@ -687,7 +683,7 @@ table.member-table td.loadout-cell.loadout-empty { color:var(--text-faint); font
 </div>
 
 <div class="member-section">
-  <h2 id="h2-member">成员数据 <button class="btn btn-sm" id="btn-add-member" onclick="addMember()">+ 添加成员</button></h2>
+  <h2 id="h2-member"><button class="btn btn-sm view-tab" id="btn-view-assignment" onclick="setMemberView('assignment')">分配结果</button><button class="btn btn-sm view-tab" id="btn-view-members" onclick="setMemberView('members')">成员数据</button><button class="btn btn-sm" id="btn-add-member" onclick="addMember()">+ 添加成员</button></h2>
   <div class="table-wrap">
     <table class="member-table">
       <thead id="member-thead"></thead>
@@ -703,7 +699,7 @@ table.member-table td.loadout-cell.loadout-empty { color:var(--text-faint); font
 // === i18n ===
 const I18N = {
   zh: {
-    title:'MWI 试炼计算器', trialConfig:'试炼配置', memberData:'成员数据',
+    title:'MWI 试炼计算器', trialConfig:'试炼配置', memberData:'成员数据', assignmentResult:'分配结果',
     addMember:'添加成员', share:'共享设置', importData:'导入',
     exportScriptTitle:'下载公会脚本，自动采集公会全体成员数据导出为 JSON（会长专用）',
     exportScriptTitleSingle:'下载单成员脚本，仅导出当前登录角色的数据为 JSON',
@@ -747,7 +743,7 @@ const I18N = {
     equipShort:['主手','副手','头部','身体','手部','腿部','脚部','项链','耳环','戒指','袋子','背部','挤奶','采摘','伐木','奶酪','制作','缝纫','烹饪','冲泡','炼金','强化'],
   },
   en: {
-    title:'MWI Trial Calculator', trialConfig:'Trial Config', memberData:'Member Data',
+    title:'MWI Trial Calculator', trialConfig:'Trial Config', memberData:'Member Data', assignmentResult:'Assignment',
     addMember:'Add Member', share:'Share', importData:'Import',
     exportScriptTitle:'Download guild userscript to auto-collect all members data as JSON (guild leader only)',
     exportScriptTitleSingle:'Download single-member userscript, exports only your own character data as JSON',
@@ -846,6 +842,8 @@ let state = {
   // 配装列表头选中的 settingSuffix（PascalCase，如 Milking/Foraging/…/Goblin），
   // 决定成员表格里"配装"列每一行显示的是谁的哪套配装。默认挤奶。
   selectedLoadoutSuffix: 'Milking',
+  // 成员区视图切换：'assignment' = 分配结果（默认，只读简表）；'members' = 成员数据（完整编辑表）。
+  memberView: 'assignment',
   // 本人姓名（用于个人端上传时按 name 主键覆盖同名条目）。默认取 importJson 后 members[0].name，也可持久化到 localStorage。
   selfName: '',
   // 是否已从云端拉取过一次数据。个人端必须先拉取再上传，避免覆盖别人。会话级，不持久化。
@@ -1262,8 +1260,47 @@ function syncGlobalBuffInputs() {
   }
 }
 
+// 成员区两个视图：'assignment'（分配结果，默认，只读简表）/ 'members'（成员数据，完整编辑表）。
+// 切换只影响本地渲染，不动数据；选择持久化到 localStorage。
+function setMemberView(view) {
+  // 《成员数据》视图仅会长端可用；非会长即使绕过按钮隐藏也切不过去
+  if (view === 'members' && !isGuildLeader()) view = 'assignment';
+  state.memberView = (view === 'members') ? 'members' : 'assignment';
+  try { localStorage.setItem('mwi_member_view', state.memberView); } catch(e) {}
+  syncMemberViewTabs();
+  renderTableHeader();
+  renderMemberTable();
+}
+function syncMemberViewTabs() {
+  const a = document.getElementById('btn-view-assignment');
+  const m = document.getElementById('btn-view-members');
+  const add = document.getElementById('btn-add-member');
+  const leader = isGuildLeader();
+  // 非会长端：不显示《成员数据》/《+ 添加成员》，并强制停留在分配结果视图。
+  // 只改内存 state 不写 localStorage：若之后拿到 Master Key 成为会长，原来的视图偏好还在。
+  if (!leader && state.memberView === 'members') state.memberView = 'assignment';
+  if (m) m.style.display = leader ? '' : 'none';
+  if (add) add.style.display = leader ? '' : 'none';
+  if (a) a.classList.toggle('active', state.memberView !== 'members');
+  if (m) m.classList.toggle('active', state.memberView === 'members');
+}
+
 function renderTableHeader() {
   const thead = document.getElementById('member-thead');
+  if (state.memberView === 'assignment') {
+    // 分配结果视图：序号 | 分配 | 角色名 | 四个试炼（图标=该试炼当前技能）
+    let html = '<tr>';
+    html += '<th class="idx-col">'+t('indexCol')+'</th>';
+    html += '<th class="assign-col">'+t('assignCol')+'</th>';
+    html += '<th class="name-col">'+t('nameCol')+'</th>';
+    for (let j = 0; j < state.trials.length; j++) {
+      const cfg = state.trials[j];
+      html += '<th class="skill-col" title="'+escHtml(t('trial')+' '+(j+1)+' · '+skillLabel(cfg.skill))+'">'+svgIcon(SKILL_KEYS[cfg.skill],20,20)+'</th>';
+    }
+    html += '</tr>';
+    thead.innerHTML = html;
+    return;
+  }
   let html = '<tr>';
   html += '<th class="idx-col" title="'+escHtml(t('indexTooltip'))+'">'+t('indexCol')+'</th>';
   html += '<th class="assign-col">'+t('assignCol')+'</th>';
@@ -1281,6 +1318,7 @@ function renderTableHeader() {
 }
 function renderAll() {
   document.title = t('title');
+  syncMemberViewTabs();
   renderTableHeader();
   renderTrialCards();
   renderMemberTable();
@@ -1291,7 +1329,8 @@ function renderAll() {
 function updateStaticText() {
   document.getElementById('h1-title').textContent = t('title');
   document.getElementById('h2-trial').textContent = t('trialConfig');
-  document.getElementById('h2-member').firstChild.textContent = t('memberData') + ' ';
+  document.getElementById('btn-view-assignment').textContent = t('assignmentResult');
+  document.getElementById('btn-view-members').textContent = t('memberData');
   const gbTitle = document.getElementById('h3-global-buff');
   if (gbTitle) gbTitle.firstChild.textContent = t('globalBuffs') + ' ';
   const gbHint = document.getElementById('global-buff-hint');
@@ -1370,15 +1409,12 @@ function renderExportScriptLinks() {
 
 function renderTrialCards() {
   const container = document.getElementById('trial-cards');
+  // 已按需求移除"每个试炼下面分配的 ID、等级展示区域"（原 trial-member-list），
+  // 分配明细统一在成员区的《分配结果》视图里看；这里只保留试炼配置 + 汇总结果。
   container.innerHTML = state.trials.map((cfg, j) => {
-    let memberListHtml = '';
     let resultHtml = '';
     if (state.result && state.result.cache[j]) {
       const c = state.result.cache[j];
-      memberListHtml = c.list.map(e => {
-        const lv = e.person.levels[cfg.skill];
-        return '<div class="trial-member-item"><span class="ml">'+escHtml(e.person.name)+'</span><span class="mr">Lv'+lv+'</span></div>';
-      }).join('');
       const rateStr = c.rateAtFinal.toFixed(1);
       resultHtml = '<div class="trial-result">Lv'+c.finalLv+' &middot; '+c.passes+t('passes')+' &middot; '+c.list.length+'/'+c.max+t('people')+'<br>'+t('teamWork')+' '+c.sumWork+' &middot; ~'+rateStr+t('perSec')+' @ Lv'+c.finalLv+'<br>'+t('nextClearNeeds')+' '+c.reqNext+' '+t('pts')+'</div>';
     }
@@ -1388,14 +1424,46 @@ function renderTrialCards() {
         '<div class="trial-card-info"><div class="trial-card-title">'+t('trial')+' '+(j+1)+'</div><div class="trial-skill-name">'+skillLabel(cfg.skill)+'</div></div>'+
       '</div>'+
       '<div class="trial-max-row"><label>'+t('maxMembers')+':</label><input type="number" value="'+cfg.max+'" min="1" max="80" onchange="updateTrialMax('+j+',this.value)"></div>'+
-      '<div class="trial-member-list" data-empty="'+t('noAssign')+'">'+memberListHtml+'</div>'+
       resultHtml+
     '</div>';
   }).join('');
 }
 
+// 分配结果视图：仅展示 序号 / 分配 / 角色名 / 四个试炼对应技能等级（只读）。
+// 试炼列取 state.trials[j].skill 对应的成员技能等级，与试炼配置联动。
+function renderAssignmentTableBody(tbody) {
+  const colCount = 3 + state.trials.length;
+  if (state.members.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="'+colCount+'" style="color:var(--text-faint);padding:20px">'+t('noMembers')+'</td></tr>';
+    return;
+  }
+  tbody.innerHTML = state.members.map((p, rowIdx) => {
+    const assign = state.assignment ? state.assignment[p.id] : -1;
+    const assignClass = assign >= 0 ? 'assign-T'+(assign+1) : 'assign-none';
+    let assignContent = '-';
+    if (assign >= 0) {
+      assignContent = svgIcon(SKILL_KEYS[state.trials[assign].skill], 22, 22);
+    }
+    let trialCells = '';
+    for (let j = 0; j < state.trials.length; j++) {
+      const lv = Number(p.levels[state.trials[j].skill]) || 0;
+      trialCells += '<td class="trial-lv-cell">'+lv+'</td>';
+    }
+    return '<tr>'+
+      '<td class="idx-cell">'+rowIdx+'</td>'+
+      '<td class="assign-cell '+assignClass+'">'+assignContent+'</td>'+
+      '<td class="name-cell">'+escHtml(p.name)+'</td>'+
+      trialCells+
+    '</tr>';
+  }).join('');
+}
+
 function renderMemberTable() {
   const tbody = document.getElementById('member-tbody');
+  if (state.memberView === 'assignment') {
+    renderAssignmentTableBody(tbody);
+    return;
+  }
   if (state.members.length === 0) {
     tbody.innerHTML = '<tr><td colspan="38" style="color:var(--text-faint);padding:20px">'+t('noMembers')+'</td></tr>';
     return;
@@ -1495,6 +1563,8 @@ function loadPrefs() {
     if (theme === 'dark' || theme === 'light') state.theme = theme;
     const loadoutSuffix = localStorage.getItem('mwi_loadout_suffix');
     if (loadoutSuffix) state.selectedLoadoutSuffix = loadoutSuffix;
+    const memberView = localStorage.getItem('mwi_member_view');
+    if (memberView === 'assignment' || memberView === 'members') state.memberView = memberView;
     const selfName = localStorage.getItem('mwi_self_name');
     if (selfName) state.selfName = selfName;
     const rawGB = localStorage.getItem('mwi_global_buffs');
@@ -2210,6 +2280,7 @@ async function createShare() {
     openShareDialog();
     updateConnectionStatus();
     renderExportScriptLinks();
+    syncMemberViewTabs();
     alert(t('shareCreated'));
   } catch(e) { alert(t('createFailed')+': '+e.message); }
 }
