@@ -87,6 +87,9 @@ h2 { font-size:16px; margin:10px 0 8px; color:var(--text-muted); }
 .trial-max-row input { width:50px; padding:2px 4px; border:1px solid var(--border); border-radius:3px; font-size:12px; background:var(--input-bg); color:var(--text); }
 .view-tab { margin-right:4px; }
 .view-tab.active { background:var(--accent); color:#fff; border-color:var(--accent); }
+/* 分配结果视图：每个试炼 4 列为一组，组间加分隔线 */
+.member-table .trial-group-start { border-left:2px solid var(--border); }
+.member-table th.assign-sub { font-size:11px; font-weight:500; color:var(--text-muted); padding:2px 6px; }
 .trial-result { font-size:11px; font-weight:600; color:var(--accent); padding-top:4px; border-top:1px solid var(--list-border); line-height:1.5; }
 
 /* Member Table */
@@ -700,6 +703,7 @@ table.member-table td.loadout-cell.loadout-empty { color:var(--text-faint); font
 const I18N = {
   zh: {
     title:'MWI 试炼计算器', trialConfig:'试炼配置', memberData:'成员数据', assignmentResult:'分配结果',
+    levelCol:'等级', successRateCol:'成功率', workPowerCol:'工作能力', doubleProgressCol:'双倍进度',
     addMember:'添加成员', share:'共享设置', importData:'导入',
     exportScriptTitle:'下载公会脚本，自动采集公会全体成员数据导出为 JSON（会长专用）',
     exportScriptTitleSingle:'下载单成员脚本，仅导出当前登录角色的数据为 JSON',
@@ -744,6 +748,7 @@ const I18N = {
   },
   en: {
     title:'MWI Trial Calculator', trialConfig:'Trial Config', memberData:'Member Data', assignmentResult:'Assignment',
+    levelCol:'Lv', successRateCol:'Success', workPowerCol:'Work', doubleProgressCol:'Double',
     addMember:'Add Member', share:'Share', importData:'Import',
     exportScriptTitle:'Download guild userscript to auto-collect all members data as JSON (guild leader only)',
     exportScriptTitleSingle:'Download single-member userscript, exports only your own character data as JSON',
@@ -1288,17 +1293,27 @@ function syncMemberViewTabs() {
 function renderTableHeader() {
   const thead = document.getElementById('member-thead');
   if (state.memberView === 'assignment') {
-    // 分配结果视图：序号 | 分配 | 角色名 | 四个试炼（图标=该试炼当前技能）
-    let html = '<tr>';
-    html += '<th class="idx-col">'+t('indexCol')+'</th>';
-    html += '<th class="assign-col">'+t('assignCol')+'</th>';
-    html += '<th class="name-col">'+t('nameCol')+'</th>';
+    // 分配结果视图（两行表头）：
+    //   行1: 序号 | 分配 | 角色名 | 试炼1(跨4列) | 试炼2(跨4列) | ...
+    //   行2: 每个试炼下 等级 | 成功率 | 工作能力 | 双倍进度
+    let row1 = '<tr>';
+    row1 += '<th class="idx-col" rowspan="2">'+t('indexCol')+'</th>';
+    row1 += '<th class="assign-col" rowspan="2">'+t('assignCol')+'</th>';
+    row1 += '<th class="name-col" rowspan="2">'+t('nameCol')+'</th>';
     for (let j = 0; j < state.trials.length; j++) {
       const cfg = state.trials[j];
-      html += '<th class="skill-col" title="'+escHtml(t('trial')+' '+(j+1)+' · '+skillLabel(cfg.skill))+'">'+svgIcon(SKILL_KEYS[cfg.skill],20,20)+'</th>';
+      row1 += '<th class="skill-col trial-group-start" colspan="4" title="'+escHtml(t('trial')+' '+(j+1)+' · '+skillLabel(cfg.skill))+'">'+svgIcon(SKILL_KEYS[cfg.skill],20,20)+'</th>';
     }
-    html += '</tr>';
-    thead.innerHTML = html;
+    row1 += '</tr>';
+    let row2 = '<tr>';
+    for (let j = 0; j < state.trials.length; j++) {
+      row2 += '<th class="assign-sub trial-group-start">'+t('levelCol')+'</th>';
+      row2 += '<th class="assign-sub">'+t('successRateCol')+'</th>';
+      row2 += '<th class="assign-sub">'+t('workPowerCol')+'</th>';
+      row2 += '<th class="assign-sub">'+t('doubleProgressCol')+'</th>';
+    }
+    row2 += '</tr>';
+    thead.innerHTML = row1 + row2;
     return;
   }
   let html = '<tr>';
@@ -1429,10 +1444,13 @@ function renderTrialCards() {
   }).join('');
 }
 
-// 分配结果视图：仅展示 序号 / 分配 / 角色名 / 四个试炼对应技能等级（只读）。
-// 试炼列取 state.trials[j].skill 对应的成员技能等级，与试炼配置联动。
+// 分配结果视图：仅展示 序号 / 分配 / 角色名 / 每个试炼的 等级·成功率·工作能力·双倍进度（只读）。
+// 指标直接复用试炼算法：
+//   workP/dblP 来自 computePersonSkillMetrics（装备+个人buff+全局buff 已全部计入）；
+//   成功率 = successRate(effLevel, T, successBonus)，T 优先取该试炼计算后的最终等级
+//   （与试炼卡 "@ Lv finalLv" 语义一致），未计算时退回起始等级 START_LV。
 function renderAssignmentTableBody(tbody) {
-  const colCount = 3 + state.trials.length;
+  const colCount = 3 + state.trials.length * 4;
   if (state.members.length === 0) {
     tbody.innerHTML = '<tr><td colspan="'+colCount+'" style="color:var(--text-faint);padding:20px">'+t('noMembers')+'</td></tr>';
     return;
@@ -1446,8 +1464,19 @@ function renderAssignmentTableBody(tbody) {
     }
     let trialCells = '';
     for (let j = 0; j < state.trials.length; j++) {
-      const lv = Number(p.levels[state.trials[j].skill]) || 0;
-      trialCells += '<td class="trial-lv-cell">'+lv+'</td>';
+      const cfg = state.trials[j];
+      const lv = Number(p.levels[cfg.skill]) || 0;
+      const m = computePersonSkillMetrics(p, cfg.skill);
+      let targetLv = START_LV;
+      if (state.result && state.result.cache && state.result.cache[j]) {
+        targetLv = state.result.cache[j].finalLv;
+      }
+      const sr = successRate(m.effLevel, targetLv, m.successBonus);
+      const tip = 'Lv'+m.effLevel+' @ '+t('trial')+' '+(j+1)+' Lv'+targetLv;
+      trialCells += '<td class="trial-lv-cell trial-group-start">'+lv+'</td>';
+      trialCells += '<td class="assign-metric" title="'+escHtml(tip)+'">'+Math.round(sr*100)+'%</td>';
+      trialCells += '<td class="assign-metric" title="'+escHtml(tip)+'">'+m.workP+'</td>';
+      trialCells += '<td class="assign-metric" title="'+escHtml(tip)+'">'+Math.round(m.dblP*100)+'%</td>';
     }
     return '<tr>'+
       '<td class="idx-cell">'+rowIdx+'</td>'+
