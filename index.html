@@ -682,6 +682,16 @@ table.member-table td.loadout-cell.loadout-empty { color:var(--text-faint); font
   </div>
 </div>
 
+<div class="global-buff-section">
+  <h3 id="h3-guild-buildings">公会建筑 <span class="global-buff-hint" id="guild-buildings-hint" title=""></span></h3>
+  <div class="global-buff-bar" id="guild-buildings-bar"></div>
+</div>
+
+<div class="global-buff-section">
+  <h3 id="h3-guild-shrines">公会神龛 <span class="global-buff-hint" id="guild-shrines-hint" title=""></span></h3>
+  <div class="global-buff-bar" id="guild-shrines-bar"></div>
+</div>
+
 <div class="trial-section">
   <h2 id="h2-trial">试炼配置</h2>
   <div class="trial-cards" id="trial-cards"></div>
@@ -707,8 +717,8 @@ const I18N = {
     title:'MWI 试炼计算器', trialConfig:'试炼配置', memberData:'成员数据', assignmentResult:'分配结果',
     levelCol:'等级', successRateCol:'成功率', workPowerCol:'工作能力', doubleProgressCol:'双倍进度',
     addMember:'添加成员', share:'共享设置', importData:'导入',
-    exportScriptTitle:'下载公会脚本，自动采集公会全体成员数据导出为 JSON（会长专用）',
-    exportScriptTitleSingle:'下载单成员脚本，仅导出当前登录角色的数据为 JSON',
+    exportScript:'下载脚本',
+    exportScriptTitle:'下载数据导出脚本（Tampermonkey），安装后可在游戏内一键导出角色数据',
     calculate:'计算最优分配', assignCol:'分配', nameCol:'角色名', maxMembers:'人数上限',
     noAssign:'(暂无分配)', noMembers:'暂无成员数据，请添加成员或导入 JSON',
     loadoutCol:'配装', loadoutSuffix:'配装', noLoadout:'空配装',
@@ -731,11 +741,15 @@ const I18N = {
     indexCol:'序号', indexTooltip:'成员在列表中的序号（0 开始）。会长可修改此列以插入方式重排成员。',
     leaderOnly:'仅会长可执行此操作',
     globalBuffs:'全局加成',
-    globalBuffsTip:'手动输入你所在服务器/账号的全局 buff 等级，每级 +{pct}%。仅本地保存，不会同步到共享空间；每个玩家按自己实际情况填即可。',
-    buffGathering:'采集数量', buffGatheringTip:'仅对采集类技能（挤奶/采摘/伐木）的双倍产出概率生效，每级 +{pct}%。',
-    buffProduction:'生产效率', buffProductionTip:'仅对生产类技能（奶酪锻造/制作/缝纫/烹饪/冲泡/炼金）的效率生效，每级 +{pct}%。',
-    buffEnhancingSpeed:'强化速度', buffEnhancingSpeedTip:'仅对强化技能的动作速度生效，每级 +{pct}%。',
+    globalBuffsTip:'手动输入你所在服务器/账号的全局 buff 等级，仅本地保存。当前：采集+{gatheringPct}% / 生产+{productionPct}% / 强化速度+{enhancingSpeedPct}%。',
+    buffGathering:'采集数量', buffGatheringTip:'仅对采集类技能（挤奶/采摘/伐木）的双倍产出概率生效，当前等级 +{pct}%。',
+    buffProduction:'生产效率', buffProductionTip:'仅对生产类技能（奶酪锻造/制作/缝纫/烹饪/冲泡/炼金）的效率生效，当前等级 +{pct}%。',
+    buffEnhancingSpeed:'强化速度', buffEnhancingSpeedTip:'仅对强化技能的动作速度生效，当前等级 +{pct}%。',
     levelUnit:'级',
+    guildBuildings:'公会建筑', guildBuildingsTip:'每级房子为对应技能/属性 +2 有效等级（仅本地保存）。',
+    guildShrines:'公会神龛', guildShrinesTip:'力量每级 +0.5% 效率，节奏每级 +0.5% 行动速度（仅本地保存）。',
+    buildingLabels:['挤奶','采摘','伐木','奶酪锻造','制作','缝纫','烹饪','冲泡','炼金','强化','耐力','智力','攻击','防御','近战','远程','魔法'],
+    shrinePower:'力量', shrineTempo:'节奏',
     shareHint:'会长创建共享空间后，生成分享链接发给成员。成员打开链接即可查看/更新数据，无需注册。',
     currentUrl:'当前共享链接', createShare:'创建共享', closeBtn:'关闭',
     shareCreated:'共享空间已创建！复制链接发给公会成员。', linkCopied:'链接已复制',
@@ -745,6 +759,11 @@ const I18N = {
     teamWork:'团队工作能力', nextClearNeeds:'下1次还需', pts:'点', perSec:'点/秒',
     targetLevel:'通关目标', estTime:'估算时间', reach:'到达',
     cumulativeTime:'累计', singlePassTime:'单关',
+    levelAboveTarget:'等级高于目标', levelBelowTarget:'等级低于目标',
+    lvTip:'基础等级 {base}（成员技能等级）\n+ 等级加成 {bonus} 级（装备 {equip} 级 / 成就 {achievement} 级 / Buff {buff} 级 / 全局 {global} 级 / 建筑 {building} 级 / 神龛 {shrine} 级）\n= 有效等级 {eff}',
+    srTip:'等级差 = 有效等级 {effLv} − 目标等级 {targetLv} = {delta}（{cmp}，每级 {adjPct}%）\n等级成功率加成 = {delta} × {adjPct}% = {levelAdj}%\n额外成功率加成 = {successBonus}%（装备 {equip}% / 成就 {achievement}% / Buff {buff}% / 全局 {global}% / 建筑 {building}% / 神龛 {shrine}%）\n基础成功率 = {basePct}%\n最终成功率 = {basePct}% × (1 + {levelAdj}% + {successBonus}%) = {rawPct}% → 限制后 {pct}%',
+    wpTip:'有效等级 {effLv} × (1 + 效率加成 {efficiencyBonus}%)\n= {effLv} × {effMult} = {raw}\n向下取整 = {workP}\n效率加成来源：装备 {equip}% / 成就 {achievement}% / Buff {buff}% / 全局 {global}% / 建筑 {building}% / 神龛 {shrine}%',
+    dpTip:'采集加成 = {gatheringBonus}%（装备 {equip}% / 成就 {achievement}% / Buff {buff}% / 全局 {global}% / 建筑 {building}% / 神龛 {shrine}%）\n限制在 0% ~ 100% 之间 = {pct}%',
     trial:'试炼', language:'中/EN', theme:'🌙',
     skillLabels:['挤奶','采摘','伐木','奶酪锻造','制作','缝纫','烹饪','冲泡','炼金','强化'],
     equipLabels:['主手','副手','头部','身体','手部','腿部','脚部','项链','耳环','戒指','袋子','背部','挤奶工具','采摘工具','伐木工具','奶酪锻造工具','制作工具','缝纫工具','烹饪工具','冲泡工具','炼金工具','强化工具'],
@@ -754,8 +773,8 @@ const I18N = {
     title:'MWI Trial Calculator', trialConfig:'Trial Config', memberData:'Member Data', assignmentResult:'Assignment',
     levelCol:'Lv', successRateCol:'Success', workPowerCol:'Work', doubleProgressCol:'Double',
     addMember:'Add Member', share:'Share', importData:'Import',
-    exportScriptTitle:'Download guild userscript to auto-collect all members data as JSON (guild leader only)',
-    exportScriptTitleSingle:'Download single-member userscript, exports only your own character data as JSON',
+    exportScript:'Download Script',
+    exportScriptTitle:'Download data export userscript (Tampermonkey) to export character data in-game',
     calculate:'Calculate', assignCol:'Assign', nameCol:'Name', maxMembers:'Max',
     noAssign:'(None)', noMembers:'No member data. Add members or import JSON.',
     loadoutCol:'Loadout', loadoutSuffix:' Loadout', noLoadout:'(no loadout)',
@@ -778,11 +797,15 @@ const I18N = {
     indexCol:'Idx', indexTooltip:'Position of the member in the list (0-based). Leader can edit this to reorder members (insert semantics).',
     leaderOnly:'Guild leader only',
     globalBuffs:'Global Buffs',
-    globalBuffsTip:'Enter your server/account global buff levels manually. Each level = +{pct}%. Stored locally only, not synced to the shared space.',
-    buffGathering:'Gathering Qty', buffGatheringTip:'Applies only to gathering skills (Milking/Foraging/Woodcutting) as double-drop chance. +{pct}% per level.',
-    buffProduction:'Production Eff', buffProductionTip:'Applies only to production skills (Cheesesmithing/Crafting/Tailoring/Cooking/Brewing/Alchemy) as efficiency. +{pct}% per level.',
-    buffEnhancingSpeed:'Enhancing Spd', buffEnhancingSpeedTip:'Applies only to the Enhancing skill as action speed. +{pct}% per level.',
+    globalBuffsTip:'Enter your server/account global buff levels manually. Stored locally only. Current: Gathering +{gatheringPct}% / Production +{productionPct}% / Enhancing Speed +{enhancingSpeedPct}%.',
+    buffGathering:'Gathering Qty', buffGatheringTip:'Applies only to gathering skills (Milking/Foraging/Woodcutting) as double-drop chance. Current level +{pct}%.',
+    buffProduction:'Production Eff', buffProductionTip:'Applies only to production skills (Cheesesmithing/Crafting/Tailoring/Cooking/Brewing/Alchemy) as efficiency. Current level +{pct}%.',
+    buffEnhancingSpeed:'Enhancing Spd', buffEnhancingSpeedTip:'Applies only to the Enhancing skill as action speed. Current level +{pct}%.',
     levelUnit:'lv',
+    guildBuildings:'Guild Buildings', guildBuildingsTip:'Each house level gives +2 effective levels to its skill/attribute. Stored locally only.',
+    guildShrines:'Guild Shrines', guildShrinesTip:'Power gives +0.5% efficiency per level; Tempo gives +0.5% action speed per level. Stored locally only.',
+    buildingLabels:['Milking','Foraging','Woodcutting','Cheesesmithing','Crafting','Tailoring','Cooking','Brewing','Alchemy','Enhancing','Stamina','Intelligence','Attack','Defense','Melee','Ranged','Magic'],
+    shrinePower:'Power', shrineTempo:'Tempo',
     shareHint:'After the leader creates a shared space, share the link with members. Members can view/update data without registration.',
     currentUrl:'Current Share URL', createShare:'Create Share', closeBtn:'Close',
     shareCreated:'Share space created! Copy the link to share with guild members.', linkCopied:'Link copied',
@@ -792,6 +815,11 @@ const I18N = {
     teamWork:'Team Work', nextClearNeeds:'Next clear needs', pts:'pts', perSec:'pts/s',
     targetLevel:'Clear Target', estTime:'Est. Time', reach:'Reach',
     cumulativeTime:'Total', singlePassTime:'This pass',
+    levelAboveTarget:'level above target', levelBelowTarget:'level below target',
+    lvTip:'Base level {base} (member skill level)\n+ Level bonus {bonus} lv (equipment {equip} lv / achievement {achievement} lv / buff {buff} lv / global {global} lv / building {building} lv / shrine {shrine} lv)\n= Effective level {eff}',
+    srTip:'Level delta = effective level {effLv} − target level {targetLv} = {delta} ({cmp}, {adjPct}% per level)\nLevel success bonus = {delta} × {adjPct}% = {levelAdj}%\nExtra success bonus = {successBonus}% (equipment {equip}% / achievement {achievement}% / buff {buff}% / global {global}% / building {building}% / shrine {shrine}%)\nBase success rate = {basePct}%\nFinal success rate = {basePct}% × (1 + {levelAdj}% + {successBonus}%) = {rawPct}% → capped {pct}%',
+    wpTip:'Effective level {effLv} × (1 + efficiency bonus {efficiencyBonus}%)\n= {effLv} × {effMult} = {raw}\nfloor = {workP}\nEfficiency sources: equipment {equip}% / achievement {achievement}% / buff {buff}% / global {global}% / building {building}% / shrine {shrine}%',
+    dpTip:'Gathering bonus = {gatheringBonus}% (equipment {equip}% / achievement {achievement}% / buff {buff}% / global {global}% / building {building}% / shrine {shrine}%)\nClamped to 0% ~ 100% = {pct}%',
     trial:'Trial', language:'中/EN', theme:'☀️',
     skillLabels:['Milking','Foraging','Woodcutting','Cheesesmithing','Crafting','Tailoring','Cooking','Brewing','Alchemy','Enhancing'],
     equipLabels:['Main Hand','Off Hand','Head','Body','Hands','Legs','Feet','Necklace','Earring','Ring','Pouch','Back','Milking Tool','Foraging Tool','Woodcutting Tool','Cheesesmithing Tool','Crafting Tool','Tailoring Tool','Cooking Tool','Brewing Tool','Alchemy Tool','Enhancing Tool'],
@@ -802,6 +830,17 @@ function t(key) { return (I18N[state.lang] && I18N[state.lang][key]) || key; }
 function skillLabel(idx) { return I18N[state.lang].skillLabels[idx]; }
 function equipLabel(idx) { return I18N[state.lang].equipLabels[idx]; }
 function equipShortLabel(idx) { return I18N[state.lang].equipShort[idx]; }
+
+// ── 脚本下载地址配置 ───────────────────────────────────────────────────
+// 右上角「下载脚本」按钮指向的地址。部署时可直接改下面默认值；
+// 也可以在页面加载前通过 localStorage.setItem('mwi_script_download_url', '...') 覆盖，
+// 方便同一个 HTML 文件在不同环境/不同公会使用不同脚本包。
+const SCRIPT_DOWNLOAD_DEFAULT = '银河奶牛公会生活试炼分配（数据+网址）.txt';
+const SCRIPT_DOWNLOAD_STORAGE_KEY = 'mwi_script_download_url';
+function getScriptDownloadUrl() {
+  try { return localStorage.getItem(SCRIPT_DOWNLOAD_STORAGE_KEY) || SCRIPT_DOWNLOAD_DEFAULT; }
+  catch(e) { return SCRIPT_DOWNLOAD_DEFAULT; }
+}
 
 // === Constants ===
 const SKILL_KEYS = ['milking','foraging','woodcutting','cheesesmithing','crafting','tailoring','cooking','brewing','alchemy','enhancing'];
@@ -837,6 +876,15 @@ const EQUIP_ICONS = {
   "强化工具":["cheese_enhancer","verdant_enhancer","azure_enhancer","burble_enhancer","crimson_enhancer","rainbow_enhancer","holy_enhancer","celestial_enhancer"],
 };
 
+// 公会建筑：生活和战斗每个属性/技能对应一座房子，每级 +2 有效等级。
+const GUILD_BUILDING_KEYS = ['milking','foraging','woodcutting','cheesesmithing','crafting','tailoring','cooking','brewing','alchemy','enhancing','stamina','intelligence','attack','defense','melee','ranged','magic'];
+const GUILD_BUILDING_LIFE_KEYS = ['milking','foraging','woodcutting','cheesesmithing','crafting','tailoring','cooking','brewing','alchemy','enhancing'];
+const GUILD_BUILDING_COMBAT_KEYS = ['stamina','intelligence','attack','defense','melee','ranged','magic'];
+const GUILD_BUILDING_MAX_LEVEL = 50;
+// 公会神龛：力量 +0.5% 效率/级，节奏 +0.5% 行动速度/级。
+const GUILD_SHRINE_KEYS = ['power','tempo'];
+const GUILD_SHRINE_MAX_LEVEL = 50;
+
 // === State ===
 let state = {
   lang: 'zh',
@@ -862,12 +910,16 @@ let state = {
   lastPullTs: 0,
   // 本地是否有未上传到云端的改动（编辑成员/导入/改 index 等都会置 true；上传成功后清零）。
   dirty: false,
-  // 全局 buff（每级 % 由 GLOBAL_BUFF_PCT_PER_LEVEL 决定，默认 1%/级）：
+  // 全局 buff（等级→最终加成由 getGlobalBuffValue 决定）：
   //   gathering       → 采集数量（仅采集类技能生效：挤奶/采摘/伐木）
   //   production      → 生产效率（仅生产类技能：奶酪/制作/缝纫/烹饪/冲泡/炼金）
   //   enhancingSpeed  → 强化速度（仅强化技能）
   // 每个玩家自己在 UI 上手动输入等级；仅本地持久化，不同步到云端（每个人可以按自己实际情况填）。
-  globalBuffs: { gathering: 0, production: 0, enhancingSpeed: 0 }
+  globalBuffs: { gathering: 0, production: 0, enhancingSpeed: 0 },
+  // 公会建筑：每座房子对应一个技能/属性，每级 +2 有效等级。仅本地保存。
+  guildBuildings: GUILD_BUILDING_KEYS.reduce((o,k)=>(o[k]=0,o),{}),
+  // 公会神龛：力量 +0.5% 效率/级，节奏 +0.5% 速度/级。仅本地保存。
+  guildShrines: { power: 0, tempo: 0 }
 };
 let pickerState = { memberId:null, slot:null, iconId:null, enhance:0 };
 
@@ -915,8 +967,24 @@ function skillIdToPascalCase(skillId) {
 }
 const GATHERING_SKILL_IDS = new Set(['milking','foraging','woodcutting']);
 const PRODUCTION_SKILL_IDS = new Set(['cheesesmithing','crafting','tailoring','cooking','brewing','alchemy']);
-// 全局 buff 每级 % 值（默认 1%/级；MWI 社区大厅 buff 与游戏内实际数值如有出入，改这里即可）
-const GLOBAL_BUFF_PCT_PER_LEVEL = 0.01;
+// 全局 buff 等级上限
+const GLOBAL_BUFF_MAX_LEVEL = 20;
+// 全局 buff 等级 → 最终加成比例。
+// 采集数量 / 强化速度：1级=20%，每级+0.5%，20级=29.5%
+// 生产效率：1级=14%，每级+0.3%，20级=19.7%
+function getGlobalBuffValue(key, level) {
+  const lv = Math.max(0, Math.min(GLOBAL_BUFF_MAX_LEVEL, Math.floor(Number(level) || 0)));
+  if (lv <= 0) return 0;
+  switch (key) {
+    case 'gathering':
+    case 'enhancingSpeed':
+      return 0.20 + (lv - 1) * 0.005;
+    case 'production':
+      return 0.14 + (lv - 1) * 0.003;
+    default:
+      return 0;
+  }
+}
 
 // 从 person.loadouts 里挑当前技能对应的那份 loadout。
 // 匹配规则：usedBy[].settingSuffix === PascalCase(skillId)（生活技能就是 Milking/Foraging/...）
@@ -959,59 +1027,153 @@ function extractEquipmentBonusesFromLoadout(loadoutEntry, skillId) {
   };
 }
 
+// 从 profile.achievements 中提取成就对某技能的加成。
+// achievements 可以是 { achievementActionTypeBuffsDict: { '/action_types/xxx': [buff,...] } }
+// 或直接是 { '/action_types/xxx': [buff,...] } 的 dict。
+function extractAchievementBonuses(person, skillId) {
+  const out = { speedBonus:0, efficiencyBonus:0, successBonus:0, gatheringBonus:0, skillLevelBonus:0 };
+  const ach = person && person.achievements;
+  if (!ach) return out;
+  const dict = ach.achievementActionTypeBuffsDict || ach;
+  const actionTypeHrid = '/action_types/' + skillId;
+  const buffs = dict[actionTypeHrid];
+  if (!Array.isArray(buffs)) return out;
+  const isGathering = GATHERING_SKILL_IDS.has(skillId);
+  const skillLevelType = '/buff_types/' + skillId + '_level';
+  const skillSuccessType = '/buff_types/' + skillId + '_success';
+  for (const b of buffs) {
+    if (!b || !b.typeHrid) continue;
+    const amt = (Number(b.flatBoost) || 0)
+              + (Number(b.flatBoostLevelBonus) || 0)
+              + (Number(b.ratioBoost) || 0)
+              + (Number(b.ratioBoostLevelBonus) || 0);
+    if (!Number.isFinite(amt) || amt === 0) continue;
+    const t = b.typeHrid;
+    if      (t === skillLevelType)                 out.skillLevelBonus += amt;
+    else if (t === '/buff_types/efficiency')       out.efficiencyBonus += amt;
+    else if (t === '/buff_types/action_speed')     out.speedBonus      += amt;
+    else if (t === skillSuccessType ||
+             t === '/buff_types/success_rate')     out.successBonus    += amt;
+    else if (t === '/buff_types/gathering' && isGathering) out.gatheringBonus += amt;
+  }
+  return out;
+}
+
 // 单人在某技能上的合成 bonuses：装备（配装匹配）+ actionTypeBuffs（房屋/成就/全服/MP 聚合）。
 // 返回结构：{ speedBonus, efficiencyBonus, successBonus, gatheringBonus, skillLevelBonus }
 function computeSkillBonusesForPerson(person, skillIdx) {
   const skillId = SKILL_KEYS[skillIdx];
   const zero = { speedBonus:0, efficiencyBonus:0, successBonus:0, gatheringBonus:0, skillLevelBonus:0 };
+  function makeSources(equip, buff, achievement, global, building, shrine) {
+    function src(e, b, a, g, bu, s) {
+      return { equip:e, buff:b, achievement:a, global:g, building:bu, shrine:s, total:e+b+a+g+bu+s };
+    }
+    return {
+      speed: src(equip.speedBonus, buff.speedBonus, achievement.speedBonus, global.speedBonus, 0, shrine.speedBonus),
+      efficiency: src(equip.efficiencyBonus, buff.efficiencyBonus, achievement.efficiencyBonus, global.efficiencyBonus, 0, shrine.efficiencyBonus),
+      success: src(equip.successBonus, buff.successBonus, achievement.successBonus, global.successBonus, 0, 0),
+      gathering: src(equip.gatheringBonus, buff.gatheringBonus, achievement.gatheringBonus, global.gatheringBonus, 0, 0),
+      skillLevel: src(equip.skillLevelBonus, buff.skillLevelBonus, achievement.skillLevelBonus, global.skillLevelBonus, building.skillLevelBonus, 0),
+    };
+  }
+
   const useNewData = person && (Array.isArray(person.loadouts) || person.actionTypeBuffs);
   if (!useNewData) {
-    // 兜底：老成员（手动添加 / 旧格式 JSON），继续走 equipment 近似公式；全局 buff 也叠上
+    // 兜底：老成员（手动添加 / 旧格式 JSON），继续走 equipment 近似公式；全局 buff / 公会建筑 / 神龛也叠上
     const b = computeMemberBonuses(person && person.equipment);
-    const combined = Object.assign({}, b[skillId] || zero);
-    addGlobalBuffsToCombined(combined, skillId);
-    return combined;
+    const base = b[skillId] || zero;
+    const combined = Object.assign({}, base);
+    const global = addGlobalBuffsToCombined(combined, skillId);
+    const building = applyGuildBuilding(combined, skillId);
+    const shrine = applyGuildShrine(combined);
+    return Object.assign({}, combined, { sources: makeSources(base, zero, zero, global, building, shrine) });
   }
 
   // (a) 装备加成：找 usedBy 匹配当前技能的迷宫配装；找不到 → 0
   const loadoutEntry = findLoadoutForSkill(person, skillId);
   const equipBonuses = loadoutEntry ? extractEquipmentBonusesFromLoadout(loadoutEntry, skillId) : zero;
 
-  // (b) buff 加成：actionTypeBuffs[skillId] 直接取；缺失 → 0
+  // (b) actionTypeBuffs 是房屋+成就+全服+MooPass 的聚合加成；先把成就部分拆出来单独展示。
   const rawBuff = person.actionTypeBuffs && person.actionTypeBuffs[skillId];
-  const buffBonuses = rawBuff ? {
+  const totalBuffBonuses = rawBuff ? {
     speedBonus:      Number(rawBuff.speedBonus)      || 0,
     efficiencyBonus: Number(rawBuff.efficiencyBonus) || 0,
     successBonus:    Number(rawBuff.successBonus)    || 0,
     gatheringBonus:  Number(rawBuff.gatheringBonus)  || 0,
     skillLevelBonus: Number(rawBuff.skillLevelBonus) || 0,
   } : zero;
+  const achievementBonuses = extractAchievementBonuses(person, skillId);
+  const buffBonuses = {
+    speedBonus:      Math.max(0, totalBuffBonuses.speedBonus      - achievementBonuses.speedBonus),
+    efficiencyBonus: Math.max(0, totalBuffBonuses.efficiencyBonus - achievementBonuses.efficiencyBonus),
+    successBonus:    Math.max(0, totalBuffBonuses.successBonus    - achievementBonuses.successBonus),
+    gatheringBonus:  Math.max(0, totalBuffBonuses.gatheringBonus  - achievementBonuses.gatheringBonus),
+    skillLevelBonus: Math.max(0, totalBuffBonuses.skillLevelBonus - achievementBonuses.skillLevelBonus),
+  };
 
   const combined = {
-    speedBonus:      equipBonuses.speedBonus      + buffBonuses.speedBonus,
-    efficiencyBonus: equipBonuses.efficiencyBonus + buffBonuses.efficiencyBonus,
-    successBonus:    equipBonuses.successBonus    + buffBonuses.successBonus,
-    gatheringBonus:  equipBonuses.gatheringBonus  + buffBonuses.gatheringBonus,
-    skillLevelBonus: equipBonuses.skillLevelBonus + buffBonuses.skillLevelBonus,
+    speedBonus:      equipBonuses.speedBonus      + totalBuffBonuses.speedBonus,
+    efficiencyBonus: equipBonuses.efficiencyBonus + totalBuffBonuses.efficiencyBonus,
+    successBonus:    equipBonuses.successBonus    + totalBuffBonuses.successBonus,
+    gatheringBonus:  equipBonuses.gatheringBonus  + totalBuffBonuses.gatheringBonus,
+    skillLevelBonus: equipBonuses.skillLevelBonus + totalBuffBonuses.skillLevelBonus,
   };
   // (c) 手动输入的全局 buff：按技能分类叠加相应比例
-  addGlobalBuffsToCombined(combined, skillId);
-  return combined;
+  const global = addGlobalBuffsToCombined(combined, skillId);
+  // (d) 公会建筑 + 神龛
+  const building = applyGuildBuilding(combined, skillId);
+  const shrine = applyGuildShrine(combined);
+  return Object.assign({}, combined, { sources: makeSources(equipBonuses, buffBonuses, achievementBonuses, global, building, shrine) });
 }
 
-// 把 state.globalBuffs 的等级换算成加成，叠到 combined 上。仅对相应技能分类生效。
+// 把 state.globalBuffs 的等级换算成最终加成，叠到 combined 上。仅对相应技能分类生效。
 function addGlobalBuffsToCombined(combined, skillId) {
   const gb = state.globalBuffs || {};
-  const step = GLOBAL_BUFF_PCT_PER_LEVEL;
+  const out = { speedBonus:0, efficiencyBonus:0, successBonus:0, gatheringBonus:0, skillLevelBonus:0 };
   if (GATHERING_SKILL_IDS.has(skillId)) {
-    combined.gatheringBonus += (Number(gb.gathering) || 0) * step;
+    const v = getGlobalBuffValue('gathering', gb.gathering);
+    combined.gatheringBonus += v;
+    out.gatheringBonus = v;
   }
   if (PRODUCTION_SKILL_IDS.has(skillId)) {
-    combined.efficiencyBonus += (Number(gb.production) || 0) * step;
+    const v = getGlobalBuffValue('production', gb.production);
+    combined.efficiencyBonus += v;
+    out.efficiencyBonus = v;
   }
   if (skillId === 'enhancing') {
-    combined.speedBonus += (Number(gb.enhancingSpeed) || 0) * step;
+    const v = getGlobalBuffValue('enhancingSpeed', gb.enhancingSpeed);
+    combined.speedBonus += v;
+    out.speedBonus = v;
   }
+  return out;
+}
+
+// 公会建筑：每级房子为对应技能/属性 +2 有效等级。
+function applyGuildBuilding(combined, skillId) {
+  const out = { skillLevelBonus:0 };
+  const buildings = state.guildBuildings || {};
+  const lv = Math.max(0, Math.min(GUILD_BUILDING_MAX_LEVEL, Math.floor(Number(buildings[skillId]) || 0)));
+  if (lv > 0) {
+    combined.skillLevelBonus += lv * 2;
+    out.skillLevelBonus = lv * 2;
+  }
+  return out;
+}
+// 公会神龛：力量 +0.5% 效率/级，节奏 +0.5% 速度/级。
+function applyGuildShrine(combined) {
+  const out = { speedBonus:0, efficiencyBonus:0 };
+  const shrines = state.guildShrines || {};
+  const power = Math.max(0, Math.min(GUILD_SHRINE_MAX_LEVEL, Math.floor(Number(shrines.power) || 0)));
+  if (power > 0) {
+    combined.efficiencyBonus += power * 0.005;
+    out.efficiencyBonus = power * 0.005;
+  }
+  const tempo = Math.max(0, Math.min(GUILD_SHRINE_MAX_LEVEL, Math.floor(Number(shrines.tempo) || 0)));
+  if (tempo > 0) {
+    combined.speedBonus += tempo * 0.005;
+    out.speedBonus = tempo * 0.005;
+  }
+  return out;
 }
 
 function successRate(personLv, targetLv, successBonus) {
@@ -1029,7 +1191,16 @@ function computePersonSkillMetrics(person, skillIdx) {
   const workP = Math.max(0, Math.floor(effLevel * (1+(b.efficiencyBonus||0))));
   let dblP = Math.max(0, Math.min(1, b.gatheringBonus||0));
   const baseRatePerSecond = actionSeconds > 0 ? (workP*(1+dblP))/actionSeconds : 0;
-  return {baseLevel,effLevel,actionSeconds,workP,dblP,baseRatePerSecond,successBonus:b.successBonus||0};
+  return {
+    baseLevel,effLevel,actionSeconds,workP,dblP,baseRatePerSecond,
+    successBonus:b.successBonus||0,
+    // 以下字段用于分配结果视图的 tooltip 展示计算过程
+    skillLevelBonus: Number(b.skillLevelBonus)||0,
+    speedBonus: Number(b.speedBonus)||0,
+    efficiencyBonus: Number(b.efficiencyBonus)||0,
+    gatheringBonus: Number(b.gatheringBonus)||0,
+    sources: b.sources || null
+  };
 }
 
 function expectedRate(m, T) {
@@ -1317,6 +1488,7 @@ function updateGlobalBuff(key, val) {
     renderSummary();
   }
   syncGlobalBuffInputs();
+  updateStaticText(); // 刷新 tooltip 中"当前等级"的最终加成数值
 }
 function syncGlobalBuffInputs() {
   const gb = state.globalBuffs || { gathering:0, production:0, enhancingSpeed:0 };
@@ -1324,6 +1496,89 @@ function syncGlobalBuffInputs() {
   for (const k in map) {
     const el = document.getElementById(map[k]);
     if (el && el !== document.activeElement) el.value = Number(gb[k] || 0);
+  }
+}
+
+// 公会建筑 / 神龛：本地加载、保存、更新。
+function loadGuildBuffs() {
+  try {
+    const rawB = localStorage.getItem('mwi_guild_buildings');
+    if (rawB) {
+      const obj = JSON.parse(rawB);
+      if (obj && typeof obj === 'object') {
+        for (const k of GUILD_BUILDING_KEYS) state.guildBuildings[k] = Math.max(0, Math.floor(Number(obj[k]) || 0));
+      }
+    }
+    const rawS = localStorage.getItem('mwi_guild_shrines');
+    if (rawS) {
+      const obj = JSON.parse(rawS);
+      if (obj && typeof obj === 'object') {
+        state.guildShrines.power = Math.max(0, Math.floor(Number(obj.power) || 0));
+        state.guildShrines.tempo = Math.max(0, Math.floor(Number(obj.tempo) || 0));
+      }
+    }
+  } catch(e) {}
+}
+function saveGuildBuildings() {
+  try { localStorage.setItem('mwi_guild_buildings', JSON.stringify(state.guildBuildings)); } catch(e) {}
+}
+function saveGuildShrines() {
+  try { localStorage.setItem('mwi_guild_shrines', JSON.stringify(state.guildShrines)); } catch(e) {}
+}
+function updateGuildBuilding(key, val) {
+  if (!state.guildBuildings) state.guildBuildings = GUILD_BUILDING_KEYS.reduce((o,k)=>(o[k]=0,o),{});
+  state.guildBuildings[key] = Math.max(0, Math.min(GUILD_BUILDING_MAX_LEVEL, Math.floor(Number(val) || 0)));
+  saveGuildBuildings();
+  if (state.members && state.members.length > 0 && state.result) calculate();
+  else { renderMemberTable(); renderSummary(); }
+  syncGuildBuildingInputs();
+}
+function updateGuildShrine(key, val) {
+  if (!state.guildShrines) state.guildShrines = { power:0, tempo:0 };
+  state.guildShrines[key] = Math.max(0, Math.min(GUILD_SHRINE_MAX_LEVEL, Math.floor(Number(val) || 0)));
+  saveGuildShrines();
+  if (state.members && state.members.length > 0 && state.result) calculate();
+  else { renderMemberTable(); renderSummary(); }
+  syncGuildShrineInputs();
+}
+function syncGuildBuildingInputs() {
+  for (const k of GUILD_BUILDING_KEYS) {
+    const el = document.getElementById('gb-building-input-'+k);
+    if (el && el !== document.activeElement) el.value = Number(state.guildBuildings[k] || 0);
+  }
+}
+function syncGuildShrineInputs() {
+  for (const k of GUILD_SHRINE_KEYS) {
+    const el = document.getElementById('gb-shrine-input-'+k);
+    if (el && el !== document.activeElement) el.value = Number(state.guildShrines[k] || 0);
+  }
+}
+
+// 动态生成公会建筑与神龛输入框（只需执行一次）。
+function renderGuildBuildingInputs() {
+  const bar = document.getElementById('guild-buildings-bar');
+  if (!bar || bar.children.length > 0) return;
+  for (const k of GUILD_BUILDING_KEYS) {
+    const label = document.createElement('label');
+    label.className = 'global-buff-item';
+    label.id = 'gb-building-item-' + k;
+    label.innerHTML = '<span class="global-buff-label" id="gb-building-lbl-'+k+'">'+k+'</span>'+
+      '<input type="number" min="0" max="'+GUILD_BUILDING_MAX_LEVEL+'" step="1" id="gb-building-input-'+k+'" onchange="updateGuildBuilding(\''+k+'\', this.value)">'+
+      '<span class="global-buff-unit">'+t('levelUnit')+'</span>';
+    bar.appendChild(label);
+  }
+}
+function renderGuildShrineInputs() {
+  const bar = document.getElementById('guild-shrines-bar');
+  if (!bar || bar.children.length > 0) return;
+  for (const k of GUILD_SHRINE_KEYS) {
+    const label = document.createElement('label');
+    label.className = 'global-buff-item';
+    label.id = 'gb-shrine-item-' + k;
+    label.innerHTML = '<span class="global-buff-label" id="gb-shrine-lbl-'+k+'">'+k+'</span>'+
+      '<input type="number" min="0" max="'+GUILD_SHRINE_MAX_LEVEL+'" step="1" id="gb-shrine-input-'+k+'" onchange="updateGuildShrine(\''+k+'\', this.value)">'+
+      '<span class="global-buff-unit">'+t('levelUnit')+'</span>';
+    bar.appendChild(label);
   }
 }
 
@@ -1410,8 +1665,14 @@ function updateStaticText() {
   document.getElementById('btn-view-members').textContent = t('memberData');
   const gbTitle = document.getElementById('h3-global-buff');
   if (gbTitle) gbTitle.firstChild.textContent = t('globalBuffs') + ' ';
+  const gb = state.globalBuffs || {};
   const gbHint = document.getElementById('global-buff-hint');
-  if (gbHint) gbHint.title = t('globalBuffsTip').replace('{pct}', (GLOBAL_BUFF_PCT_PER_LEVEL*100).toFixed(1));
+  if (gbHint) {
+    gbHint.title = t('globalBuffsTip')
+      .replace('{gatheringPct}',      (getGlobalBuffValue('gathering', gb.gathering)*100).toFixed(1))
+      .replace('{productionPct}',     (getGlobalBuffValue('production', gb.production)*100).toFixed(1))
+      .replace('{enhancingSpeedPct}', (getGlobalBuffValue('enhancingSpeed', gb.enhancingSpeed)*100).toFixed(1));
+  }
   const gbMap = [
     ['gathering',       'buffGathering',      'buffGatheringTip'],
     ['production',      'buffProduction',     'buffProductionTip'],
@@ -1422,9 +1683,34 @@ function updateStaticText() {
     const u = document.getElementById('gb-unit-'+k); if (u) u.textContent = t('levelUnit');
     const inp = document.getElementById('gb-input-'+k);
     const item = inp && inp.parentElement;
-    if (item) item.title = t(tipKey).replace('{pct}', (GLOBAL_BUFF_PCT_PER_LEVEL*100).toFixed(1));
+    if (item) item.title = t(tipKey).replace('{pct}', (getGlobalBuffValue(k, gb[k])*100).toFixed(1));
   }
   syncGlobalBuffInputs();
+  // 公会建筑静态文本
+  const bTitle = document.getElementById('h3-guild-buildings');
+  if (bTitle) bTitle.firstChild.textContent = t('guildBuildings') + ' ';
+  const bHint = document.getElementById('guild-buildings-hint');
+  if (bHint) bHint.title = t('guildBuildingsTip');
+  const buildingLabels = t('buildingLabels') || GUILD_BUILDING_KEYS;
+  for (let i = 0; i < GUILD_BUILDING_KEYS.length; i++) {
+    const k = GUILD_BUILDING_KEYS[i];
+    const l = document.getElementById('gb-building-lbl-'+k); if (l) l.textContent = buildingLabels[i] || k;
+    const item = document.getElementById('gb-building-item-'+k);
+    const u = item && item.querySelector('.global-buff-unit'); if (u) u.textContent = t('levelUnit');
+  }
+  syncGuildBuildingInputs();
+  // 公会神龛静态文本
+  const sTitle = document.getElementById('h3-guild-shrines');
+  if (sTitle) sTitle.firstChild.textContent = t('guildShrines') + ' ';
+  const sHint = document.getElementById('guild-shrines-hint');
+  if (sHint) sHint.title = t('guildShrinesTip');
+  for (const k of GUILD_SHRINE_KEYS) {
+    const l = document.getElementById('gb-shrine-lbl-'+k); if (l) l.textContent = t('shrine'+k.charAt(0).toUpperCase()+k.slice(1));
+    const item = document.getElementById('gb-shrine-item-'+k);
+    const u = item && item.querySelector('.global-buff-unit'); if (u) u.textContent = t('levelUnit');
+  }
+  syncGuildShrineInputs();
+
   document.getElementById('btn-add-member').textContent = '+ '+t('addMember');
   document.getElementById('btn-share').textContent = t('share');
   document.getElementById('btn-import-json').textContent = t('importData');
@@ -1479,9 +1765,8 @@ function isGuildLeader() {
 function renderExportScriptLinks() {
   const container = document.getElementById('export-script-links');
   if (!container) return;
-  const singleBtn = '<a href="mwi_data_export_single.user.js" download class="btn btn-sm" id="export-script-link-single" style="font-size:12px;padding:4px 8px;opacity:.6" title="'+escHtml(t('exportScriptTitleSingle'))+'">👤</a>';
-  const guildBtn  = '<a href="mwi_data_export.user.js"        download class="btn btn-sm" id="export-script-link-guild"  style="font-size:12px;padding:4px 8px;opacity:.6" title="'+escHtml(t('exportScriptTitle'))+'">📦</a>';
-  container.innerHTML = isGuildLeader() ? (guildBtn + singleBtn) : singleBtn;
+  const url = getScriptDownloadUrl();
+  container.innerHTML = '<a href="'+escHtml(url)+'" download class="btn btn-sm" id="export-script-link" style="font-size:12px;padding:4px 8px;opacity:.6" title="'+escHtml(t('exportScriptTitle'))+'">'+escHtml(t('exportScript'))+'</a>';
 }
 
 function makeTargetLevelOptions(selected) {
@@ -1553,11 +1838,81 @@ function renderAssignmentTableBody(tbody) {
       const m = computePersonSkillMetrics(p, cfg.skill);
       const targetLv = cfg.targetLevel || START_LV;
       const sr = successRate(m.effLevel, targetLv, m.successBonus);
-      const tip = 'Lv'+m.effLevel+' @ '+t('trial')+' '+(j+1)+' Lv'+targetLv;
-      trialCells += '<td class="trial-lv-cell trial-group-start">'+lv+'</td>';
-      trialCells += '<td class="assign-metric" title="'+escHtml(tip)+'">'+Math.round(sr*100)+'%</td>';
-      trialCells += '<td class="assign-metric" title="'+escHtml(tip)+'">'+m.workP+'</td>';
-      trialCells += '<td class="assign-metric" title="'+escHtml(tip)+'">'+Math.round(m.dblP*100)+'%</td>';
+      const sSrc = m.sources || {};
+      const lvlSrc = sSrc.skillLevel || {equip:0,buff:0,achievement:0,global:0,building:0,shrine:0};
+      const succSrc = sSrc.success || {equip:0,buff:0,achievement:0,global:0,building:0,shrine:0};
+      const effSrc = sSrc.efficiency || {equip:0,buff:0,achievement:0,global:0,building:0,shrine:0};
+      const gatherSrc = sSrc.gathering || {equip:0,buff:0,achievement:0,global:0,building:0,shrine:0};
+      const pct2 = x => ((Number(x)||0)*100).toFixed(1);
+      const pct2r = x => ((Number(x)||0)*100).toFixed(2);
+      const lv2 = x => (Number(x)||0).toFixed(1);
+      const delta = m.effLevel - targetLv;
+      const cmpKey = delta >= 0 ? 'levelAboveTarget' : 'levelBelowTarget';
+      const cmp = t(cmpKey);
+      const adjPct = (delta >= 0 ? SUCCESS_ABOVE : SUCCESS_BELOW) * 100;
+      const levelAdj = (delta >= 0 ? SUCCESS_ABOVE : SUCCESS_BELOW) * delta * 100;
+      const rawRate = SUCCESS_BASE * (1 + (delta >= 0 ? SUCCESS_ABOVE : SUCCESS_BELOW) * delta + m.successBonus);
+      const fillTip = (tpl, map) => {
+        let s = tpl;
+        for (const k in map) s = s.split('{' + k + '}').join(map[k]);
+        return s;
+      };
+      const lvTip = fillTip(t('lvTip'), {
+        base: m.baseLevel,
+        eff: m.effLevel,
+        bonus: lv2(m.skillLevelBonus),
+        equip: lv2(lvlSrc.equip),
+        achievement: lv2(lvlSrc.achievement),
+        buff: lv2(lvlSrc.buff),
+        global: lv2(lvlSrc.global),
+        building: lv2(lvlSrc.building),
+        shrine: lv2(lvlSrc.shrine)
+      });
+      const srTip = fillTip(t('srTip'), {
+        effLv: m.effLevel,
+        targetLv: targetLv,
+        delta: delta,
+        cmp: cmp,
+        adjPct: adjPct.toFixed(1),
+        levelAdj: levelAdj.toFixed(1),
+        successBonus: pct2r(m.successBonus),
+        equip: pct2r(succSrc.equip),
+        achievement: pct2r(succSrc.achievement),
+        buff: pct2r(succSrc.buff),
+        global: pct2r(succSrc.global),
+        building: pct2r(succSrc.building),
+        shrine: pct2r(succSrc.shrine),
+        basePct: (SUCCESS_BASE*100).toFixed(1),
+        rawPct: (rawRate*100).toFixed(1),
+        pct: Math.round(sr*100)
+      });
+      const wpTip = fillTip(t('wpTip'), {
+        effLv: m.effLevel,
+        efficiencyBonus: pct2(m.efficiencyBonus),
+        effMult: (1 + m.efficiencyBonus).toFixed(3),
+        raw: (m.effLevel * (1 + m.efficiencyBonus)).toFixed(2),
+        workP: m.workP,
+        equip: pct2(effSrc.equip),
+        achievement: pct2(effSrc.achievement),
+        buff: pct2(effSrc.buff),
+        global: pct2(effSrc.global),
+        building: pct2(effSrc.building),
+        shrine: pct2(effSrc.shrine)
+      });
+      const dpTip = fillTip(t('dpTip'), {
+        gatheringBonus: pct2(m.gatheringBonus),
+        equip: pct2(gatherSrc.equip),
+        achievement: pct2(gatherSrc.achievement),
+        buff: pct2(gatherSrc.buff),
+        global: pct2(gatherSrc.global),
+        building: pct2(gatherSrc.building),
+        shrine: pct2(gatherSrc.shrine),
+        pct: Math.round(m.dblP*100)
+      });
+      trialCells += '<td class="trial-lv-cell trial-group-start" title="'+escHtml(lvTip)+'">'+lv+'</td>';
+      trialCells += '<td class="assign-metric" title="'+escHtml(srTip)+'">'+Math.round(sr*100)+'%</td>';
+      trialCells += '<td class="assign-metric" title="'+escHtml(wpTip)+'">'+m.workP+'</td>';
+      trialCells += '<td class="assign-metric" title="'+escHtml(dpTip)+'">'+Math.round(m.dblP*100)+'%</td>';
     }
     return '<tr>'+
       '<td class="idx-cell">'+rowIdx+'</td>'+
@@ -2460,6 +2815,9 @@ async function refreshFromServer() { return pullFromServer(); }
 // === Init ===
 async function init() {
   loadPrefs();
+  loadGuildBuffs();
+  renderGuildBuildingInputs();
+  renderGuildShrineInputs();
   const params = new URLSearchParams(window.location.search);
   const guild = params.get('guild');
   const bin = params.get('bin');
