@@ -1072,10 +1072,10 @@ function extractAchievementBonuses(person, skillId) {
 
   // 2) 使用内嵌 client data + person.achievements 完成状态计算
   //    只计算 Beginner / Adept tier，且必须该 tier 下所有成就都完成才触发本 tier 的 BUFF。
-  if (clientData && clientData.achievementDetailMap && clientData.achievementTierDetailMap && person.achievements && typeof person.achievements === 'object' && !Array.isArray(person.achievements)) {
+  if (EMBEDDED_CLIENT_DATA && EMBEDDED_CLIENT_DATA.achievementDetailMap && EMBEDDED_CLIENT_DATA.achievementTierDetailMap && person.achievements && typeof person.achievements === 'object' && !Array.isArray(person.achievements)) {
     const ALLOWED_TIERS = new Set(['/achievement_tiers/beginner', '/achievement_tiers/adept']);
     const tierAchievements = {};
-    for (const [achHrid, achDetail] of Object.entries(clientData.achievementDetailMap)) {
+    for (const [achHrid, achDetail] of Object.entries(EMBEDDED_CLIENT_DATA.achievementDetailMap)) {
       if (!achDetail || !achDetail.tierHrid) continue;
       if (!ALLOWED_TIERS.has(achDetail.tierHrid)) continue;
       if (!tierAchievements[achDetail.tierHrid]) tierAchievements[achDetail.tierHrid] = [];
@@ -1085,7 +1085,7 @@ function extractAchievementBonuses(person, skillId) {
       if (achHrids.length === 0) continue;
       const allCompleted = achHrids.every(h => person.achievements[h] === true);
       if (!allCompleted) continue;
-      const tierDetail = clientData.achievementTierDetailMap[tierHrid];
+      const tierDetail = EMBEDDED_CLIENT_DATA.achievementTierDetailMap[tierHrid];
       if (!tierDetail || !tierDetail.buff || !tierDetail.usableInActionTypeMap || !tierDetail.usableInActionTypeMap[actionTypeHrid]) continue;
       const b = tierDetail.buff;
       const amt = readBuffAmount(b);
@@ -1176,11 +1176,11 @@ function extractHouseBuffBonuses(person, skillId) {
   }
 
   // 使用内嵌 client data 计算
-  if (clientData && clientData.houseRoomDetailMap && person.houseRoomLevels) {
+  if (EMBEDDED_CLIENT_DATA && EMBEDDED_CLIENT_DATA.houseRoomDetailMap && person.houseRoomLevels) {
     const actionTypeHrid = '/action_types/' + skillId;
     for (const [roomHrid, lv] of Object.entries(person.houseRoomLevels)) {
       if (typeof lv !== 'number' || lv <= 0) continue;
-      const room = clientData.houseRoomDetailMap[roomHrid];
+      const room = EMBEDDED_CLIENT_DATA.houseRoomDetailMap[roomHrid];
       if (!room) continue;
       for (const b of (room.actionBuffs || [])) {
         if (!b.usableInActionTypeMap || !b.usableInActionTypeMap[actionTypeHrid]) continue;
