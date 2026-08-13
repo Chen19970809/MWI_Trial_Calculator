@@ -760,10 +760,10 @@ const I18N = {
     targetLevel:'通关目标', estTime:'估算时间', reach:'到达',
     cumulativeTime:'累计', singlePassTime:'单关',
     levelAboveTarget:'等级高于目标', levelBelowTarget:'等级低于目标',
-    lvTip:'基础等级 {base}（成员技能等级）\n+ 等级加成 {bonus} 级（装备 {equip} 级 / 成就 {achievement} 级 / Buff {buff} 级 / 全局 {global} 级 / 建筑 {building} 级 / 神龛 {shrine} 级）\n= 有效等级 {eff}',
-    srTip:'等级差 = 有效等级 {effLv} − 目标等级 {targetLv} = {delta}（{cmp}，每级 {adjPct}%）\n等级成功率加成 = {delta} × {adjPct}% = {levelAdj}%\n额外成功率加成 = {successBonus}%（装备 {equip}% / 成就 {achievement}% / Buff {buff}% / 全局 {global}% / 建筑 {building}% / 神龛 {shrine}%）\n基础成功率 = {basePct}%\n最终成功率 = {basePct}% × (1 + {levelAdj}% + {successBonus}%) = {rawPct}% → 限制后 {pct}%',
-    wpTip:'有效等级 {effLv} × (1 + 效率加成 {efficiencyBonus}%)\n= {effLv} × {effMult} = {raw}\n向下取整 = {workP}\n效率加成来源：装备 {equip}% / 成就 {achievement}% / Buff {buff}% / 全局 {global}% / 建筑 {building}% / 神龛 {shrine}%',
-    dpTip:'采集加成 = {gatheringBonus}%（装备 {equip}% / 成就 {achievement}% / Buff {buff}% / 全局 {global}% / 建筑 {building}% / 神龛 {shrine}%）\n限制在 0% ~ 100% 之间 = {pct}%',
+    lvTip:'基础等级 {base}（成员技能等级）\n+ 公会建筑等级加成 {building} 级\n= 有效等级 {eff}\n（装备 {equip} / 成就 {achievement} / Buff 房屋{buffHouse}/全服{buffServer}/MooPass{buffMooPass}/其他{buffOther} / 全局 {global} / 神龛 {shrine} 的等级加成已移出，不计入有效等级）',
+    srTip:'等级差 = 有效等级 {effLv} − 目标等级 {targetLv} = {delta}（{cmp}，每级 {adjPct}%）\n等级成功率加成 = {delta} × {adjPct}% = {levelAdj}%\n额外成功率加成 = {successBonus}%（装备 {equip}% / 成就 {achievement}% / Buff 房屋{buffHouse}%/全服{buffServer}%/MooPass{buffMooPass}%/其他{buffOther}% / 全局 {global}% / 建筑 {building}% / 神龛 {shrine}%）\n基础成功率 = {basePct}%\n最终成功率 = {basePct}% × (1 + {levelAdj}% + {successBonus}%) = {rawPct}% → 限制后 {pct}%',
+    wpTip:'有效等级 {effLv} × (1 + 效率加成 {efficiencyBonus}%)\n= {effLv} × {effMult} = {raw}\n向下取整 = {workP}\n效率加成来源：装备 {equip}% / 成就 {achievement}% / Buff 房屋{buffHouse}%/全服{buffServer}%/MooPass{buffMooPass}%/其他{buffOther}% / 全局 {global}% / 建筑 {building}% / 神龛 {shrine}%',
+    dpTip:'采集加成 = {gatheringBonus}%（装备 {equip}% / 成就 {achievement}% / Buff 房屋{buffHouse}%/全服{buffServer}%/MooPass{buffMooPass}%/其他{buffOther}% / 全局 {global}% / 建筑 {building}% / 神龛 {shrine}%）\n限制在 0% ~ 100% 之间 = {pct}%',
     trial:'试炼', language:'中/EN', theme:'🌙',
     skillLabels:['挤奶','采摘','伐木','奶酪锻造','制作','缝纫','烹饪','冲泡','炼金','强化'],
     equipLabels:['主手','副手','头部','身体','手部','腿部','脚部','项链','耳环','戒指','袋子','背部','挤奶工具','采摘工具','伐木工具','奶酪锻造工具','制作工具','缝纫工具','烹饪工具','冲泡工具','炼金工具','强化工具'],
@@ -816,10 +816,10 @@ const I18N = {
     targetLevel:'Clear Target', estTime:'Est. Time', reach:'Reach',
     cumulativeTime:'Total', singlePassTime:'This pass',
     levelAboveTarget:'level above target', levelBelowTarget:'level below target',
-    lvTip:'Base level {base} (member skill level)\n+ Level bonus {bonus} lv (equipment {equip} lv / achievement {achievement} lv / buff {buff} lv / global {global} lv / building {building} lv / shrine {shrine} lv)\n= Effective level {eff}',
-    srTip:'Level delta = effective level {effLv} − target level {targetLv} = {delta} ({cmp}, {adjPct}% per level)\nLevel success bonus = {delta} × {adjPct}% = {levelAdj}%\nExtra success bonus = {successBonus}% (equipment {equip}% / achievement {achievement}% / buff {buff}% / global {global}% / building {building}% / shrine {shrine}%)\nBase success rate = {basePct}%\nFinal success rate = {basePct}% × (1 + {levelAdj}% + {successBonus}%) = {rawPct}% → capped {pct}%',
-    wpTip:'Effective level {effLv} × (1 + efficiency bonus {efficiencyBonus}%)\n= {effLv} × {effMult} = {raw}\nfloor = {workP}\nEfficiency sources: equipment {equip}% / achievement {achievement}% / buff {buff}% / global {global}% / building {building}% / shrine {shrine}%',
-    dpTip:'Gathering bonus = {gatheringBonus}% (equipment {equip}% / achievement {achievement}% / buff {buff}% / global {global}% / building {building}% / shrine {shrine}%)\nClamped to 0% ~ 100% = {pct}%',
+    lvTip:'Base level {base} (member skill level)\n+ Guild building level bonus {building} lv\n= Effective level {eff}\n(Equipment {equip} / achievement {achievement} / buff house{buffHouse}/server{buffServer}/MooPass{buffMooPass}/other{buffOther} / global {global} / shrine {shrine} level bonuses are excluded from effective level)',
+    srTip:'Level delta = effective level {effLv} − target level {targetLv} = {delta} ({cmp}, {adjPct}% per level)\nLevel success bonus = {delta} × {adjPct}% = {levelAdj}%\nExtra success bonus = {successBonus}% (equipment {equip}% / achievement {achievement}% / buff house{buffHouse}%/server{buffServer}%/MooPass{buffMooPass}%/other{buffOther}% / global {global}% / building {building}% / shrine {shrine}%)\nBase success rate = {basePct}%\nFinal success rate = {basePct}% × (1 + {levelAdj}% + {successBonus}%) = {rawPct}% → capped {pct}%',
+    wpTip:'Effective level {effLv} × (1 + efficiency bonus {efficiencyBonus}%)\n= {effLv} × {effMult} = {raw}\nfloor = {workP}\nEfficiency sources: equipment {equip}% / achievement {achievement}% / buff house{buffHouse}%/server{buffServer}%/MooPass{buffMooPass}%/other{buffOther}% / global {global}% / building {building}% / shrine {shrine}%',
+    dpTip:'Gathering bonus = {gatheringBonus}% (equipment {equip}% / achievement {achievement}% / buff house{buffHouse}%/server{buffServer}%/MooPass{buffMooPass}%/other{buffOther}% / global {global}% / building {building}% / shrine {shrine}%)\nClamped to 0% ~ 100% = {pct}%',
     trial:'Trial', language:'中/EN', theme:'☀️',
     skillLabels:['Milking','Foraging','Woodcutting','Cheesesmithing','Crafting','Tailoring','Cooking','Brewing','Alchemy','Enhancing'],
     equipLabels:['Main Hand','Off Hand','Head','Body','Hands','Legs','Feet','Necklace','Earring','Ring','Pouch','Back','Milking Tool','Foraging Tool','Woodcutting Tool','Cheesesmithing Tool','Crafting Tool','Tailoring Tool','Cooking Tool','Brewing Tool','Alchemy Tool','Enhancing Tool'],
@@ -1059,21 +1059,117 @@ function extractAchievementBonuses(person, skillId) {
   return out;
 }
 
+// 房屋每级加成系数（默认 0：公式待确认；若游戏内确认后可在此覆盖）。
+const HOUSE_BONUS_PER_LEVEL = { speed: 0, efficiency: 0, success: 0, gathering: 0, skillLevel: 0 };
+
+// 根据 person.houseRoomLevels 估算房屋对该技能的加成。
+// 由于房屋加成公式尚未确定，默认系数为 0，结果将全归入 other buff；后续确认公式后更新系数即可。
+function estimateHouseBuffFromRoomLevels(person, skillId) {
+  const out = { speedBonus: 0, efficiencyBonus: 0, successBonus: 0, gatheringBonus: 0, skillLevelBonus: 0 };
+  if (!person || !person.houseRoomLevels) return out;
+  const room = person.houseRoomLevels[skillId]
+    || person.houseRoomLevels['/house_rooms/' + skillId + '_room']
+    || person.houseRoomLevels['/house_rooms/' + skillId];
+  let lv = 0;
+  if (typeof room === 'number') lv = room;
+  else if (room && typeof room === 'object' && typeof room.level === 'number') lv = room.level;
+  if (lv <= 0) return out;
+  out.speedBonus      = lv * HOUSE_BONUS_PER_LEVEL.speed;
+  out.efficiencyBonus = lv * HOUSE_BONUS_PER_LEVEL.efficiency;
+  out.successBonus    = lv * HOUSE_BONUS_PER_LEVEL.success;
+  out.gatheringBonus  = lv * HOUSE_BONUS_PER_LEVEL.gathering;
+  out.skillLevelBonus = lv * HOUSE_BONUS_PER_LEVEL.skillLevel;
+  return out;
+}
+
+// 将 actionTypeBuffs 拆分为房屋 / 全服 / MooPass / 其他。
+// 若原始数据已按来源聚合为单一对象，则基于 houseRoomLevels 估算房屋部分，剩余归入 other。
+function splitBuffBonuses(person, skillId, achievementBonuses) {
+  const zero = { speedBonus: 0, efficiencyBonus: 0, successBonus: 0, gatheringBonus: 0, skillLevelBonus: 0 };
+  const raw = person && person.actionTypeBuffs && person.actionTypeBuffs[skillId];
+  if (!raw) return { house: { ...zero }, server: { ...zero }, mooPass: { ...zero }, other: { ...zero } };
+
+  const total = {
+    speedBonus: Number(raw.speedBonus) || 0,
+    efficiencyBonus: Number(raw.efficiencyBonus) || 0,
+    successBonus: Number(raw.successBonus) || 0,
+    gatheringBonus: Number(raw.gatheringBonus) || 0,
+    skillLevelBonus: Number(raw.skillLevelBonus) || 0,
+  };
+
+  // 扣除成就部分
+  const nonAch = {
+    speedBonus: Math.max(0, total.speedBonus - achievementBonuses.speedBonus),
+    efficiencyBonus: Math.max(0, total.efficiencyBonus - achievementBonuses.efficiencyBonus),
+    successBonus: Math.max(0, total.successBonus - achievementBonuses.successBonus),
+    gatheringBonus: Math.max(0, total.gatheringBonus - achievementBonuses.gatheringBonus),
+    skillLevelBonus: Math.max(0, total.skillLevelBonus - achievementBonuses.skillLevelBonus),
+  };
+
+  // 若原始结构是数组（每个元素带 source/type/buffTypeHrid），则按来源细分
+  const list = Array.isArray(raw.buffs) ? raw.buffs : (Array.isArray(raw) ? raw : null);
+  if (list) {
+    const house = { ...zero }, server = { ...zero }, mooPass = { ...zero }, other = { ...zero };
+    for (const b of list) {
+      if (!b || typeof b !== 'object') continue;
+      const srcKey = String(b.source || b.type || b.buffTypeHrid || '').toLowerCase();
+      // 数组中若已单独拆出成就，则跳过，避免重复
+      if (srcKey.includes('achievement')) continue;
+      let target = other;
+      if (srcKey.includes('house')) target = house;
+      else if (srcKey.includes('server') || srcKey.includes('global') || srcKey.includes('event')) target = server;
+      else if (srcKey.includes('moo') || srcKey.includes('pass')) target = mooPass;
+      for (const k of Object.keys(zero)) target[k] += Number(b[k]) || 0;
+    }
+    return { house, server, mooPass, other };
+  }
+
+  // 否则按聚合对象处理：用 houseRoomLevels 估算房屋加成，剩余为 other
+  const house = estimateHouseBuffFromRoomLevels(person, skillId);
+  const other = {
+    speedBonus: Math.max(0, nonAch.speedBonus - house.speedBonus),
+    efficiencyBonus: Math.max(0, nonAch.efficiencyBonus - house.efficiencyBonus),
+    successBonus: Math.max(0, nonAch.successBonus - house.successBonus),
+    gatheringBonus: Math.max(0, nonAch.gatheringBonus - house.gatheringBonus),
+    skillLevelBonus: Math.max(0, nonAch.skillLevelBonus - house.skillLevelBonus),
+  };
+  return { house, server: { ...zero }, mooPass: { ...zero }, other };
+}
+
 // 单人在某技能上的合成 bonuses：装备（配装匹配）+ actionTypeBuffs（房屋/成就/全服/MP 聚合）。
 // 返回结构：{ speedBonus, efficiencyBonus, successBonus, gatheringBonus, skillLevelBonus }
 function computeSkillBonusesForPerson(person, skillIdx) {
   const skillId = SKILL_KEYS[skillIdx];
   const zero = { speedBonus:0, efficiencyBonus:0, successBonus:0, gatheringBonus:0, skillLevelBonus:0 };
-  function makeSources(equip, buff, achievement, global, building, shrine) {
-    function src(e, b, a, g, bu, s) {
-      return { equip:e, buff:b, achievement:a, global:g, building:bu, shrine:s, total:e+b+a+g+bu+s };
+  function makeSources(equip, buffParts, achievement, global, building, shrine) {
+    const { house, server, mooPass, other } = buffParts;
+    function src(e, bh, bs, bm, bo, a, g, bu, s) {
+      return {
+        equip:e, buffHouse:bh, buffServer:bs, buffMooPass:bm, buffOther:bo,
+        buffTotal:bh+bs+bm+bo, achievement:a, global:g, building:bu, shrine:s,
+        total:e+bh+bs+bm+bo+a+g+bu+s
+      };
     }
+    const buildingLv = building.skillLevelBonus || 0;
     return {
-      speed: src(equip.speedBonus, buff.speedBonus, achievement.speedBonus, global.speedBonus, 0, shrine.speedBonus),
-      efficiency: src(equip.efficiencyBonus, buff.efficiencyBonus, achievement.efficiencyBonus, global.efficiencyBonus, 0, shrine.efficiencyBonus),
-      success: src(equip.successBonus, buff.successBonus, achievement.successBonus, global.successBonus, 0, 0),
-      gathering: src(equip.gatheringBonus, buff.gatheringBonus, achievement.gatheringBonus, global.gatheringBonus, 0, 0),
-      skillLevel: src(equip.skillLevelBonus, buff.skillLevelBonus, achievement.skillLevelBonus, global.skillLevelBonus, building.skillLevelBonus, 0),
+      speed: src(equip.speedBonus, house.speedBonus, server.speedBonus, mooPass.speedBonus, other.speedBonus, achievement.speedBonus, global.speedBonus, 0, shrine.speedBonus),
+      efficiency: src(equip.efficiencyBonus, house.efficiencyBonus, server.efficiencyBonus, mooPass.efficiencyBonus, other.efficiencyBonus, achievement.efficiencyBonus, global.efficiencyBonus, 0, shrine.efficiencyBonus),
+      success: src(equip.successBonus, house.successBonus, server.successBonus, mooPass.successBonus, other.successBonus, achievement.successBonus, global.successBonus, 0, 0),
+      gathering: src(equip.gatheringBonus, house.gatheringBonus, server.gatheringBonus, mooPass.gatheringBonus, other.gatheringBonus, achievement.gatheringBonus, global.gatheringBonus, 0, 0),
+      // 等级加成：仅公会建筑生效，其余来源读取后展示但不计入 total。
+      skillLevel: {
+        equip: equip.skillLevelBonus,
+        buffHouse: house.skillLevelBonus,
+        buffServer: server.skillLevelBonus,
+        buffMooPass: mooPass.skillLevelBonus,
+        buffOther: other.skillLevelBonus,
+        buffTotal: house.skillLevelBonus + server.skillLevelBonus + mooPass.skillLevelBonus + other.skillLevelBonus,
+        achievement: achievement.skillLevelBonus,
+        global: global.skillLevelBonus,
+        building: buildingLv,
+        shrine: 0,
+        total: buildingLv
+      }
     };
   }
 
@@ -1083,10 +1179,12 @@ function computeSkillBonusesForPerson(person, skillIdx) {
     const b = computeMemberBonuses(person && person.equipment);
     const base = b[skillId] || zero;
     const combined = Object.assign({}, base);
+    combined.skillLevelBonus = 0; // 仅公会建筑提供等级加成
     const global = addGlobalBuffsToCombined(combined, skillId);
     const building = applyGuildBuilding(combined, skillId);
     const shrine = applyGuildShrine(combined);
-    return Object.assign({}, combined, { sources: makeSources(base, zero, zero, global, building, shrine) });
+    const buffParts = { house: { ...zero }, server: { ...zero }, mooPass: { ...zero }, other: { ...zero } };
+    return Object.assign({}, combined, { sources: makeSources(base, buffParts, zero, global, building, shrine) });
   }
 
   // (a) 装备加成：找 usedBy 匹配当前技能的迷宫配装；找不到 → 0
@@ -1103,27 +1201,21 @@ function computeSkillBonusesForPerson(person, skillIdx) {
     skillLevelBonus: Number(rawBuff.skillLevelBonus) || 0,
   } : zero;
   const achievementBonuses = extractAchievementBonuses(person, skillId);
-  const buffBonuses = {
-    speedBonus:      Math.max(0, totalBuffBonuses.speedBonus      - achievementBonuses.speedBonus),
-    efficiencyBonus: Math.max(0, totalBuffBonuses.efficiencyBonus - achievementBonuses.efficiencyBonus),
-    successBonus:    Math.max(0, totalBuffBonuses.successBonus    - achievementBonuses.successBonus),
-    gatheringBonus:  Math.max(0, totalBuffBonuses.gatheringBonus  - achievementBonuses.gatheringBonus),
-    skillLevelBonus: Math.max(0, totalBuffBonuses.skillLevelBonus - achievementBonuses.skillLevelBonus),
-  };
+  const buffParts = splitBuffBonuses(person, skillId, achievementBonuses);
 
   const combined = {
     speedBonus:      equipBonuses.speedBonus      + totalBuffBonuses.speedBonus,
     efficiencyBonus: equipBonuses.efficiencyBonus + totalBuffBonuses.efficiencyBonus,
     successBonus:    equipBonuses.successBonus    + totalBuffBonuses.successBonus,
     gatheringBonus:  equipBonuses.gatheringBonus  + totalBuffBonuses.gatheringBonus,
-    skillLevelBonus: equipBonuses.skillLevelBonus + totalBuffBonuses.skillLevelBonus,
+    skillLevelBonus: 0, // 仅公会建筑提供等级加成
   };
   // (c) 手动输入的全局 buff：按技能分类叠加相应比例
   const global = addGlobalBuffsToCombined(combined, skillId);
   // (d) 公会建筑 + 神龛
   const building = applyGuildBuilding(combined, skillId);
   const shrine = applyGuildShrine(combined);
-  return Object.assign({}, combined, { sources: makeSources(equipBonuses, buffBonuses, achievementBonuses, global, building, shrine) });
+  return Object.assign({}, combined, { sources: makeSources(equipBonuses, buffParts, achievementBonuses, global, building, shrine) });
 }
 
 // 把 state.globalBuffs 的等级换算成最终加成，叠到 combined 上。仅对相应技能分类生效。
@@ -1839,10 +1931,11 @@ function renderAssignmentTableBody(tbody) {
       const targetLv = cfg.targetLevel || START_LV;
       const sr = successRate(m.effLevel, targetLv, m.successBonus);
       const sSrc = m.sources || {};
-      const lvlSrc = sSrc.skillLevel || {equip:0,buff:0,achievement:0,global:0,building:0,shrine:0};
-      const succSrc = sSrc.success || {equip:0,buff:0,achievement:0,global:0,building:0,shrine:0};
-      const effSrc = sSrc.efficiency || {equip:0,buff:0,achievement:0,global:0,building:0,shrine:0};
-      const gatherSrc = sSrc.gathering || {equip:0,buff:0,achievement:0,global:0,building:0,shrine:0};
+      const emptySrc = {equip:0,buffHouse:0,buffServer:0,buffMooPass:0,buffOther:0,buffTotal:0,achievement:0,global:0,building:0,shrine:0,total:0};
+      const lvlSrc = sSrc.skillLevel || {equip:0,buffHouse:0,buffServer:0,buffMooPass:0,buffOther:0,buffTotal:0,achievement:0,global:0,building:0,shrine:0,total:0};
+      const succSrc = sSrc.success || emptySrc;
+      const effSrc = sSrc.efficiency || emptySrc;
+      const gatherSrc = sSrc.gathering || emptySrc;
       const pct2 = x => ((Number(x)||0)*100).toFixed(1);
       const pct2r = x => ((Number(x)||0)*100).toFixed(2);
       const lv2 = x => (Number(x)||0).toFixed(1);
@@ -1860,10 +1953,12 @@ function renderAssignmentTableBody(tbody) {
       const lvTip = fillTip(t('lvTip'), {
         base: m.baseLevel,
         eff: m.effLevel,
-        bonus: lv2(m.skillLevelBonus),
         equip: lv2(lvlSrc.equip),
         achievement: lv2(lvlSrc.achievement),
-        buff: lv2(lvlSrc.buff),
+        buffHouse: lv2(lvlSrc.buffHouse),
+        buffServer: lv2(lvlSrc.buffServer),
+        buffMooPass: lv2(lvlSrc.buffMooPass),
+        buffOther: lv2(lvlSrc.buffOther),
         global: lv2(lvlSrc.global),
         building: lv2(lvlSrc.building),
         shrine: lv2(lvlSrc.shrine)
@@ -1878,7 +1973,10 @@ function renderAssignmentTableBody(tbody) {
         successBonus: pct2r(m.successBonus),
         equip: pct2r(succSrc.equip),
         achievement: pct2r(succSrc.achievement),
-        buff: pct2r(succSrc.buff),
+        buffHouse: pct2r(succSrc.buffHouse),
+        buffServer: pct2r(succSrc.buffServer),
+        buffMooPass: pct2r(succSrc.buffMooPass),
+        buffOther: pct2r(succSrc.buffOther),
         global: pct2r(succSrc.global),
         building: pct2r(succSrc.building),
         shrine: pct2r(succSrc.shrine),
@@ -1894,7 +1992,10 @@ function renderAssignmentTableBody(tbody) {
         workP: m.workP,
         equip: pct2(effSrc.equip),
         achievement: pct2(effSrc.achievement),
-        buff: pct2(effSrc.buff),
+        buffHouse: pct2(effSrc.buffHouse),
+        buffServer: pct2(effSrc.buffServer),
+        buffMooPass: pct2(effSrc.buffMooPass),
+        buffOther: pct2(effSrc.buffOther),
         global: pct2(effSrc.global),
         building: pct2(effSrc.building),
         shrine: pct2(effSrc.shrine)
@@ -1903,7 +2004,10 @@ function renderAssignmentTableBody(tbody) {
         gatheringBonus: pct2(m.gatheringBonus),
         equip: pct2(gatherSrc.equip),
         achievement: pct2(gatherSrc.achievement),
-        buff: pct2(gatherSrc.buff),
+        buffHouse: pct2(gatherSrc.buffHouse),
+        buffServer: pct2(gatherSrc.buffServer),
+        buffMooPass: pct2(gatherSrc.buffMooPass),
+        buffOther: pct2(gatherSrc.buffOther),
         global: pct2(gatherSrc.global),
         building: pct2(gatherSrc.building),
         shrine: pct2(gatherSrc.shrine),
