@@ -760,10 +760,10 @@ const I18N = {
     targetLevel:'通关目标', estTime:'估算时间', reach:'到达',
     cumulativeTime:'累计', singlePassTime:'单关',
     levelAboveTarget:'等级高于目标', levelBelowTarget:'等级低于目标',
-    lvTip:'基础等级 {base}（成员技能等级）\n+ 公会建筑等级加成 {building} 级\n= 有效等级 {eff}\n（装备 {equip} / 成就 {achievement} / Buff 房屋{buffHouse}/全服{buffServer}/其他{buffOther} / 全局 {global} / 神龛 {shrine} 的等级加成已移出，不计入有效等级）',
-    srTip:'等级差 = 有效等级 {effLv} − 目标等级 {targetLv} = {delta}（{cmp}，每级 {adjPct}%）\n等级成功率加成 = {delta} × {adjPct}% = {levelAdj}%\n额外成功率加成 = {successBonus}%（装备 {equip}% / 成就 {achievement}% / Buff 房屋{buffHouse}%/全服{buffServer}%/其他{buffOther}% / 全局 {global}% / 建筑 {building}% / 神龛 {shrine}%）\n基础成功率 = {basePct}%\n最终成功率 = {basePct}% × (1 + {levelAdj}% + {successBonus}%) = {rawPct}% → 限制后 {pct}%',
-    wpTip:'有效等级 {effLv} × (1 + 效率加成 {efficiencyBonus}%)\n= {effLv} × {effMult} = {raw}\n向下取整 = {workP}\n效率加成来源：装备 {equip}% / 成就 {achievement}% / 房屋 {buffHouse}% / 全局 {global}% / 建筑 {building}% / 神龛 {shrine}%',
-    dpTip:'采集加成 = {gatheringBonus}%（装备 {equip}% / 成就 {achievement}% / Buff 房屋{buffHouse}%/全服{buffServer}%/其他{buffOther}% / 全局 {global}% / 建筑 {building}% / 神龛 {shrine}%）\n限制在 0% ~ 100% 之间 = {pct}%',
+    lvTip:'基础等级 {base}（成员技能等级）\n+ 等级加成 {bonus} 级（装备 {equip} 级 / 成就 {achievement} 级 / Buff {buff} 级 / 全局 {global} 级 / 建筑 {building} 级 / 神龛 {shrine} 级）\n= 有效等级 {eff}',
+    srTip:'等级差 = 有效等级 {effLv} − 目标等级 {targetLv} = {delta}（{cmp}，每级 {adjPct}%）\n等级成功率加成 = {delta} × {adjPct}% = {levelAdj}%\n额外成功率加成 = {successBonus}%（装备 {equip}% / 成就 {achievement}% / Buff {buff}% / 全局 {global}% / 建筑 {building}% / 神龛 {shrine}%）\n基础成功率 = {basePct}%\n最终成功率 = {basePct}% × (1 + {levelAdj}% + {successBonus}%) = {rawPct}% → 限制后 {pct}%',
+    wpTip:'有效等级 {effLv} × (1 + 效率加成 {efficiencyBonus}%)\n= {effLv} × {effMult} = {raw}\n向下取整 = {workP}\n效率加成来源：装备 {equip}% / 成就 {achievement}% / Buff {buff}% / 全局 {global}% / 建筑 {building}% / 神龛 {shrine}%',
+    dpTip:'采集加成 = {gatheringBonus}%（装备 {equip}% / 成就 {achievement}% / Buff {buff}% / 全局 {global}% / 建筑 {building}% / 神龛 {shrine}%）\n限制在 0% ~ 100% 之间 = {pct}%',
     trial:'试炼', language:'中/EN', theme:'🌙',
     skillLabels:['挤奶','采摘','伐木','奶酪锻造','制作','缝纫','烹饪','冲泡','炼金','强化'],
     equipLabels:['主手','副手','头部','身体','手部','腿部','脚部','项链','耳环','戒指','袋子','背部','挤奶工具','采摘工具','伐木工具','奶酪锻造工具','制作工具','缝纫工具','烹饪工具','冲泡工具','炼金工具','强化工具'],
@@ -816,10 +816,10 @@ const I18N = {
     targetLevel:'Clear Target', estTime:'Est. Time', reach:'Reach',
     cumulativeTime:'Total', singlePassTime:'This pass',
     levelAboveTarget:'level above target', levelBelowTarget:'level below target',
-    lvTip:'Base level {base} (member skill level)\n+ Guild building level bonus {building} lv\n= Effective level {eff}\n(Equipment {equip} / achievement {achievement} / buff house{buffHouse}/server{buffServer}/other{buffOther} / global {global} / shrine {shrine} level bonuses are excluded from effective level)',
-    srTip:'Level delta = effective level {effLv} − target level {targetLv} = {delta} ({cmp}, {adjPct}% per level)\nLevel success bonus = {delta} × {adjPct}% = {levelAdj}%\nExtra success bonus = {successBonus}% (equipment {equip}% / achievement {achievement}% / buff house{buffHouse}%/server{buffServer}%/other{buffOther}% / global {global}% / building {building}% / shrine {shrine}%)\nBase success rate = {basePct}%\nFinal success rate = {basePct}% × (1 + {levelAdj}% + {successBonus}%) = {rawPct}% → capped {pct}%',
-    wpTip:'Effective level {effLv} × (1 + efficiency bonus {efficiencyBonus}%)\n= {effLv} × {effMult} = {raw}\nfloor = {workP}\nEfficiency sources: equipment {equip}% / achievement {achievement}% / house {buffHouse}% / global {global}% / building {building}% / shrine {shrine}%',
-    dpTip:'Gathering bonus = {gatheringBonus}% (equipment {equip}% / achievement {achievement}% / buff house{buffHouse}%/server{buffServer}%/other{buffOther}% / global {global}% / building {building}% / shrine {shrine}%)\nClamped to 0% ~ 100% = {pct}%',
+    lvTip:'Base level {base} (member skill level)\n+ Level bonus {bonus} lv (equipment {equip} lv / achievement {achievement} lv / buff {buff} lv / global {global} lv / building {building} lv / shrine {shrine} lv)\n= Effective level {eff}',
+    srTip:'Level delta = effective level {effLv} − target level {targetLv} = {delta} ({cmp}, {adjPct}% per level)\nLevel success bonus = {delta} × {adjPct}% = {levelAdj}%\nExtra success bonus = {successBonus}% (equipment {equip}% / achievement {achievement}% / buff {buff}% / global {global}% / building {building}% / shrine {shrine}%)\nBase success rate = {basePct}%\nFinal success rate = {basePct}% × (1 + {levelAdj}% + {successBonus}%) = {rawPct}% → capped {pct}%',
+    wpTip:'Effective level {effLv} × (1 + efficiency bonus {efficiencyBonus}%)\n= {effLv} × {effMult} = {raw}\nfloor = {workP}\nEfficiency sources: equipment {equip}% / achievement {achievement}% / buff {buff}% / global {global}% / building {building}% / shrine {shrine}%',
+    dpTip:'Gathering bonus = {gatheringBonus}% (equipment {equip}% / achievement {achievement}% / buff {buff}% / global {global}% / building {building}% / shrine {shrine}%)\nClamped to 0% ~ 100% = {pct}%',
     trial:'Trial', language:'中/EN', theme:'☀️',
     skillLabels:['Milking','Foraging','Woodcutting','Cheesesmithing','Crafting','Tailoring','Cooking','Brewing','Alchemy','Enhancing'],
     equipLabels:['Main Hand','Off Hand','Head','Body','Hands','Legs','Feet','Necklace','Earring','Ring','Pouch','Back','Milking Tool','Foraging Tool','Woodcutting Tool','Cheesesmithing Tool','Crafting Tool','Tailoring Tool','Cooking Tool','Brewing Tool','Alchemy Tool','Enhancing Tool'],
@@ -876,7 +876,6 @@ const EQUIP_ICONS = {
   "强化工具":["cheese_enhancer","verdant_enhancer","azure_enhancer","burble_enhancer","crimson_enhancer","rainbow_enhancer","holy_enhancer","celestial_enhancer"],
 };
 
-const EMBEDDED_CLIENT_DATA = {"houseRoomDetailMap":{"/house_rooms/archery_range":{"actionBuffs":[{"typeHrid":"/buff_types/ranged_level","flatBoost":1,"flatBoostLevelBonus":1,"ratioBoost":0,"ratioBoostLevelBonus":0}],"globalBuffs":[{"typeHrid":"/buff_types/wisdom","flatBoost":0.0005,"flatBoostLevelBonus":0.0005,"ratioBoost":0,"ratioBoostLevelBonus":0},{"typeHrid":"/buff_types/rare_find","flatBoost":0.002,"flatBoostLevelBonus":0.002,"ratioBoost":0,"ratioBoostLevelBonus":0}]},"/house_rooms/armory":{"actionBuffs":[{"typeHrid":"/buff_types/defense_level","flatBoost":1,"flatBoostLevelBonus":1,"ratioBoost":0,"ratioBoostLevelBonus":0}],"globalBuffs":[{"typeHrid":"/buff_types/wisdom","flatBoost":0.0005,"flatBoostLevelBonus":0.0005,"ratioBoost":0,"ratioBoostLevelBonus":0},{"typeHrid":"/buff_types/rare_find","flatBoost":0.002,"flatBoostLevelBonus":0.002,"ratioBoost":0,"ratioBoostLevelBonus":0}]},"/house_rooms/brewery":{"actionBuffs":[{"typeHrid":"/buff_types/efficiency","flatBoost":0.015,"flatBoostLevelBonus":0.015,"ratioBoost":0,"ratioBoostLevelBonus":0}],"globalBuffs":[{"typeHrid":"/buff_types/wisdom","flatBoost":0.0005,"flatBoostLevelBonus":0.0005,"ratioBoost":0,"ratioBoostLevelBonus":0},{"typeHrid":"/buff_types/rare_find","flatBoost":0.002,"flatBoostLevelBonus":0.002,"ratioBoost":0,"ratioBoostLevelBonus":0}]},"/house_rooms/dairy_barn":{"actionBuffs":[{"typeHrid":"/buff_types/efficiency","flatBoost":0.015,"flatBoostLevelBonus":0.015,"ratioBoost":0,"ratioBoostLevelBonus":0}],"globalBuffs":[{"typeHrid":"/buff_types/wisdom","flatBoost":0.0005,"flatBoostLevelBonus":0.0005,"ratioBoost":0,"ratioBoostLevelBonus":0},{"typeHrid":"/buff_types/rare_find","flatBoost":0.002,"flatBoostLevelBonus":0.002,"ratioBoost":0,"ratioBoostLevelBonus":0}]},"/house_rooms/dining_room":{"actionBuffs":[{"typeHrid":"/buff_types/stamina_level","flatBoost":1,"flatBoostLevelBonus":1,"ratioBoost":0,"ratioBoostLevelBonus":0},{"typeHrid":"/buff_types/hp_regen","flatBoost":0.0003,"flatBoostLevelBonus":0.0003,"ratioBoost":0,"ratioBoostLevelBonus":0}],"globalBuffs":[{"typeHrid":"/buff_types/wisdom","flatBoost":0.0005,"flatBoostLevelBonus":0.0005,"ratioBoost":0,"ratioBoostLevelBonus":0},{"typeHrid":"/buff_types/rare_find","flatBoost":0.002,"flatBoostLevelBonus":0.002,"ratioBoost":0,"ratioBoostLevelBonus":0}]},"/house_rooms/dojo":{"actionBuffs":[{"typeHrid":"/buff_types/attack_level","flatBoost":1,"flatBoostLevelBonus":1,"ratioBoost":0,"ratioBoostLevelBonus":0},{"typeHrid":"/buff_types/attack_speed","flatBoost":0,"flatBoostLevelBonus":0,"ratioBoost":0.005,"ratioBoostLevelBonus":0.005},{"typeHrid":"/buff_types/cast_speed","flatBoost":0.005,"flatBoostLevelBonus":0.005,"ratioBoost":0,"ratioBoostLevelBonus":0}],"globalBuffs":[{"typeHrid":"/buff_types/wisdom","flatBoost":0.0005,"flatBoostLevelBonus":0.0005,"ratioBoost":0,"ratioBoostLevelBonus":0},{"typeHrid":"/buff_types/rare_find","flatBoost":0.002,"flatBoostLevelBonus":0.002,"ratioBoost":0,"ratioBoostLevelBonus":0}]},"/house_rooms/forge":{"actionBuffs":[{"typeHrid":"/buff_types/efficiency","flatBoost":0.015,"flatBoostLevelBonus":0.015,"ratioBoost":0,"ratioBoostLevelBonus":0}],"globalBuffs":[{"typeHrid":"/buff_types/wisdom","flatBoost":0.0005,"flatBoostLevelBonus":0.0005,"ratioBoost":0,"ratioBoostLevelBonus":0},{"typeHrid":"/buff_types/rare_find","flatBoost":0.002,"flatBoostLevelBonus":0.002,"ratioBoost":0,"ratioBoostLevelBonus":0}]},"/house_rooms/garden":{"actionBuffs":[{"typeHrid":"/buff_types/efficiency","flatBoost":0.015,"flatBoostLevelBonus":0.015,"ratioBoost":0,"ratioBoostLevelBonus":0}],"globalBuffs":[{"typeHrid":"/buff_types/wisdom","flatBoost":0.0005,"flatBoostLevelBonus":0.0005,"ratioBoost":0,"ratioBoostLevelBonus":0},{"typeHrid":"/buff_types/rare_find","flatBoost":0.002,"flatBoostLevelBonus":0.002,"ratioBoost":0,"ratioBoostLevelBonus":0}]},"/house_rooms/gym":{"actionBuffs":[{"typeHrid":"/buff_types/melee_level","flatBoost":1,"flatBoostLevelBonus":1,"ratioBoost":0,"ratioBoostLevelBonus":0}],"globalBuffs":[{"typeHrid":"/buff_types/wisdom","flatBoost":0.0005,"flatBoostLevelBonus":0.0005,"ratioBoost":0,"ratioBoostLevelBonus":0},{"typeHrid":"/buff_types/rare_find","flatBoost":0.002,"flatBoostLevelBonus":0.002,"ratioBoost":0,"ratioBoostLevelBonus":0}]},"/house_rooms/kitchen":{"actionBuffs":[{"typeHrid":"/buff_types/efficiency","flatBoost":0.015,"flatBoostLevelBonus":0.015,"ratioBoost":0,"ratioBoostLevelBonus":0}],"globalBuffs":[{"typeHrid":"/buff_types/wisdom","flatBoost":0.0005,"flatBoostLevelBonus":0.0005,"ratioBoost":0,"ratioBoostLevelBonus":0},{"typeHrid":"/buff_types/rare_find","flatBoost":0.002,"flatBoostLevelBonus":0.002,"ratioBoost":0,"ratioBoostLevelBonus":0}]},"/house_rooms/laboratory":{"actionBuffs":[{"typeHrid":"/buff_types/efficiency","flatBoost":0.015,"flatBoostLevelBonus":0.015,"ratioBoost":0,"ratioBoostLevelBonus":0}],"globalBuffs":[{"typeHrid":"/buff_types/wisdom","flatBoost":0.0005,"flatBoostLevelBonus":0.0005,"ratioBoost":0,"ratioBoostLevelBonus":0},{"typeHrid":"/buff_types/rare_find","flatBoost":0.002,"flatBoostLevelBonus":0.002,"ratioBoost":0,"ratioBoostLevelBonus":0}]},"/house_rooms/library":{"actionBuffs":[{"typeHrid":"/buff_types/intelligence_level","flatBoost":1,"flatBoostLevelBonus":1,"ratioBoost":0,"ratioBoostLevelBonus":0},{"typeHrid":"/buff_types/mp_regen","flatBoost":0.0003,"flatBoostLevelBonus":0.0003,"ratioBoost":0,"ratioBoostLevelBonus":0}],"globalBuffs":[{"typeHrid":"/buff_types/wisdom","flatBoost":0.0005,"flatBoostLevelBonus":0.0005,"ratioBoost":0,"ratioBoostLevelBonus":0},{"typeHrid":"/buff_types/rare_find","flatBoost":0.002,"flatBoostLevelBonus":0.002,"ratioBoost":0,"ratioBoostLevelBonus":0}]},"/house_rooms/log_shed":{"actionBuffs":[{"typeHrid":"/buff_types/efficiency","flatBoost":0.015,"flatBoostLevelBonus":0.015,"ratioBoost":0,"ratioBoostLevelBonus":0}],"globalBuffs":[{"typeHrid":"/buff_types/wisdom","flatBoost":0.0005,"flatBoostLevelBonus":0.0005,"ratioBoost":0,"ratioBoostLevelBonus":0},{"typeHrid":"/buff_types/rare_find","flatBoost":0.002,"flatBoostLevelBonus":0.002,"ratioBoost":0,"ratioBoostLevelBonus":0}]},"/house_rooms/mystical_study":{"actionBuffs":[{"typeHrid":"/buff_types/magic_level","flatBoost":1,"flatBoostLevelBonus":1,"ratioBoost":0,"ratioBoostLevelBonus":0}],"globalBuffs":[{"typeHrid":"/buff_types/wisdom","flatBoost":0.0005,"flatBoostLevelBonus":0.0005,"ratioBoost":0,"ratioBoostLevelBonus":0},{"typeHrid":"/buff_types/rare_find","flatBoost":0.002,"flatBoostLevelBonus":0.002,"ratioBoost":0,"ratioBoostLevelBonus":0}]},"/house_rooms/observatory":{"actionBuffs":[{"typeHrid":"/buff_types/action_speed","flatBoost":0.01,"flatBoostLevelBonus":0.01,"ratioBoost":0,"ratioBoostLevelBonus":0},{"typeHrid":"/buff_types/enhancing_success","flatBoost":0,"flatBoostLevelBonus":0,"ratioBoost":0.0005,"ratioBoostLevelBonus":0.0005}],"globalBuffs":[{"typeHrid":"/buff_types/wisdom","flatBoost":0.0005,"flatBoostLevelBonus":0.0005,"ratioBoost":0,"ratioBoostLevelBonus":0},{"typeHrid":"/buff_types/rare_find","flatBoost":0.002,"flatBoostLevelBonus":0.002,"ratioBoost":0,"ratioBoostLevelBonus":0}]},"/house_rooms/sewing_parlor":{"actionBuffs":[{"typeHrid":"/buff_types/efficiency","flatBoost":0.015,"flatBoostLevelBonus":0.015,"ratioBoost":0,"ratioBoostLevelBonus":0}],"globalBuffs":[{"typeHrid":"/buff_types/wisdom","flatBoost":0.0005,"flatBoostLevelBonus":0.0005,"ratioBoost":0,"ratioBoostLevelBonus":0},{"typeHrid":"/buff_types/rare_find","flatBoost":0.002,"flatBoostLevelBonus":0.002,"ratioBoost":0,"ratioBoostLevelBonus":0}]},"/house_rooms/workshop":{"actionBuffs":[{"typeHrid":"/buff_types/efficiency","flatBoost":0.015,"flatBoostLevelBonus":0.015,"ratioBoost":0,"ratioBoostLevelBonus":0}],"globalBuffs":[{"typeHrid":"/buff_types/wisdom","flatBoost":0.0005,"flatBoostLevelBonus":0.0005,"ratioBoost":0,"ratioBoostLevelBonus":0},{"typeHrid":"/buff_types/rare_find","flatBoost":0.002,"flatBoostLevelBonus":0.002,"ratioBoost":0,"ratioBoostLevelBonus":0}]}},"achievementDetailMap":{"/achievements/bestiary_points_100":{"tierHrid":"/achievement_tiers/veteran"},"/achievements/bestiary_points_20":{"tierHrid":"/achievement_tiers/novice"},"/achievements/bestiary_points_200":{"tierHrid":"/achievement_tiers/elite"},"/achievements/bestiary_points_40":{"tierHrid":"/achievement_tiers/adept"},"/achievements/bestiary_points_400":{"tierHrid":"/achievement_tiers/champion"},"/achievements/brew_gourmet_tea":{"tierHrid":"/achievement_tiers/novice"},"/achievements/brew_ultra_magic_coffee":{"tierHrid":"/achievement_tiers/elite"},"/achievements/build_room_level_1":{"tierHrid":"/achievement_tiers/adept"},"/achievements/build_room_level_3":{"tierHrid":"/achievement_tiers/veteran"},"/achievements/build_room_level_6":{"tierHrid":"/achievement_tiers/elite"},"/achievements/build_room_level_8":{"tierHrid":"/achievement_tiers/champion"},"/achievements/buy_trainee_charm":{"tierHrid":"/achievement_tiers/adept"},"/achievements/cheesesmith_azure_tool":{"tierHrid":"/achievement_tiers/novice"},"/achievements/clear_chimerical_den":{"tierHrid":"/achievement_tiers/elite"},"/achievements/clear_enchanted_fortress":{"tierHrid":"/achievement_tiers/champion"},"/achievements/clear_pirate_cove":{"tierHrid":"/achievement_tiers/champion"},"/achievements/clear_sinister_circus":{"tierHrid":"/achievement_tiers/elite"},"/achievements/clear_t1_dungeon_10_times":{"tierHrid":"/achievement_tiers/champion"},"/achievements/coinify_coins_1m":{"tierHrid":"/achievement_tiers/veteran"},"/achievements/collect_branch_of_insight":{"tierHrid":"/achievement_tiers/elite"},"/achievements/collect_butter_of_proficiency":{"tierHrid":"/achievement_tiers/elite"},"/achievements/collect_thread_of_expertise":{"tierHrid":"/achievement_tiers/elite"},"/achievements/collection_points_100":{"tierHrid":"/achievement_tiers/novice"},"/achievements/collection_points_1000":{"tierHrid":"/achievement_tiers/elite"},"/achievements/collection_points_200":{"tierHrid":"/achievement_tiers/adept"},"/achievements/collection_points_2000":{"tierHrid":"/achievement_tiers/champion"},"/achievements/collection_points_500":{"tierHrid":"/achievement_tiers/veteran"},"/achievements/complete_tutorial":{"tierHrid":"/achievement_tiers/beginner"},"/achievements/cook_apple_gummy":{"tierHrid":"/achievement_tiers/beginner"},"/achievements/cook_peach_yogurt":{"tierHrid":"/achievement_tiers/adept"},"/achievements/cook_spaceberry_cake":{"tierHrid":"/achievement_tiers/veteran"},"/achievements/craft_celestial_tool_or_outfit":{"tierHrid":"/achievement_tiers/champion"},"/achievements/craft_dungeon_equipment":{"tierHrid":"/achievement_tiers/elite"},"/achievements/craft_jewelry":{"tierHrid":"/achievement_tiers/adept"},"/achievements/craft_master_charm":{"tierHrid":"/achievement_tiers/champion"},"/achievements/craft_wooden_bow":{"tierHrid":"/achievement_tiers/beginner"},"/achievements/decompose_bamboo_gloves":{"tierHrid":"/achievement_tiers/adept"},"/achievements/defeat_chronofrost_sorcerer":{"tierHrid":"/achievement_tiers/veteran"},"/achievements/defeat_crystal_colossus":{"tierHrid":"/achievement_tiers/elite"},"/achievements/defeat_demonic_overlord_t1":{"tierHrid":"/achievement_tiers/champion"},"/achievements/defeat_dusk_revenant":{"tierHrid":"/achievement_tiers/elite"},"/achievements/defeat_gobo_chieftain":{"tierHrid":"/achievement_tiers/adept"},"/achievements/defeat_jerry":{"tierHrid":"/achievement_tiers/beginner"},"/achievements/defeat_jerry_t5":{"tierHrid":"/achievement_tiers/veteran"},"/achievements/defeat_luna_empress":{"tierHrid":"/achievement_tiers/adept"},"/achievements/defeat_marine_huntress":{"tierHrid":"/achievement_tiers/novice"},"/achievements/defeat_red_panda":{"tierHrid":"/achievement_tiers/veteran"},"/achievements/defeat_shoebill":{"tierHrid":"/achievement_tiers/novice"},"/achievements/defeat_stalactite_golem_t5":{"tierHrid":"/achievement_tiers/champion"},"/achievements/defeat_the_watcher":{"tierHrid":"/achievement_tiers/adept"},"/achievements/enhance_level_80_to_10":{"tierHrid":"/achievement_tiers/elite"},"/achievements/enhance_level_90_to_10":{"tierHrid":"/achievement_tiers/champion"},"/achievements/enhance_to_10":{"tierHrid":"/achievement_tiers/veteran"},"/achievements/enhance_to_3":{"tierHrid":"/achievement_tiers/novice"},"/achievements/enhance_to_6":{"tierHrid":"/achievement_tiers/adept"},"/achievements/equip_expert_task_badge":{"tierHrid":"/achievement_tiers/elite"},"/achievements/equip_ginkgo_weapon":{"tierHrid":"/achievement_tiers/adept"},"/achievements/gather_milk":{"tierHrid":"/achievement_tiers/beginner"},"/achievements/labyrinth_floor_2":{"tierHrid":"/achievement_tiers/adept"},"/achievements/labyrinth_floor_4":{"tierHrid":"/achievement_tiers/veteran"},"/achievements/labyrinth_floor_6":{"tierHrid":"/achievement_tiers/elite"},"/achievements/labyrinth_floor_8":{"tierHrid":"/achievement_tiers/champion"},"/achievements/learn_ability":{"tierHrid":"/achievement_tiers/novice"},"/achievements/learn_special_ability":{"tierHrid":"/achievement_tiers/veteran"},"/achievements/refine_dungeon_equipment":{"tierHrid":"/achievement_tiers/champion"},"/achievements/tailor_gluttonous_or_guzzling_pouch":{"tierHrid":"/achievement_tiers/champion"},"/achievements/tailor_medium_pouch":{"tierHrid":"/achievement_tiers/novice"},"/achievements/tailor_umbral_tunic":{"tierHrid":"/achievement_tiers/veteran"},"/achievements/task_tokens_10":{"tierHrid":"/achievement_tiers/novice"},"/achievements/total_level_100":{"tierHrid":"/achievement_tiers/beginner"},"/achievements/total_level_1000":{"tierHrid":"/achievement_tiers/veteran"},"/achievements/total_level_1500":{"tierHrid":"/achievement_tiers/elite"},"/achievements/total_level_1800":{"tierHrid":"/achievement_tiers/champion"},"/achievements/total_level_250":{"tierHrid":"/achievement_tiers/novice"},"/achievements/total_level_500":{"tierHrid":"/achievement_tiers/adept"},"/achievements/transmute_philosophers_stone":{"tierHrid":"/achievement_tiers/champion"},"/achievements/woodcut_arcane_tree":{"tierHrid":"/achievement_tiers/veteran"}},"achievementTierDetailMap":{"/achievement_tiers/adept":{"buff":{"typeHrid":"/buff_types/efficiency","flatBoost":0.02,"flatBoostLevelBonus":0,"ratioBoost":0,"ratioBoostLevelBonus":0},"usableInActionTypeMap":{"/action_types/alchemy":true,"/action_types/brewing":true,"/action_types/cheesesmithing":true,"/action_types/cooking":true,"/action_types/crafting":true,"/action_types/foraging":true,"/action_types/milking":true,"/action_types/tailoring":true,"/action_types/woodcutting":true}},"/achievement_tiers/beginner":{"buff":{"typeHrid":"/buff_types/gathering","flatBoost":0.02,"flatBoostLevelBonus":0,"ratioBoost":0,"ratioBoostLevelBonus":0},"usableInActionTypeMap":{"/action_types/foraging":true,"/action_types/milking":true,"/action_types/woodcutting":true}},"/achievement_tiers/champion":{"buff":{"typeHrid":"/buff_types/enhancing_success","flatBoost":0,"flatBoostLevelBonus":0,"ratioBoost":0.002,"ratioBoostLevelBonus":0},"usableInActionTypeMap":{"/action_types/enhancing":true}},"/achievement_tiers/elite":{"buff":{"typeHrid":"/buff_types/damage","flatBoost":0,"flatBoostLevelBonus":0,"ratioBoost":0.02,"ratioBoostLevelBonus":0},"usableInActionTypeMap":{"/action_types/combat":true}},"/achievement_tiers/novice":{"buff":{"typeHrid":"/buff_types/wisdom","flatBoost":0.02,"flatBoostLevelBonus":0,"ratioBoost":0,"ratioBoostLevelBonus":0},"usableInActionTypeMap":{"/action_types/alchemy":true,"/action_types/brewing":true,"/action_types/cheesesmithing":true,"/action_types/combat":true,"/action_types/cooking":true,"/action_types/crafting":true,"/action_types/enhancing":true,"/action_types/foraging":true,"/action_types/milking":true,"/action_types/tailoring":true,"/action_types/woodcutting":true}},"/achievement_tiers/veteran":{"buff":{"typeHrid":"/buff_types/rare_find","flatBoost":0.02,"flatBoostLevelBonus":0,"ratioBoost":0,"ratioBoostLevelBonus":0},"usableInActionTypeMap":{"/action_types/alchemy":true,"/action_types/brewing":true,"/action_types/cheesesmithing":true,"/action_types/combat":true,"/action_types/cooking":true,"/action_types/crafting":true,"/action_types/enhancing":true,"/action_types/foraging":true,"/action_types/milking":true,"/action_types/tailoring":true,"/action_types/woodcutting":true}}}};
 // 公会建筑：生活和战斗每个属性/技能对应一座房子，每级 +2 有效等级。
 const GUILD_BUILDING_KEYS = ['milking','foraging','woodcutting','cheesesmithing','crafting','tailoring','cooking','brewing','alchemy','enhancing','stamina','intelligence','attack','defense','melee','ranged','magic'];
 const GUILD_BUILDING_LIFE_KEYS = ['milking','foraging','woodcutting','cheesesmithing','crafting','tailoring','cooking','brewing','alchemy','enhancing'];
@@ -1005,42 +1004,18 @@ function findLoadoutForSkill(person, skillId) {
 // stats 字段名与 MWI 官方 noncombatStats key 一致：
 //   {skillId}Speed / {skillId}Efficiency / {skillId}Success + skilling{Speed/Efficiency}
 //   gatheringQuantity（仅采集类技能生效） + {skillId}Level
-//
-// 若导出数据未包含 stats（只有 itemHrid + enhancementLevel），则按旧版近似公式兜底：
-//   生活工具按强化等级给本技能加成，非工具槽位给全生活技能小额加成。
 function extractEquipmentBonusesFromLoadout(loadoutEntry, skillId) {
   const zero = { speedBonus:0, efficiencyBonus:0, successBonus:0, gatheringBonus:0, skillLevelBonus:0 };
   const wmap = loadoutEntry && loadoutEntry.loadout && loadoutEntry.loadout.wearableItemMap;
   if (!wmap) return zero;
   const totals = {};
-  for (const [loc, slotEntry] of Object.entries(wmap)) {
-    if (!slotEntry) continue;
-    const stats = slotEntry.stats;
-    if (stats) {
-      for (const k in stats) {
-        const v = Number(stats[k]);
-        if (!Number.isFinite(v) || v === 0) continue;
-        totals[k] = (totals[k] || 0) + v;
-      }
-      continue;
-    }
-    // 兜底：没有 stats 时从 itemHrid + enhancementLevel 估算
-    if (!slotEntry.itemHrid) continue;
-    const slot = ITEM_LOCATION_TO_SLOT[loc];
-    if (!slot) continue; // charm/trinket 等非计算槽位跳过
-    const L = Number(slotEntry.enhancementLevel) || 0;
-    const itemSkill = TOOL_SKILL_MAP[slot];
-    if (itemSkill) {
-      if (itemSkill !== skillId) continue;
-      totals[skillId + 'Speed']      = (totals[skillId + 'Speed']      || 0) + L * 0.025;
-      totals[skillId + 'Efficiency'] = (totals[skillId + 'Efficiency'] || 0) + L * 0.015;
-      totals[skillId + 'Success']    = (totals[skillId + 'Success']    || 0) + L * 0.005;
-      totals['gatheringQuantity']    = (totals['gatheringQuantity']    || 0) + L * 0.01;
-      totals[skillId + 'Level']      = (totals[skillId + 'Level']      || 0) + L * 0.5;
-    } else {
-      totals['skillingSpeed']      = (totals['skillingSpeed']      || 0) + L * 0.002;
-      totals['skillingEfficiency'] = (totals['skillingEfficiency'] || 0) + L * 0.001;
-      totals[skillId + 'Level']    = (totals[skillId + 'Level']    || 0) + L * 0.1;
+  for (const slotEntry of Object.values(wmap)) {
+    const stats = slotEntry && slotEntry.stats;
+    if (!stats) continue;
+    for (const k in stats) {
+      const v = Number(stats[k]);
+      if (!Number.isFinite(v) || v === 0) continue;
+      totals[k] = (totals[k] || 0) + v;
     }
   }
   return {
@@ -1052,327 +1027,36 @@ function extractEquipmentBonusesFromLoadout(loadoutEntry, skillId) {
   };
 }
 
-// 读取单个 buff 对象的数值，兼容多种字段名。
-function readBuffAmount(b) {
-  const keys = ['ratioBoost','flatBoost','value','amount','bonus','boost','boostRatio','ratioBoostLevelBonus','flatBoostLevelBonus','levelBonus'];
-  let sum = 0;
-  for (const k of keys) {
-    const v = b[k];
-    if (typeof v === 'number' && Number.isFinite(v)) sum += v;
-    else if (typeof v === 'string') {
-      const n = Number(v);
-      if (!Number.isNaN(n)) sum += n;
-    }
-  }
-  return sum;
-}
-
-// 从 person.achievementActionTypeBuffsDict 或 person.achievements 中提取成就对某技能的加成。
-// 原始 gameState 字段 achievementActionTypeBuffsDict['/action_types/xxx'] = [buff,...] 优先。
-// 从 person.achievements 或已计算字段中提取成就对某技能的加成。
+// 从 profile.achievements 中提取成就对某技能的加成。
+// achievements 可以是 { achievementActionTypeBuffsDict: { '/action_types/xxx': [buff,...] } }
+// 或直接是 { '/action_types/xxx': [buff,...] } 的 dict。
 function extractAchievementBonuses(person, skillId) {
   const out = { speedBonus:0, efficiencyBonus:0, successBonus:0, gatheringBonus:0, skillLevelBonus:0 };
-  if (!person) return out;
+  const ach = person && person.achievements;
+  if (!ach) return out;
+  const dict = ach.achievementActionTypeBuffsDict || ach;
   const actionTypeHrid = '/action_types/' + skillId;
-
-  // 1) 优先：原始 gameState 已计算字段 achievementActionTypeBuffsDict
-  if (person.achievementActionTypeBuffsDict && typeof person.achievementActionTypeBuffsDict === 'object' && !Array.isArray(person.achievementActionTypeBuffsDict)) {
-    const buffs = person.achievementActionTypeBuffsDict[actionTypeHrid] || person.achievementActionTypeBuffsDict[skillId];
-    if (Array.isArray(buffs)) {
-      for (const b of buffs) {
-        if (!b || typeof b !== 'object') continue;
-        const amt = readBuffAmount(b);
-        if (amt === 0) continue;
-        const t = b.typeHrid || b.type || b.buffTypeHrid || b.buffType || '';
-        if      (t === '/buff_types/skill_level' || t.endsWith('_level')) out.skillLevelBonus += amt;
-        else if (t === '/buff_types/efficiency') out.efficiencyBonus += amt;
-        else if (t === '/buff_types/action_speed' || t === '/buff_types/speed') out.speedBonus += amt;
-        else if (t === '/buff_types/success_rate') out.successBonus += amt;
-        else if (t === '/buff_types/gathering') out.gatheringBonus += amt;
-      }
-      return out;
-    }
-  }
-
-  // 2) 使用内嵌 client data + person.achievements 完成状态计算
-  //    只计算 Beginner / Adept tier，且必须该 tier 下所有成就都完成才触发本 tier 的 BUFF。
-  if (EMBEDDED_CLIENT_DATA && EMBEDDED_CLIENT_DATA.achievementDetailMap && EMBEDDED_CLIENT_DATA.achievementTierDetailMap && person.achievements && typeof person.achievements === 'object' && !Array.isArray(person.achievements)) {
-    const ALLOWED_TIERS = new Set(['/achievement_tiers/beginner', '/achievement_tiers/adept']);
-    const tierAchievements = {};
-    for (const [achHrid, achDetail] of Object.entries(EMBEDDED_CLIENT_DATA.achievementDetailMap)) {
-      if (!achDetail || !achDetail.tierHrid) continue;
-      if (!ALLOWED_TIERS.has(achDetail.tierHrid)) continue;
-      if (!tierAchievements[achDetail.tierHrid]) tierAchievements[achDetail.tierHrid] = [];
-      tierAchievements[achDetail.tierHrid].push(achHrid);
-    }
-    for (const [tierHrid, achHrids] of Object.entries(tierAchievements)) {
-      if (achHrids.length === 0) continue;
-      const allCompleted = achHrids.every(h => person.achievements[h] === true);
-      if (!allCompleted) continue;
-      const tierDetail = EMBEDDED_CLIENT_DATA.achievementTierDetailMap[tierHrid];
-      if (!tierDetail || !tierDetail.buff || !tierDetail.usableInActionTypeMap || !tierDetail.usableInActionTypeMap[actionTypeHrid]) continue;
-      const b = tierDetail.buff;
-      const amt = readBuffAmount(b);
-      const t = b.typeHrid;
-      if      (t === '/buff_types/efficiency') out.efficiencyBonus += amt;
-      else if (t === '/buff_types/action_speed' || t === '/buff_types/speed') out.speedBonus += amt;
-      else if (t === '/buff_types/success_rate') out.successBonus += amt;
-      else if (t === '/buff_types/gathering') out.gatheringBonus += amt;
-      else if (t.endsWith('_level')) out.skillLevelBonus += amt;
-    }
-    return out;
-  }
-
-  // 3) 回退：person.achievements 中直接包含 achievementActionTypeBuffsDict
-  let dict = null;
-  if (person.achievements && typeof person.achievements === 'object' && !Array.isArray(person.achievements)) {
-    const ach = person.achievements.data && typeof person.achievements.data === 'object' ? person.achievements.data : person.achievements;
-    dict = ach.achievementActionTypeBuffsDict || ach.actionTypeBuffsDict || ach;
-  }
-  if (!dict || typeof dict !== 'object' || Array.isArray(dict)) return out;
-
-  let buffs = dict[actionTypeHrid];
-  if (!buffs) buffs = dict[skillId];
-  if (!Array.isArray(buffs)) return out;
-
-  const isGathering = GATHERING_SKILL_IDS.has(skillId);
-  const skillLevelType = '/buff_types/' + skillId + '_level';
-  const skillSuccessType = '/buff_types/' + skillId + '_success';
-
-  for (const b of buffs) {
-    if (!b || typeof b !== 'object') continue;
-    const amt = readBuffAmount(b);
-    if (amt === 0) continue;
-    const t = b.typeHrid || b.type || b.buffTypeHrid || b.buffType || '';
-    if      (t === skillLevelType || t === '/buff_types/skill_level') out.skillLevelBonus += amt;
-    else if (t === '/buff_types/efficiency') out.efficiencyBonus += amt;
-    else if (t === '/buff_types/action_speed' || t === '/buff_types/speed') out.speedBonus += amt;
-    else if (t === skillSuccessType || t === '/buff_types/success_rate') out.successBonus += amt;
-    else if (t === '/buff_types/gathering' && isGathering) out.gatheringBonus += amt;
-  }
-  return out;
-}
-
-// 房屋每级加成系数（默认 0：公式待确认；若游戏内确认后可在此覆盖）。
-const HOUSE_BONUS_PER_LEVEL = { speed: 0, efficiency: 0, success: 0, gathering: 0, skillLevel: 0 };
-
-// 旧版 client data 的房屋 actionBuffs 没有 usableInActionTypeMap，用房间名推断对应技能。
-const HOUSE_ROOM_SKILL_MAP = {
-  '/house_rooms/brewery': '/action_types/brewing',
-  '/house_rooms/dairy_barn': '/action_types/milking',
-  '/house_rooms/forge': '/action_types/cheesesmithing',
-  '/house_rooms/garden': '/action_types/foraging',
-  '/house_rooms/kitchen': '/action_types/cooking',
-  '/house_rooms/laboratory': '/action_types/alchemy',
-  '/house_rooms/log_shed': '/action_types/woodcutting',
-  '/house_rooms/sewing_parlor': '/action_types/tailoring',
-  '/house_rooms/workshop': '/action_types/crafting',
-  '/house_rooms/observatory': '/action_types/enhancing',
-};
-
-// 累加 actionTypeBuffsDict 中 actionType=/action_types/${skillId} 的全部 buff（Trial Core 口径）。
-function accumulateActionTypeBuffs(dict, skillId) {
-  const out = { speedBonus: 0, efficiencyBonus: 0, successBonus: 0, gatheringBonus: 0, skillLevelBonus: 0 };
-  if (!dict || typeof dict !== 'object') return out;
-  const actionTypeHrid = '/action_types/' + skillId;
-  const buffs = dict[actionTypeHrid] || dict[skillId];
+  const buffs = dict[actionTypeHrid];
   if (!Array.isArray(buffs)) return out;
   const isGathering = GATHERING_SKILL_IDS.has(skillId);
   const skillLevelType = '/buff_types/' + skillId + '_level';
   const skillSuccessType = '/buff_types/' + skillId + '_success';
   for (const b of buffs) {
-    if (!b || typeof b !== 'object') continue;
-    const amt = readBuffAmount(b);
-    if (amt === 0) continue;
-    const t = b.typeHrid || b.type || b.buffTypeHrid || b.buffType || '';
-    if      (t === skillLevelType || t === '/buff_types/skill_level') out.skillLevelBonus += amt;
-    else if (t === '/buff_types/efficiency') out.efficiencyBonus += amt;
-    else if (t === '/buff_types/action_speed' || t === '/buff_types/speed') out.speedBonus += amt;
-    else if (t === skillSuccessType || t === '/buff_types/success_rate') out.successBonus += amt;
+    if (!b || !b.typeHrid) continue;
+    const amt = (Number(b.flatBoost) || 0)
+              + (Number(b.flatBoostLevelBonus) || 0)
+              + (Number(b.ratioBoost) || 0)
+              + (Number(b.ratioBoostLevelBonus) || 0);
+    if (!Number.isFinite(amt) || amt === 0) continue;
+    const t = b.typeHrid;
+    if      (t === skillLevelType)                 out.skillLevelBonus += amt;
+    else if (t === '/buff_types/efficiency')       out.efficiencyBonus += amt;
+    else if (t === '/buff_types/action_speed')     out.speedBonus      += amt;
+    else if (t === skillSuccessType ||
+             t === '/buff_types/success_rate')     out.successBonus    += amt;
     else if (t === '/buff_types/gathering' && isGathering) out.gatheringBonus += amt;
-    else if (t === '/buff_types/gourmet' && PRODUCTION_SKILL_IDS.has(skillId)) out.gatheringBonus += amt;
   }
   return out;
-}
-
-// 计算单个房屋 buff 在当前等级下的数值。
-// 规则：没有基础数值，加成 = level × flatBoostLevelBonus。
-function computeBuffAtLevel(b, level) {
-  if (level <= 0) return 0;
-  return level * (Number(b.flatBoostLevelBonus) || 0);
-}
-
-// 根据内嵌 client data 和 person.houseRoomLevels 计算房屋加成。
-// 若脚本导出了已计算的 houseActionTypeBuffsDict，优先使用。
-function extractHouseBuffBonuses(person, skillId) {
-  const out = { speedBonus: 0, efficiencyBonus: 0, successBonus: 0, gatheringBonus: 0, skillLevelBonus: 0 };
-  if (!person) return out;
-
-  // 优先：原始 gameState 字段 houseActionTypeBuffsDict
-  if (person.houseActionTypeBuffsDict) {
-    return accumulateActionTypeBuffs(person.houseActionTypeBuffsDict, skillId);
-  }
-
-  // 使用内嵌 client data 计算
-  if (EMBEDDED_CLIENT_DATA && EMBEDDED_CLIENT_DATA.houseRoomDetailMap && person.houseRoomLevels) {
-    const actionTypeHrid = '/action_types/' + skillId;
-    for (const [roomHrid, lv] of Object.entries(person.houseRoomLevels)) {
-      if (typeof lv !== 'number' || lv <= 0) continue;
-      const room = EMBEDDED_CLIENT_DATA.houseRoomDetailMap[roomHrid];
-      if (!room) continue;
-      for (const b of (room.actionBuffs || [])) {
-        // 旧版 client data 的 actionBuffs 没有 usableInActionTypeMap，需要按房间名推断对应技能
-        let applies = b.usableInActionTypeMap && b.usableInActionTypeMap[actionTypeHrid];
-        if (!b.usableInActionTypeMap) {
-          applies = HOUSE_ROOM_SKILL_MAP[roomHrid] === actionTypeHrid;
-        }
-        if (!applies) continue;
-        const amt = computeBuffAtLevel(b, lv);
-        const t = b.typeHrid;
-        if      (t === '/buff_types/efficiency')                       out.efficiencyBonus += amt;
-        else if (t === '/buff_types/action_speed' || t === '/buff_types/speed') out.speedBonus += amt;
-        else if (t === '/buff_types/success_rate')                     out.successBonus += amt;
-        else if (t === '/buff_types/gathering')                        out.gatheringBonus += amt;
-        else if (t.endsWith('_level'))                                 out.skillLevelBonus += amt;
-      }
-    }
-    return out;
-  }
-
-  // 回退：按等级估算
-  if (!person.houseRoomLevels) return out;
-  const room = person.houseRoomLevels[skillId]
-    || person.houseRoomLevels['/house_rooms/' + skillId + '_room']
-    || person.houseRoomLevels['/house_rooms/' + skillId]
-    || person.houseRoomLevels[skillId + '_room']
-    || person.houseRoomLevels[skillId + 'Room'];
-  if (!room) return out;
-
-  // 若 room 对象直接携带加成数值，直接返回
-  if (typeof room === 'object') {
-    const direct = {
-      speedBonus: Number(room.speedBonus) || 0,
-      efficiencyBonus: Number(room.efficiencyBonus) || 0,
-      successBonus: Number(room.successBonus) || 0,
-      gatheringBonus: Number(room.gatheringBonus) || 0,
-      skillLevelBonus: Number(room.skillLevelBonus) || 0,
-    };
-    if (direct.speedBonus || direct.efficiencyBonus || direct.successBonus || direct.gatheringBonus || direct.skillLevelBonus) {
-      return direct;
-    }
-  }
-
-  let lv = 0;
-  if (typeof room === 'number') lv = room;
-  else if (typeof room === 'object') {
-    if (typeof room.level === 'number') lv = room.level;
-    else if (typeof room.roomLevel === 'number') lv = room.roomLevel;
-    else if (typeof room.houseRoomLevel === 'number') lv = room.houseRoomLevel;
-  }
-  if (lv <= 0) return out;
-  out.speedBonus      = lv * HOUSE_BONUS_PER_LEVEL.speed;
-  out.efficiencyBonus = lv * HOUSE_BONUS_PER_LEVEL.efficiency;
-  out.successBonus    = lv * HOUSE_BONUS_PER_LEVEL.success;
-  out.gatheringBonus  = lv * HOUSE_BONUS_PER_LEVEL.gathering;
-  out.skillLevelBonus = lv * HOUSE_BONUS_PER_LEVEL.skillLevel;
-  return out;
-}
-
-// 将 actionTypeBuffs 拆分为房屋 / 全服 / 其他（MooPass 已移除）。
-// 优先使用 gameState 原始分来源字段：houseActionTypeBuffsDict / communityActionTypeBuffsDict。
-// 若只有聚合后的 actionTypeBuffs，则用 achievementActionTypeBuffsDict + houseActionTypeBuffsDict 反拆。
-function splitBuffBonuses(person, skillId, achievementBonuses) {
-  const zero = { speedBonus: 0, efficiencyBonus: 0, successBonus: 0, gatheringBonus: 0, skillLevelBonus: 0 };
-
-  // 优先走原始分来源字段
-  const hasHouseDict = person && person.houseActionTypeBuffsDict && typeof person.houseActionTypeBuffsDict === 'object' && !Array.isArray(person.houseActionTypeBuffsDict);
-  const hasCommunityDict = person && person.communityActionTypeBuffsDict && typeof person.communityActionTypeBuffsDict === 'object' && !Array.isArray(person.communityActionTypeBuffsDict);
-  if (hasHouseDict || hasCommunityDict) {
-    const house = hasHouseDict ? accumulateActionTypeBuffs(person.houseActionTypeBuffsDict, skillId) : { ...zero };
-    const server = hasCommunityDict ? accumulateActionTypeBuffs(person.communityActionTypeBuffsDict, skillId) : { ...zero };
-    // 若同时存在聚合 actionTypeBuffs，把扣除 house/achievement/community 后的剩余归为 other
-    const raw = person && person.actionTypeBuffs && person.actionTypeBuffs[skillId];
-    if (!raw) return { house, server, other: { ...zero } };
-    const total = {
-      speedBonus: Number(raw.speedBonus) || 0,
-      efficiencyBonus: Number(raw.efficiencyBonus) || 0,
-      successBonus: Number(raw.successBonus) || 0,
-      gatheringBonus: Number(raw.gatheringBonus) || 0,
-      skillLevelBonus: Number(raw.skillLevelBonus) || 0,
-    };
-    const other = {
-      speedBonus: Math.max(0, total.speedBonus - achievementBonuses.speedBonus - house.speedBonus - server.speedBonus),
-      efficiencyBonus: Math.max(0, total.efficiencyBonus - achievementBonuses.efficiencyBonus - house.efficiencyBonus - server.efficiencyBonus),
-      successBonus: Math.max(0, total.successBonus - achievementBonuses.successBonus - house.successBonus - server.successBonus),
-      gatheringBonus: Math.max(0, total.gatheringBonus - achievementBonuses.gatheringBonus - house.gatheringBonus - server.gatheringBonus),
-      skillLevelBonus: Math.max(0, total.skillLevelBonus - achievementBonuses.skillLevelBonus - house.skillLevelBonus - server.skillLevelBonus),
-    };
-    return { house, server, other };
-  }
-
-  const raw = person && person.actionTypeBuffs && person.actionTypeBuffs[skillId];
-  if (!raw) {
-    // 没有聚合 actionTypeBuffs 时，直接用 houseRoomLevels / houseActionTypeBuffsDict 计算房屋加成
-    return { house: extractHouseBuffBonuses(person, skillId), server: { ...zero }, other: { ...zero } };
-  }
-
-  // 辅助：把聚合对象按字段名汇总成标准结构
-  function normalizeBuffObj(o) {
-    return {
-      speedBonus: Number(o.speedBonus) || 0,
-      efficiencyBonus: Number(o.efficiencyBonus) || 0,
-      successBonus: Number(o.successBonus) || 0,
-      gatheringBonus: Number(o.gatheringBonus) || 0,
-      skillLevelBonus: Number(o.skillLevelBonus) || 0,
-    };
-  }
-
-  const total = normalizeBuffObj(raw);
-
-  // 扣除成就部分
-  const nonAch = {
-    speedBonus: Math.max(0, total.speedBonus - achievementBonuses.speedBonus),
-    efficiencyBonus: Math.max(0, total.efficiencyBonus - achievementBonuses.efficiencyBonus),
-    successBonus: Math.max(0, total.successBonus - achievementBonuses.successBonus),
-    gatheringBonus: Math.max(0, total.gatheringBonus - achievementBonuses.gatheringBonus),
-    skillLevelBonus: Math.max(0, total.skillLevelBonus - achievementBonuses.skillLevelBonus),
-  };
-
-  // 若整个对象有单一 source 字段，直接按来源返回
-  if (raw && typeof raw === 'object' && raw.source) {
-    const srcKey = String(raw.source).toLowerCase();
-    if (srcKey.includes('house')) return { house: nonAch, server: { ...zero }, other: { ...zero } };
-    if (srcKey.includes('server') || srcKey.includes('global') || srcKey.includes('event')) return { house: { ...zero }, server: nonAch, other: { ...zero } };
-    return { house: { ...zero }, server: { ...zero }, other: nonAch };
-  }
-
-  // 若原始结构是数组（每个元素带 source/type/buffTypeHrid），则按来源细分
-  const list = Array.isArray(raw.buffs) ? raw.buffs : (Array.isArray(raw) ? raw : null);
-  if (list) {
-    const house = { ...zero }, server = { ...zero }, other = { ...zero };
-    for (const b of list) {
-      if (!b || typeof b !== 'object') continue;
-      const srcKey = String(b.source || b.type || b.buffTypeHrid || b.buffType || b.category || '').toLowerCase();
-      // 数组中若已单独拆出成就，则跳过，避免重复
-      if (srcKey.includes('achievement')) continue;
-      let target = other;
-      if (srcKey.includes('house') || srcKey.includes('room')) target = house;
-      else if (srcKey.includes('server') || srcKey.includes('global') || srcKey.includes('event')) target = server;
-      for (const k of Object.keys(zero)) target[k] += Number(b[k]) || 0;
-    }
-    return { house, server, other };
-  }
-
-  // 否则按聚合对象处理：用 houseActionTypeBuffsDict/houseRoomLevels 估算房屋加成，剩余为 other
-  const house = extractHouseBuffBonuses(person, skillId);
-  const other = {
-    speedBonus: Math.max(0, nonAch.speedBonus - house.speedBonus),
-    efficiencyBonus: Math.max(0, nonAch.efficiencyBonus - house.efficiencyBonus),
-    successBonus: Math.max(0, nonAch.successBonus - house.successBonus),
-    gatheringBonus: Math.max(0, nonAch.gatheringBonus - house.gatheringBonus),
-    skillLevelBonus: Math.max(0, nonAch.skillLevelBonus - house.skillLevelBonus),
-  };
-  return { house, server: { ...zero }, other };
 }
 
 // 单人在某技能上的合成 bonuses：装备（配装匹配）+ actionTypeBuffs（房屋/成就/全服/MP 聚合）。
@@ -1380,79 +1064,66 @@ function splitBuffBonuses(person, skillId, achievementBonuses) {
 function computeSkillBonusesForPerson(person, skillIdx) {
   const skillId = SKILL_KEYS[skillIdx];
   const zero = { speedBonus:0, efficiencyBonus:0, successBonus:0, gatheringBonus:0, skillLevelBonus:0 };
-  function makeSources(equip, buffParts, achievement, global, building, shrine) {
-    const { house, server, other } = buffParts;
-    function src(e, bh, bs, bo, a, g, bu, s) {
-      return {
-        equip:e, buffHouse:bh, buffServer:bs, buffOther:bo,
-        buffTotal:bh+bs+bo, achievement:a, global:g, building:bu, shrine:s,
-        total:e+bh+bs+bo+a+g+bu+s
-      };
+  function makeSources(equip, buff, achievement, global, building, shrine) {
+    function src(e, b, a, g, bu, s) {
+      return { equip:e, buff:b, achievement:a, global:g, building:bu, shrine:s, total:e+b+a+g+bu+s };
     }
-    const buildingLv = building.skillLevelBonus || 0;
     return {
-      speed: src(equip.speedBonus, house.speedBonus, server.speedBonus, other.speedBonus, achievement.speedBonus, global.speedBonus, 0, shrine.speedBonus),
-      efficiency: src(equip.efficiencyBonus, house.efficiencyBonus, server.efficiencyBonus, other.efficiencyBonus, achievement.efficiencyBonus, global.efficiencyBonus, 0, shrine.efficiencyBonus),
-      success: src(equip.successBonus, house.successBonus, server.successBonus, other.successBonus, achievement.successBonus, global.successBonus, 0, 0),
-      gathering: src(equip.gatheringBonus, house.gatheringBonus, server.gatheringBonus, other.gatheringBonus, achievement.gatheringBonus, global.gatheringBonus, 0, 0),
-      // 等级加成：仅公会建筑生效，其余来源读取后展示但不计入 total。
-      skillLevel: {
-        equip: equip.skillLevelBonus,
-        buffHouse: house.skillLevelBonus,
-        buffServer: server.skillLevelBonus,
-        buffOther: other.skillLevelBonus,
-        buffTotal: house.skillLevelBonus + server.skillLevelBonus + other.skillLevelBonus,
-        achievement: achievement.skillLevelBonus,
-        global: global.skillLevelBonus,
-        building: buildingLv,
-        shrine: 0,
-        total: buildingLv
-      }
+      speed: src(equip.speedBonus, buff.speedBonus, achievement.speedBonus, global.speedBonus, 0, shrine.speedBonus),
+      efficiency: src(equip.efficiencyBonus, buff.efficiencyBonus, achievement.efficiencyBonus, global.efficiencyBonus, 0, shrine.efficiencyBonus),
+      success: src(equip.successBonus, buff.successBonus, achievement.successBonus, global.successBonus, 0, 0),
+      gathering: src(equip.gatheringBonus, buff.gatheringBonus, achievement.gatheringBonus, global.gatheringBonus, 0, 0),
+      skillLevel: src(equip.skillLevelBonus, buff.skillLevelBonus, achievement.skillLevelBonus, global.skillLevelBonus, building.skillLevelBonus, 0),
     };
   }
 
-  const useNewData = person && (Array.isArray(person.loadouts) || person.actionTypeBuffs || person.achievementActionTypeBuffsDict || person.houseActionTypeBuffsDict || person.communityActionTypeBuffsDict);
+  const useNewData = person && (Array.isArray(person.loadouts) || person.actionTypeBuffs);
   if (!useNewData) {
     // 兜底：老成员（手动添加 / 旧格式 JSON），继续走 equipment 近似公式；全局 buff / 公会建筑 / 神龛也叠上
     const b = computeMemberBonuses(person && person.equipment);
     const base = b[skillId] || zero;
     const combined = Object.assign({}, base);
-    combined.skillLevelBonus = 0; // 仅公会建筑提供等级加成
     const global = addGlobalBuffsToCombined(combined, skillId);
     const building = applyGuildBuilding(combined, skillId);
     const shrine = applyGuildShrine(combined);
-    const buffParts = { house: { ...zero }, server: { ...zero }, other: { ...zero } };
-    return Object.assign({}, combined, { sources: makeSources(base, buffParts, zero, global, building, shrine) });
+    return Object.assign({}, combined, { sources: makeSources(base, zero, zero, global, building, shrine) });
   }
 
   // (a) 装备加成：找 usedBy 匹配当前技能的迷宫配装；找不到 → 0
   const loadoutEntry = findLoadoutForSkill(person, skillId);
   const equipBonuses = loadoutEntry ? extractEquipmentBonusesFromLoadout(loadoutEntry, skillId) : zero;
 
-  // (b) actionTypeBuffs 是房屋+成就+全服 的聚合加成；先把成就部分拆出来单独展示。
+  // (b) actionTypeBuffs 是房屋+成就+全服+MooPass 的聚合加成；先把成就部分拆出来单独展示。
+  const rawBuff = person.actionTypeBuffs && person.actionTypeBuffs[skillId];
+  const totalBuffBonuses = rawBuff ? {
+    speedBonus:      Number(rawBuff.speedBonus)      || 0,
+    efficiencyBonus: Number(rawBuff.efficiencyBonus) || 0,
+    successBonus:    Number(rawBuff.successBonus)    || 0,
+    gatheringBonus:  Number(rawBuff.gatheringBonus)  || 0,
+    skillLevelBonus: Number(rawBuff.skillLevelBonus) || 0,
+  } : zero;
   const achievementBonuses = extractAchievementBonuses(person, skillId);
-  const buffParts = splitBuffBonuses(person, skillId, achievementBonuses);
-  const totalBuffBonuses = {
-    speedBonus:      buffParts.house.speedBonus      + buffParts.server.speedBonus      + buffParts.other.speedBonus,
-    efficiencyBonus: buffParts.house.efficiencyBonus + buffParts.server.efficiencyBonus + buffParts.other.efficiencyBonus,
-    successBonus:    buffParts.house.successBonus    + buffParts.server.successBonus    + buffParts.other.successBonus,
-    gatheringBonus:  buffParts.house.gatheringBonus  + buffParts.server.gatheringBonus  + buffParts.other.gatheringBonus,
-    skillLevelBonus: buffParts.house.skillLevelBonus + buffParts.server.skillLevelBonus + buffParts.other.skillLevelBonus,
+  const buffBonuses = {
+    speedBonus:      Math.max(0, totalBuffBonuses.speedBonus      - achievementBonuses.speedBonus),
+    efficiencyBonus: Math.max(0, totalBuffBonuses.efficiencyBonus - achievementBonuses.efficiencyBonus),
+    successBonus:    Math.max(0, totalBuffBonuses.successBonus    - achievementBonuses.successBonus),
+    gatheringBonus:  Math.max(0, totalBuffBonuses.gatheringBonus  - achievementBonuses.gatheringBonus),
+    skillLevelBonus: Math.max(0, totalBuffBonuses.skillLevelBonus - achievementBonuses.skillLevelBonus),
   };
 
   const combined = {
-    speedBonus:      equipBonuses.speedBonus      + achievementBonuses.speedBonus      + totalBuffBonuses.speedBonus,
-    efficiencyBonus: equipBonuses.efficiencyBonus + achievementBonuses.efficiencyBonus + totalBuffBonuses.efficiencyBonus,
-    successBonus:    equipBonuses.successBonus    + achievementBonuses.successBonus    + totalBuffBonuses.successBonus,
-    gatheringBonus:  equipBonuses.gatheringBonus  + achievementBonuses.gatheringBonus  + totalBuffBonuses.gatheringBonus,
-    skillLevelBonus: 0, // 仅公会建筑提供等级加成
+    speedBonus:      equipBonuses.speedBonus      + totalBuffBonuses.speedBonus,
+    efficiencyBonus: equipBonuses.efficiencyBonus + totalBuffBonuses.efficiencyBonus,
+    successBonus:    equipBonuses.successBonus    + totalBuffBonuses.successBonus,
+    gatheringBonus:  equipBonuses.gatheringBonus  + totalBuffBonuses.gatheringBonus,
+    skillLevelBonus: equipBonuses.skillLevelBonus + totalBuffBonuses.skillLevelBonus,
   };
   // (c) 手动输入的全局 buff：按技能分类叠加相应比例
   const global = addGlobalBuffsToCombined(combined, skillId);
   // (d) 公会建筑 + 神龛
   const building = applyGuildBuilding(combined, skillId);
   const shrine = applyGuildShrine(combined);
-  return Object.assign({}, combined, { sources: makeSources(equipBonuses, buffParts, achievementBonuses, global, building, shrine) });
+  return Object.assign({}, combined, { sources: makeSources(equipBonuses, buffBonuses, achievementBonuses, global, building, shrine) });
 }
 
 // 把 state.globalBuffs 的等级换算成最终加成，叠到 combined 上。仅对相应技能分类生效。
@@ -2168,11 +1839,10 @@ function renderAssignmentTableBody(tbody) {
       const targetLv = cfg.targetLevel || START_LV;
       const sr = successRate(m.effLevel, targetLv, m.successBonus);
       const sSrc = m.sources || {};
-      const emptySrc = {equip:0,buffHouse:0,buffServer:0,buffOther:0,buffTotal:0,achievement:0,global:0,building:0,shrine:0,total:0};
-      const lvlSrc = sSrc.skillLevel || {equip:0,buffHouse:0,buffServer:0,buffOther:0,buffTotal:0,achievement:0,global:0,building:0,shrine:0,total:0};
-      const succSrc = sSrc.success || emptySrc;
-      const effSrc = sSrc.efficiency || emptySrc;
-      const gatherSrc = sSrc.gathering || emptySrc;
+      const lvlSrc = sSrc.skillLevel || {equip:0,buff:0,achievement:0,global:0,building:0,shrine:0};
+      const succSrc = sSrc.success || {equip:0,buff:0,achievement:0,global:0,building:0,shrine:0};
+      const effSrc = sSrc.efficiency || {equip:0,buff:0,achievement:0,global:0,building:0,shrine:0};
+      const gatherSrc = sSrc.gathering || {equip:0,buff:0,achievement:0,global:0,building:0,shrine:0};
       const pct2 = x => ((Number(x)||0)*100).toFixed(1);
       const pct2r = x => ((Number(x)||0)*100).toFixed(2);
       const lv2 = x => (Number(x)||0).toFixed(1);
@@ -2190,11 +1860,10 @@ function renderAssignmentTableBody(tbody) {
       const lvTip = fillTip(t('lvTip'), {
         base: m.baseLevel,
         eff: m.effLevel,
+        bonus: lv2(m.skillLevelBonus),
         equip: lv2(lvlSrc.equip),
         achievement: lv2(lvlSrc.achievement),
-        buffHouse: lv2(lvlSrc.buffHouse),
-        buffServer: lv2(lvlSrc.buffServer),
-        buffOther: lv2(lvlSrc.buffOther),
+        buff: lv2(lvlSrc.buff),
         global: lv2(lvlSrc.global),
         building: lv2(lvlSrc.building),
         shrine: lv2(lvlSrc.shrine)
@@ -2209,9 +1878,7 @@ function renderAssignmentTableBody(tbody) {
         successBonus: pct2r(m.successBonus),
         equip: pct2r(succSrc.equip),
         achievement: pct2r(succSrc.achievement),
-        buffHouse: pct2r(succSrc.buffHouse),
-        buffServer: pct2r(succSrc.buffServer),
-        buffOther: pct2r(succSrc.buffOther),
+        buff: pct2r(succSrc.buff),
         global: pct2r(succSrc.global),
         building: pct2r(succSrc.building),
         shrine: pct2r(succSrc.shrine),
@@ -2227,9 +1894,7 @@ function renderAssignmentTableBody(tbody) {
         workP: m.workP,
         equip: pct2(effSrc.equip),
         achievement: pct2(effSrc.achievement),
-        buffHouse: pct2(effSrc.buffHouse),
-        buffServer: pct2(effSrc.buffServer),
-        buffOther: pct2(effSrc.buffOther),
+        buff: pct2(effSrc.buff),
         global: pct2(effSrc.global),
         building: pct2(effSrc.building),
         shrine: pct2(effSrc.shrine)
@@ -2238,9 +1903,7 @@ function renderAssignmentTableBody(tbody) {
         gatheringBonus: pct2(m.gatheringBonus),
         equip: pct2(gatherSrc.equip),
         achievement: pct2(gatherSrc.achievement),
-        buffHouse: pct2(gatherSrc.buffHouse),
-        buffServer: pct2(gatherSrc.buffServer),
-        buffOther: pct2(gatherSrc.buffOther),
+        buff: pct2(gatherSrc.buff),
         global: pct2(gatherSrc.global),
         building: pct2(gatherSrc.building),
         shrine: pct2(gatherSrc.shrine),
@@ -2609,10 +2272,6 @@ function parseMemberFromProfile(profile) {
       actionTypeBuffs:  profile.actionTypeBuffs  || {},
       houseRoomLevels:  profile.houseRoomLevels  || {},
       achievements:     profile.achievements     || {},
-      // 若脚本直接导出 gameState 原始分来源字段，也保留下来
-      achievementActionTypeBuffsDict: profile.achievementActionTypeBuffsDict || {},
-      houseActionTypeBuffsDict:       profile.houseActionTypeBuffsDict       || {},
-      communityActionTypeBuffsDict:   profile.communityActionTypeBuffsDict   || {},
     };
   }
 
