@@ -769,6 +769,10 @@ const I18N = {
     skillLabels:['挤奶','采摘','伐木','奶酪锻造','制作','缝纫','烹饪','冲泡','炼金','强化'],
     equipLabels:['主手','副手','头部','身体','手部','腿部','脚部','项链','耳环','戒指','袋子','背部','挤奶工具','采摘工具','伐木工具','奶酪锻造工具','制作工具','缝纫工具','烹饪工具','冲泡工具','炼金工具','强化工具'],
     equipShort:['主手','副手','头部','身体','手部','腿部','脚部','项链','耳环','戒指','袋子','背部','挤奶','采摘','伐木','奶酪','制作','缝纫','烹饪','冲泡','炼金','强化'],
+    extraLoadoutLabels:{ShadowArcher:'暗影弓手（枪）',PyreHunter:'火焰弓手（刀）',FrostSniper:'冰霜弓手（锤）',Siren:'海妖（远程）',Salamander:'火蜥蜴（远程）',Dryad:'树精（远程）',
+      GiantScorpion:'巨蝎（水法）',GiantMantis:'巨螳螂（自然法）',Cyclops:'独眼巨人（火法）',Mimic:'宝箱怪（盾）',
+    },
+    extraLoadoutOrder:['ShadowArcher','PyreHunter','FrostSniper','Siren','Salamander','Dryad','GiantScorpion','GiantMantis','Cyclops','Mimic'],
   },
   en: {
     title:'MWI Trial Calculator', trialConfig:'Trial Config', memberData:'Member Data', assignmentResult:'Assignment',
@@ -826,6 +830,8 @@ const I18N = {
     skillLabels:['Milking','Foraging','Woodcutting','Cheesesmithing','Crafting','Tailoring','Cooking','Brewing','Alchemy','Enhancing'],
     equipLabels:['Main Hand','Off Hand','Head','Body','Hands','Legs','Feet','Necklace','Earring','Ring','Pouch','Back','Milking Tool','Foraging Tool','Woodcutting Tool','Cheesesmithing Tool','Crafting Tool','Tailoring Tool','Cooking Tool','Brewing Tool','Alchemy Tool','Enhancing Tool'],
     equipShort:['MH','OH','Head','Body','Hands','Legs','Feet','Neck','Ear','Ring','Bag','Back','Milk','Forage','Wood','Cheese','Craft','Tailor','Cook','Brew','Alch','Enh'],
+    extraLoadoutLabels:{},
+    extraLoadoutOrder:['ShadowArcher','PyreHunter','FrostSniper','Siren','Salamander','Dryad','GiantScorpion','GiantMantis','Cyclops','Mimic'],
   }
 };
 function t(key) { return (I18N[state.lang] && I18N[state.lang][key]) || key; }
@@ -1849,7 +1855,16 @@ function collectLoadoutSuffixesFromMembers() {
 function renderLoadoutSelectHtml() {
   const knownSuffixes = SKILL_KEYS.map(skillIdToPascalCase);
   const knownSet = new Set(knownSuffixes);
-  const extras = [...collectLoadoutSuffixesFromMembers()].filter(s => !knownSet.has(s)).sort();
+  let extras = [...collectLoadoutSuffixesFromMembers()].filter(s => !knownSet.has(s));
+  const orderArr = (I18N[state.lang].extraLoadoutOrder || []);
+  extras.sort((a, b) => {
+    const ia = orderArr.indexOf(a);
+    const ib = orderArr.indexOf(b);
+    if (ia >= 0 && ib >= 0) return ia - ib;
+    if (ia >= 0) return -1;
+    if (ib >= 0) return 1;
+    return a.localeCompare(b);
+  });
 
   const current = state.selectedLoadoutSuffix || 'Milking';
   const opts = [];
@@ -1862,12 +1877,14 @@ function renderLoadoutSelectHtml() {
     opts.push('<option disabled>──────</option>');
     for (const s of extras) {
       const sel = s === current ? ' selected' : '';
-      opts.push('<option value="'+escHtml(s)+'"'+sel+'>'+escHtml(s + t('loadoutSuffix'))+'</option>');
+      const label = (I18N[state.lang].extraLoadoutLabels && I18N[state.lang].extraLoadoutLabels[s]) || s;
+      opts.push('<option value="'+escHtml(s)+'"'+sel+'>'+escHtml(label + t('loadoutSuffix'))+'</option>');
     }
   }
   // 若当前选中的后缀不在已知集合也不在 extras 里（比如成员新增前保存的值），补一个隐式项
   if (!knownSet.has(current) && !extras.includes(current)) {
-    opts.push('<option value="'+escHtml(current)+'" selected>'+escHtml(current + t('loadoutSuffix'))+'</option>');
+    const label = (I18N[state.lang].extraLoadoutLabels && I18N[state.lang].extraLoadoutLabels[current]) || current;
+    opts.push('<option value="'+escHtml(current)+'" selected>'+escHtml(label + t('loadoutSuffix'))+'</option>');
   }
   return '<select class="loadout-select" onchange="updateSelectedLoadoutSuffix(this.value)">' + opts.join('') + '</select>';
 }
@@ -2210,7 +2227,12 @@ function updatePullStatus() {
 }
 
 function isGuildLeader() {
-  try { return !!(localStorage.getItem('mwi_master_key') || '').trim(); }
+  try {
+    const hasMk = !!(localStorage.getItem('mwi_master_key') || '').trim();
+    // 离线模式（未连接共享空间）默认强制为会长端，方便本地管理成员。
+    if (!state.isShared) return true;
+    return hasMk;
+  }
   catch(e) { return false; }
 }
 function renderExportScriptLinks() {
