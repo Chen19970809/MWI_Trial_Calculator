@@ -762,7 +762,7 @@ const I18N = {
     levelAboveTarget:'等级高于目标', levelBelowTarget:'等级低于目标',
     lvTip:'基础等级 {base}（成员技能等级）\n+ 公会建筑等级加成 {building} 级\n= 有效等级 {eff}\n（装备 {equip} / 成就 {achievement} / Buff 房屋{buffHouse}/全服{buffServer}/其他{buffOther} / 全局 {global} / 神龛 {shrine} 的等级加成已移出，不计入有效等级）',
     srTip:'等级差 = 有效等级 {effLv} − 目标等级 {targetLv} = {delta}（{cmp}，每级 {adjPct}%）\n等级成功率加成 = {delta} × {adjPct}% = {levelAdj}%\n额外成功率加成 = {successBonus}%（装备 {equip}% / 成就 {achievement}% / Buff 房屋{buffHouse}%/全服{buffServer}%/其他{buffOther}% / 全局 {global}% / 建筑 {building}% / 神龛 {shrine}%）\n基础成功率 = {basePct}%\n最终成功率 = {basePct}% × (1 + {levelAdj}% + {successBonus}%) = {rawPct}% → 限制后 {pct}%',
-    wpTip:'有效等级 {effLv} × (1 + 效率加成 {efficiencyBonus}%)\n= {effLv} × {effMult} = {raw}\n向下取整 = {workP}\n效率加成来源：装备 {equip}% / 成就 {achievement}% / Buff 房屋{buffHouse}%/全服{buffServer}%/其他{buffOther}% / 全局 {global}% / 建筑 {building}% / 神龛 {shrine}%',
+    wpTip:'有效等级 {effLv} × (1 + 效率加成 {efficiencyBonus}%)\n= {effLv} × {effMult} = {raw}\n向下取整 = {workP}\n效率加成来源：装备 {equip}% / 成就 {achievement}% / 房屋 {buffHouse}% / 全局 {global}% / 建筑 {building}% / 神龛 {shrine}%',
     dpTip:'采集加成 = {gatheringBonus}%（装备 {equip}% / 成就 {achievement}% / Buff 房屋{buffHouse}%/全服{buffServer}%/其他{buffOther}% / 全局 {global}% / 建筑 {building}% / 神龛 {shrine}%）\n限制在 0% ~ 100% 之间 = {pct}%',
     trial:'试炼', language:'中/EN', theme:'🌙',
     skillLabels:['挤奶','采摘','伐木','奶酪锻造','制作','缝纫','烹饪','冲泡','炼金','强化'],
@@ -818,7 +818,7 @@ const I18N = {
     levelAboveTarget:'level above target', levelBelowTarget:'level below target',
     lvTip:'Base level {base} (member skill level)\n+ Guild building level bonus {building} lv\n= Effective level {eff}\n(Equipment {equip} / achievement {achievement} / buff house{buffHouse}/server{buffServer}/other{buffOther} / global {global} / shrine {shrine} level bonuses are excluded from effective level)',
     srTip:'Level delta = effective level {effLv} − target level {targetLv} = {delta} ({cmp}, {adjPct}% per level)\nLevel success bonus = {delta} × {adjPct}% = {levelAdj}%\nExtra success bonus = {successBonus}% (equipment {equip}% / achievement {achievement}% / buff house{buffHouse}%/server{buffServer}%/other{buffOther}% / global {global}% / building {building}% / shrine {shrine}%)\nBase success rate = {basePct}%\nFinal success rate = {basePct}% × (1 + {levelAdj}% + {successBonus}%) = {rawPct}% → capped {pct}%',
-    wpTip:'Effective level {effLv} × (1 + efficiency bonus {efficiencyBonus}%)\n= {effLv} × {effMult} = {raw}\nfloor = {workP}\nEfficiency sources: equipment {equip}% / achievement {achievement}% / buff house{buffHouse}%/server{buffServer}%/other{buffOther}% / global {global}% / building {building}% / shrine {shrine}%',
+    wpTip:'Effective level {effLv} × (1 + efficiency bonus {efficiencyBonus}%)\n= {effLv} × {effMult} = {raw}\nfloor = {workP}\nEfficiency sources: equipment {equip}% / achievement {achievement}% / house {buffHouse}% / global {global}% / building {building}% / shrine {shrine}%',
     dpTip:'Gathering bonus = {gatheringBonus}% (equipment {equip}% / achievement {achievement}% / buff house{buffHouse}%/server{buffServer}%/other{buffOther}% / global {global}% / building {building}% / shrine {shrine}%)\nClamped to 0% ~ 100% = {pct}%',
     trial:'Trial', language:'中/EN', theme:'☀️',
     skillLabels:['Milking','Foraging','Woodcutting','Cheesesmithing','Crafting','Tailoring','Cooking','Brewing','Alchemy','Enhancing'],
@@ -1005,18 +1005,42 @@ function findLoadoutForSkill(person, skillId) {
 // stats 字段名与 MWI 官方 noncombatStats key 一致：
 //   {skillId}Speed / {skillId}Efficiency / {skillId}Success + skilling{Speed/Efficiency}
 //   gatheringQuantity（仅采集类技能生效） + {skillId}Level
+//
+// 若导出数据未包含 stats（只有 itemHrid + enhancementLevel），则按旧版近似公式兜底：
+//   生活工具按强化等级给本技能加成，非工具槽位给全生活技能小额加成。
 function extractEquipmentBonusesFromLoadout(loadoutEntry, skillId) {
   const zero = { speedBonus:0, efficiencyBonus:0, successBonus:0, gatheringBonus:0, skillLevelBonus:0 };
   const wmap = loadoutEntry && loadoutEntry.loadout && loadoutEntry.loadout.wearableItemMap;
   if (!wmap) return zero;
   const totals = {};
-  for (const slotEntry of Object.values(wmap)) {
-    const stats = slotEntry && slotEntry.stats;
-    if (!stats) continue;
-    for (const k in stats) {
-      const v = Number(stats[k]);
-      if (!Number.isFinite(v) || v === 0) continue;
-      totals[k] = (totals[k] || 0) + v;
+  for (const [loc, slotEntry] of Object.entries(wmap)) {
+    if (!slotEntry) continue;
+    const stats = slotEntry.stats;
+    if (stats) {
+      for (const k in stats) {
+        const v = Number(stats[k]);
+        if (!Number.isFinite(v) || v === 0) continue;
+        totals[k] = (totals[k] || 0) + v;
+      }
+      continue;
+    }
+    // 兜底：没有 stats 时从 itemHrid + enhancementLevel 估算
+    if (!slotEntry.itemHrid) continue;
+    const slot = ITEM_LOCATION_TO_SLOT[loc];
+    if (!slot) continue; // charm/trinket 等非计算槽位跳过
+    const L = Number(slotEntry.enhancementLevel) || 0;
+    const itemSkill = TOOL_SKILL_MAP[slot];
+    if (itemSkill) {
+      if (itemSkill !== skillId) continue;
+      totals[skillId + 'Speed']      = (totals[skillId + 'Speed']      || 0) + L * 0.025;
+      totals[skillId + 'Efficiency'] = (totals[skillId + 'Efficiency'] || 0) + L * 0.015;
+      totals[skillId + 'Success']    = (totals[skillId + 'Success']    || 0) + L * 0.005;
+      totals['gatheringQuantity']    = (totals['gatheringQuantity']    || 0) + L * 0.01;
+      totals[skillId + 'Level']      = (totals[skillId + 'Level']      || 0) + L * 0.5;
+    } else {
+      totals['skillingSpeed']      = (totals['skillingSpeed']      || 0) + L * 0.002;
+      totals['skillingEfficiency'] = (totals['skillingEfficiency'] || 0) + L * 0.001;
+      totals[skillId + 'Level']    = (totals[skillId + 'Level']    || 0) + L * 0.1;
     }
   }
   return {
@@ -1132,6 +1156,20 @@ function extractAchievementBonuses(person, skillId) {
 // 房屋每级加成系数（默认 0：公式待确认；若游戏内确认后可在此覆盖）。
 const HOUSE_BONUS_PER_LEVEL = { speed: 0, efficiency: 0, success: 0, gathering: 0, skillLevel: 0 };
 
+// 旧版 client data 的房屋 actionBuffs 没有 usableInActionTypeMap，用房间名推断对应技能。
+const HOUSE_ROOM_SKILL_MAP = {
+  '/house_rooms/brewery': '/action_types/brewing',
+  '/house_rooms/dairy_barn': '/action_types/milking',
+  '/house_rooms/forge': '/action_types/cheesesmithing',
+  '/house_rooms/garden': '/action_types/foraging',
+  '/house_rooms/kitchen': '/action_types/cooking',
+  '/house_rooms/laboratory': '/action_types/alchemy',
+  '/house_rooms/log_shed': '/action_types/woodcutting',
+  '/house_rooms/sewing_parlor': '/action_types/tailoring',
+  '/house_rooms/workshop': '/action_types/crafting',
+  '/house_rooms/observatory': '/action_types/enhancing',
+};
+
 // 累加 actionTypeBuffsDict 中 actionType=/action_types/${skillId} 的全部 buff（Trial Core 口径）。
 function accumulateActionTypeBuffs(dict, skillId) {
   const out = { speedBonus: 0, efficiencyBonus: 0, successBonus: 0, gatheringBonus: 0, skillLevelBonus: 0 };
@@ -1183,7 +1221,12 @@ function extractHouseBuffBonuses(person, skillId) {
       const room = EMBEDDED_CLIENT_DATA.houseRoomDetailMap[roomHrid];
       if (!room) continue;
       for (const b of (room.actionBuffs || [])) {
-        if (!b.usableInActionTypeMap || !b.usableInActionTypeMap[actionTypeHrid]) continue;
+        // 旧版 client data 的 actionBuffs 没有 usableInActionTypeMap，需要按房间名推断对应技能
+        let applies = b.usableInActionTypeMap && b.usableInActionTypeMap[actionTypeHrid];
+        if (!b.usableInActionTypeMap) {
+          applies = HOUSE_ROOM_SKILL_MAP[roomHrid] === actionTypeHrid;
+        }
+        if (!applies) continue;
         const amt = computeBuffAtLevel(b, lv);
         const t = b.typeHrid;
         if      (t === '/buff_types/efficiency')                       out.efficiencyBonus += amt;
@@ -1268,7 +1311,10 @@ function splitBuffBonuses(person, skillId, achievementBonuses) {
   }
 
   const raw = person && person.actionTypeBuffs && person.actionTypeBuffs[skillId];
-  if (!raw) return { house: { ...zero }, server: { ...zero }, other: { ...zero } };
+  if (!raw) {
+    // 没有聚合 actionTypeBuffs 时，直接用 houseRoomLevels / houseActionTypeBuffsDict 计算房屋加成
+    return { house: extractHouseBuffBonuses(person, skillId), server: { ...zero }, other: { ...zero } };
+  }
 
   // 辅助：把聚合对象按字段名汇总成标准结构
   function normalizeBuffObj(o) {
