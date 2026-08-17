@@ -765,7 +765,7 @@ const I18N = {
     estFinalScore:'估算最终分', estFinalScoreTip:'累加最后一级之前的分数 + 最后一级实际时间对应的估分',
     levelAboveTarget:'等级高于目标', levelBelowTarget:'等级低于目标',
     lvTip:'基础等级 {base}（成员技能等级）\n+ 公会建筑等级加成 {building} 级\n= 有效等级 {eff}\n（装备 {equip} / 成就 {achievement} / Buff 房屋{buffHouse}/全服{buffServer}/其他{buffOther} / 全局 {global} / 神龛 {shrine} 的等级加成已移出，不计入有效等级）',
-    srTip:'等级差 = 有效等级 {effLv} − 目标等级 {targetLv} = {delta}（{cmp}，每级 {adjPct}%）\n等级成功率加成 = {delta} × {adjPct}% = {levelAdj}%\n额外成功率加成 = {successBonus}%（装备 {equip}% / 成就 {achievement}% / Buff 房屋{buffHouse}%/全服{buffServer}%/其他{buffOther}% / 全局 {global}% / 建筑 {building}% / 神龛 {shrine}%）\n基础成功率 = {basePct}%\n最终成功率 = {basePct}% + {levelAdj}% + {successBonus}% = {rawPct}% → 限制后 {pct}%',
+    srTip:'等级差 = 有效等级 {effLv} − 目标等级 {targetLv} = {delta}（{cmp}，每级 {adjPct}%）\n等级成功率加成 = {delta} × {adjPct}% = {levelAdj}%\n额外成功率加成 = {successBonus}%（装备 {equip}% / 成就 {achievement}% / Buff 房屋{buffHouse}%/全服{buffServer}%/其他{buffOther}% / 全局 {global}% / 建筑 {building}% / 神龛 {shrine}%）\n基础成功率 = {basePct}%\n最终成功率 = {basePct}% × (1 + {levelAdj}% + {successBonus}%) = {rawPct}% → 限制后 {pct}%',
     wpTip:'有效等级 {effLv} × (1 + 效率加成 {efficiencyBonus}%)\n= {effLv} × {effMult} = {raw}\n向下取整 = {workP}\n效率加成来源：装备 {equip}% / 成就 {achievement}% / 房屋 {buffHouse}% / 全局 {global}% / 建筑 {building}% / 神龛 {shrine}%',
     speedTip:'单次速度 = 基础时间 {baseSec} 秒 ÷ (1 + 速度加成 {speedBonus}%)\n= {baseSec} ÷ {speedMult} = {actionSeconds} 秒\n速度加成来源：装备 {equip}% / 成就 {achievement}% / 房屋 {buffHouse}% / 全局 {global}% / 建筑 {building}% / 神龛 {shrine}%',
     dpTip:'双倍概率 = {gatheringBonus}%（装备 {equip}% / 成就 {achievement}% / Buff 房屋{buffHouse}%/全服{buffServer}%/其他{buffOther}% / 全局 {global}% / 建筑 {building}% / 神龛 {shrine}%）\n限制在 0% ~ 100% 之间 = {pct}%',
@@ -828,7 +828,7 @@ const I18N = {
     estFinalScore:'Est. Final', estFinalScoreTip:'sum of scores before final level + estimated score for final level actual time',
     levelAboveTarget:'level above target', levelBelowTarget:'level below target',
     lvTip:'Base level {base} (member skill level)\n+ Guild building level bonus {building} lv\n= Effective level {eff}\n(Equipment {equip} / achievement {achievement} / buff house{buffHouse}/server{buffServer}/other{buffOther} / global {global} / shrine {shrine} level bonuses are excluded from effective level)',
-    srTip:'Level delta = effective level {effLv} − target level {targetLv} = {delta} ({cmp}, {adjPct}% per level)\nLevel success bonus = {delta} × {adjPct}% = {levelAdj}%\nExtra success bonus = {successBonus}% (equipment {equip}% / achievement {achievement}% / buff house{buffHouse}%/server{buffServer}%/other{buffOther}% / global {global}% / building {building}% / shrine {shrine}%)\nBase success rate = {basePct}%\nFinal success rate = {basePct}% + {levelAdj}% + {successBonus}% = {rawPct}% → capped {pct}%',
+    srTip:'Level delta = effective level {effLv} − target level {targetLv} = {delta} ({cmp}, {adjPct}% per level)\nLevel success bonus = {delta} × {adjPct}% = {levelAdj}%\nExtra success bonus = {successBonus}% (equipment {equip}% / achievement {achievement}% / buff house{buffHouse}%/server{buffServer}%/other{buffOther}% / global {global}% / building {building}% / shrine {shrine}%)\nBase success rate = {basePct}%\nFinal success rate = {basePct}% × (1 + {levelAdj}% + {successBonus}%) = {rawPct}% → capped {pct}%',
     wpTip:'Effective level {effLv} × (1 + efficiency bonus {efficiencyBonus}%)\n= {effLv} × {effMult} = {raw}\nfloor = {workP}\nEfficiency sources: equipment {equip}% / achievement {achievement}% / house {buffHouse}% / global {global}% / building {building}% / shrine {shrine}%',
     speedTip:'Action time = base {baseSec}s ÷ (1 + speed bonus {speedBonus}%)\n= {baseSec} ÷ {speedMult} = {actionSeconds}s\nSpeed sources: equipment {equip}% / achievement {achievement}% / house {buffHouse}% / global {global}% / building {building}% / shrine {shrine}%',
     dpTip:'Double chance = {gatheringBonus}% (equipment {equip}% / achievement {achievement}% / buff house{buffHouse}%/server{buffServer}%/other{buffOther}% / global {global}% / building {building}% / shrine {shrine}%)\nClamped to 0% ~ 100% = {pct}%',
@@ -1277,15 +1277,15 @@ const TOOL_PREFIX_BONUS = {
   'celestial': 1.05,
 };
 
-// 强化（enhancer）工具的前缀数值是例外的，按 0.6 / 0.9 / 1.2 / 1.8 / 2.4 / 3 / 3.6 给出。
+// 强化（enhancer）工具的前缀数值是例外的，
 const ENHANCER_PREFIX_BONUS = {
-  'cheese':    0.6,
-  'verdant':   0.9,
-  'azure':     1.2,
-  'burble':    1.8,
-  'crimson':   2.4,
-  'rainbow':   3,
-  'holy':      3.6,
+  'cheese':    0.06,
+  'verdant':   0.09,
+  'azure':     0.12,
+  'burble':    0.18,
+  'crimson':   0.24,
+  'rainbow':   0.3,
+  'holy':      0.36,
 };
 
 // 生活工具后缀 → 对应的 stats key。
@@ -1654,7 +1654,7 @@ function applyGuildShrine(combined) {
 function successRate(personLv, targetLv, successBonus) {
   const delta = personLv - targetLv;
   const adj = delta >= 0 ? SUCCESS_ABOVE*delta : SUCCESS_BELOW*delta;
-  const rate = SUCCESS_BASE + adj + (successBonus||0);
+  const rate = SUCCESS_BASE * (1 + adj + (successBonus||0));
   return Math.max(SUCCESS_MIN, Math.min(1, rate));
 }
 
@@ -2407,7 +2407,7 @@ function renderAssignmentTableBody(tbody) {
       const cmp = t(cmpKey);
       const adjPct = (delta >= 0 ? SUCCESS_ABOVE : SUCCESS_BELOW) * 100;
       const levelAdj = (delta >= 0 ? SUCCESS_ABOVE : SUCCESS_BELOW) * delta * 100;
-      const rawRate = SUCCESS_BASE + (delta >= 0 ? SUCCESS_ABOVE : SUCCESS_BELOW) * delta + m.successBonus;
+      const rawRate = SUCCESS_BASE * (1 + (delta >= 0 ? SUCCESS_ABOVE : SUCCESS_BELOW) * delta + m.successBonus);
       const fillTip = (tpl, map) => {
         let s = tpl;
         for (const k in map) s = s.split('{' + k + '}').join(map[k]);
