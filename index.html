@@ -118,8 +118,8 @@ table.member-table td.skill-input input { width:52px; text-align:center; }
 table.member-table tr:hover { background:var(--table-hover); }
 table.member-table td.assign-cell { font-weight:600; font-size:12px; }
 table.member-table td.assign-cell svg { width:22px; height:22px; }
-table.member-table th.score-col { min-width:80px; }
-table.member-table td.score-cell { font-variant-numeric:tabular-nums; text-align:right; color:var(--accent); font-weight:600; }
+table.member-table th.score-col, table.member-table th.final-score-col { min-width:80px; }
+table.member-table td.score-cell, table.member-table td.final-score-cell { font-variant-numeric:tabular-nums; text-align:right; color:var(--accent); font-weight:600; }
 .assign-T1 { background:var(--assign-t1-bg); }
 .assign-T2 { background:var(--assign-t2-bg); }
 .assign-T3 { background:var(--assign-t3-bg); }
@@ -761,7 +761,8 @@ const I18N = {
     teamWork:'团队工作能力', nextClearNeeds:'下1次还需', pts:'点', perSec:'点/秒',
     targetLevel:'通关目标', estTime:'估算时间', reach:'到达',
     cumulativeTime:'累计', singlePassTime:'单关',
-    estTotalScore:'估算总分', estTotalScoreTip:'成功率×[工作能力×(1-双倍概率)+工作能力×2×双倍概率]÷单次秒数×单关时长',
+    estTotalScore:'当前等级估分', estTotalScoreTip:'成功率×[工作能力×(1-双倍概率)+工作能力×2×双倍概率]÷单次秒数×单关时长',
+    estFinalScore:'估算最终分', estFinalScoreTip:'累加最后一级之前的分数 + 最后一级实际时间对应的估分',
     levelAboveTarget:'等级高于目标', levelBelowTarget:'等级低于目标',
     lvTip:'基础等级 {base}（成员技能等级）\n+ 公会建筑等级加成 {building} 级\n= 有效等级 {eff}\n（装备 {equip} / 成就 {achievement} / Buff 房屋{buffHouse}/全服{buffServer}/其他{buffOther} / 全局 {global} / 神龛 {shrine} 的等级加成已移出，不计入有效等级）',
     srTip:'等级差 = 有效等级 {effLv} − 目标等级 {targetLv} = {delta}（{cmp}，每级 {adjPct}%）\n等级成功率加成 = {delta} × {adjPct}% = {levelAdj}%\n额外成功率加成 = {successBonus}%（装备 {equip}% / 成就 {achievement}% / Buff 房屋{buffHouse}%/全服{buffServer}%/其他{buffOther}% / 全局 {global}% / 建筑 {building}% / 神龛 {shrine}%）\n基础成功率 = {basePct}%\n最终成功率 = {basePct}% + {levelAdj}% + {successBonus}% = {rawPct}% → 限制后 {pct}%',
@@ -823,7 +824,8 @@ const I18N = {
     teamWork:'Team Work', nextClearNeeds:'Next clear needs', pts:'pts', perSec:'pts/s',
     targetLevel:'Clear Target', estTime:'Est. Time', reach:'Reach',
     cumulativeTime:'Total', singlePassTime:'This pass',
-    estTotalScore:'Est. Total', estTotalScoreTip:'success×[work×(1-doubleChance)+work×2×doubleChance]÷actionSec×passDuration',
+    estTotalScore:'Est. at Level', estTotalScoreTip:'success×[work×(1-doubleChance)+work×2×doubleChance]÷actionSec×passDuration',
+    estFinalScore:'Est. Final', estFinalScoreTip:'sum of scores before final level + estimated score for final level actual time',
     levelAboveTarget:'level above target', levelBelowTarget:'level below target',
     lvTip:'Base level {base} (member skill level)\n+ Guild building level bonus {building} lv\n= Effective level {eff}\n(Equipment {equip} / achievement {achievement} / buff house{buffHouse}/server{buffServer}/other{buffOther} / global {global} / shrine {shrine} level bonuses are excluded from effective level)',
     srTip:'Level delta = effective level {effLv} − target level {targetLv} = {delta} ({cmp}, {adjPct}% per level)\nLevel success bonus = {delta} × {adjPct}% = {levelAdj}%\nExtra success bonus = {successBonus}% (equipment {equip}% / achievement {achievement}% / buff house{buffHouse}%/server{buffServer}%/other{buffOther}% / global {global}% / building {building}% / shrine {shrine}%)\nBase success rate = {basePct}%\nFinal success rate = {basePct}% + {levelAdj}% + {successBonus}% = {rawPct}% → capped {pct}%',
@@ -1760,6 +1762,41 @@ function estimateSinglePassTime(metricsList, targetLv) {
   return required / rate;
 }
 
+// 估算某个成员在整场试炼（TRIAL_DURATION 秒）内，随团队一起推进时的个人总贡献分数。
+// 算法：按团队模拟时间轴，累加每一级完整通关时该成员按时间占比获得的分数；
+// 最后一级若未完整通关，则按实际剩余时间 × 该成员在该级的期望秒贡献来估算。
+function estimateFinalScoreForPerson(personMetrics, teamMetrics) {
+  if (!personMetrics || !Array.isArray(teamMetrics) || teamMetrics.length === 0) return 0;
+  const countMult = 1 + COUNT_INFLATION * teamMetrics.length;
+  let T = START_LV, passes = 0, carry = 0, timeLeft = TRIAL_DURATION;
+  let totalScore = 0;
+  while (timeLeft > 1e-9 && passes < MAX_PASS_GUARD) {
+    let teamRate = 0;
+    for (const m of teamMetrics) teamRate += expectedRate(m, T);
+    const personRate = expectedRate(personMetrics, T);
+    if (teamRate <= 1e-9) break;
+    const required = (BASE_TOTAL_PT + PT_GROWTH * passes) * countMult;
+    const diff = required - carry;
+    if (diff <= 0) {
+      carry -= required;
+      passes++;
+      T += LV_PER_PASS;
+      continue;
+    }
+    const tNeeded = diff / teamRate;
+    if (tNeeded > timeLeft + 1e-9) {
+      totalScore += personRate * timeLeft;
+      break;
+    }
+    totalScore += personRate * tNeeded;
+    timeLeft -= tNeeded;
+    carry = carry + tNeeded * teamRate - required;
+    passes++;
+    T += LV_PER_PASS;
+  }
+  return Math.round(totalScore);
+}
+
 class MinCostFlow {
   constructor(n) { this.n=n; this.adj=Array.from({length:n},()=>[]); this.to=[]; this.cap=[]; this.cost=[]; }
   addEdge(u,v,cap,cost) { this.adj[u].push(this.to.length); this.to.push(v); this.cap.push(cap); this.cost.push(cost); this.adj[v].push(this.to.length); this.to.push(u); this.cap.push(0); this.cost.push(-cost); }
@@ -2098,13 +2135,14 @@ function renderTableHeader() {
   const thead = document.getElementById('member-thead');
   if (state.memberView === 'assignment') {
     // 分配结果视图（两行表头）：
-    //   行1: 序号 | 分配 | 角色名 | 估算总分 | 试炼1(跨5列) | 试炼2(跨5列) | ...
+    //   行1: 序号 | 分配 | 角色名 | 当前等级估分 | 估算最终分 | 试炼1(跨5列) | 试炼2(跨5列) | ...
     //   行2: 每个试炼下 等级 | 成功率 | 工作能力 | 单次速度 | 双倍概率
     let row1 = '<tr>';
     row1 += '<th class="idx-col" rowspan="2">'+t('indexCol')+'</th>';
     row1 += '<th class="assign-col" rowspan="2">'+t('assignCol')+'</th>';
     row1 += '<th class="name-col" rowspan="2">'+t('nameCol')+'</th>';
     row1 += '<th class="score-col" rowspan="2" title="'+escHtml(t('estTotalScoreTip'))+'">'+t('estTotalScore')+'</th>';
+    row1 += '<th class="final-score-col" rowspan="2" title="'+escHtml(t('estFinalScoreTip'))+'">'+t('estFinalScore')+'</th>';
     for (let j = 0; j < state.trials.length; j++) {
       const cfg = state.trials[j];
       row1 += '<th class="skill-col trial-group-start" colspan="5" title="'+escHtml(t('trial')+' '+(j+1)+' · '+skillLabel(cfg.skill))+'">'+svgIcon(SKILL_KEYS[cfg.skill],20,20)+'</th>';
@@ -2307,13 +2345,13 @@ function renderTrialCards() {
   }).join('');
 }
 
-// 分配结果视图：仅展示 序号 / 分配 / 角色名 / 估算总分 / 每个试炼的 等级·成功率·工作能力·单次速度·双倍概率（只读）。
+// 分配结果视图：仅展示 序号 / 分配 / 角色名 / 当前等级估分 / 估算最终分 / 每个试炼的 等级·成功率·工作能力·单次速度·双倍概率（只读）。
 // 指标直接复用试炼算法：
 //   workP/dblP 来自 computePersonSkillMetrics（装备+个人buff+全局buff 已全部计入）；
 //   成功率 = successRate(effLevel, T, successBonus)，T 优先取该试炼计算后的最终等级
 //   （与试炼卡 "@ Lv finalLv" 语义一致），未计算时退回起始等级 START_LV。
 function renderAssignmentTableBody(tbody) {
-  const colCount = 4 + state.trials.length * 5;
+  const colCount = 5 + state.trials.length * 5;
   if (state.members.length === 0) {
     tbody.innerHTML = '<tr><td colspan="'+colCount+'" style="color:var(--text-faint);padding:20px">'+t('noMembers')+'</td></tr>';
     return;
@@ -2323,15 +2361,17 @@ function renderAssignmentTableBody(tbody) {
     const assignClass = assign >= 0 ? 'assign-T'+(assign+1) : 'assign-none';
     let assignContent = '-';
     let scoreCell = '<td class="score-cell">-</td>';
+    let finalScoreCell = '<td class="final-score-cell">-</td>';
     if (assign >= 0) {
       assignContent = svgIcon(SKILL_KEYS[state.trials[assign].skill], 22, 22);
       const cfg = state.trials[assign];
       const m = computePersonSkillMetrics(p, cfg.skill);
       const targetLv = cfg.targetLevel || START_LV;
-      // 估算总分 = 期望秒贡献 × 该试炼在当前目标等级的单关时长
+      // 当前等级估分 = 期望秒贡献 × 该试炼在当前目标等级的单关时长
       let singlePassTime = null;
+      let teamMetrics = null;
       if (state.result && state.result.cache[assign]) {
-        const teamMetrics = state.result.cache[assign].list.map(e => e.metrics);
+        teamMetrics = state.result.cache[assign].list.map(e => e.metrics);
         singlePassTime = estimateSinglePassTime(teamMetrics, targetLv);
       }
       if (singlePassTime === null || singlePassTime <= 0) {
@@ -2339,6 +2379,11 @@ function renderAssignmentTableBody(tbody) {
       }
       const total = Math.round(expectedRate(m, targetLv) * singlePassTime);
       scoreCell = '<td class="score-cell" title="'+escHtml(t('estTotalScoreTip'))+'">'+total.toLocaleString()+'</td>';
+      // 估算最终分 = 累加最后一级之前的分数 + 最后一级实际时间对应的估分
+      const finalScore = teamMetrics && teamMetrics.length > 0
+        ? estimateFinalScoreForPerson(m, teamMetrics)
+        : estimateFinalScoreForPerson(m, [m]);
+      finalScoreCell = '<td class="final-score-cell" title="'+escHtml(t('estFinalScoreTip'))+'">'+finalScore.toLocaleString()+'</td>';
     }
     let trialCells = '';
     for (let j = 0; j < state.trials.length; j++) {
@@ -2452,6 +2497,7 @@ function renderAssignmentTableBody(tbody) {
       '<td class="assign-cell '+assignClass+'">'+assignContent+'</td>'+
       '<td class="name-cell">'+escHtml(p.name)+'</td>'+
       scoreCell+
+      finalScoreCell+
       trialCells+
     '</tr>';
   }).join('');
