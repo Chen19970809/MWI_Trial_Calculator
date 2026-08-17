@@ -1703,8 +1703,8 @@ function expectedRate(m, T) {
   return sr * contributionPerAction / m.actionSeconds;
 }
 
-function computePasses(metricsList) {
-  const N = metricsList.length; if (N===0) return 0;
+function simulateTrialProgress(metricsList) {
+  const N = metricsList.length; if (N===0) return { passes:0, finalT:START_LV, timeLeft:TRIAL_DURATION, carry:0 };
   const countMult = 1 + COUNT_INFLATION*N;
   let T = START_LV, passes = 0, carry = 0, timeLeft = TRIAL_DURATION;
   while (timeLeft > 0 && passes < MAX_PASS_GUARD) {
@@ -1718,7 +1718,11 @@ function computePasses(metricsList) {
     if (tNeeded > timeLeft + 1e-9) break;
     timeLeft -= tNeeded; carry = carry + tNeeded*rate - required; passes++; T += LV_PER_PASS;
   }
-  return passes;
+  return { passes, finalT:T, timeLeft, carry };
+}
+
+function computePasses(metricsList) {
+  return simulateTrialProgress(metricsList).passes;
 }
 
 function finalLv(metricsList) { return START_LV + LV_PER_PASS * computePasses(metricsList); }
@@ -2383,9 +2387,11 @@ function renderTrialCards() {
       }
       const finalPassIndex = Math.max(0, Math.floor((c.finalLv - START_LV) / LV_PER_PASS));
       const finalLevelNeeds = Math.ceil((BASE_TOTAL_PT + PT_GROWTH * finalPassIndex) * countMult);
+      const sim = simulateTrialProgress(metrics);
+      const actualTimeAtFinal = Math.max(0, sim.timeLeft);
       let totalFinalScore = 0;
       for (const e of c.list) {
-        totalFinalScore += estimateFinalScoreForPerson(e.metrics, metrics);
+        totalFinalScore += expectedRate(e.metrics, c.finalLv) * actualTimeAtFinal;
       }
       const finalRatio = finalLevelNeeds > 0 ? (totalFinalScore / finalLevelNeeds * 100).toFixed(2) + '%' : '-';
       resultHtml = '<div class="trial-result">'+t('reach')+' Lv'+c.finalLv+' &middot; '+c.passes+t('passes')+' &middot; '+c.list.length+'/'+c.max+t('people')+'<br>'+t('teamWork')+' '+c.sumWork+' &middot; ~'+rateStr+t('perSec')+' @ Lv'+c.finalLv+'<br>'+t('currentLevelNeeds')+' '+targetLevelNeeds.toLocaleString()+' '+t('pts')+' &middot; '+t('cumulativePts')+' '+cumulativePts.toLocaleString()+' '+t('pts')+' &middot; '+t('finalRatio')+' '+finalRatio+'<br>'+t('targetLevel')+' '+targetLv+' &middot; '+t('cumulativeTime')+' '+formatDuration(estTotal)+' &middot; '+t('singlePassTime')+' '+formatDuration(estSingle)+'</div>';
