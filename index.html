@@ -120,6 +120,7 @@ table.member-table td.assign-cell { font-weight:600; font-size:12px; }
 table.member-table td.assign-cell svg { width:22px; height:22px; }
 table.member-table th.score-col, table.member-table th.final-score-col { min-width:80px; }
 table.member-table td.score-cell, table.member-table td.final-score-cell { font-variant-numeric:tabular-nums; text-align:right; color:var(--accent); font-weight:600; }
+table.member-table td.ratio-low { color:var(--danger); }
 .assign-T1 { background:var(--assign-t1-bg); }
 .assign-T2 { background:var(--assign-t2-bg); }
 .assign-T3 { background:var(--assign-t3-bg); }
@@ -2401,60 +2402,93 @@ function renderTrialCards() {
   }).join('');
 }
 
-// 分数估算视图：仅展示 序号 / 分配 / 角色名 / 本级分数 / 本级共需 / 当前累积分数 / 当前共需。
+// 计算某个成员在分数估算视图中的各项数值。
+function computeScoreEstimate(p) {
+  const assign = state.assignment ? state.assignment[p.id] : -1;
+  if (assign < 0) {
+    return { assign, assignClass: 'assign-none', assignContent: '-', levelScore: null, levelNeeded: null,
+             levelRatio: null, cumulativeScore: null, totalNeeded: null, cumulativeRatio: null };
+  }
+  const cfg = state.trials[assign];
+  const m = computePersonSkillMetrics(p, cfg.skill);
+  const targetLv = cfg.targetLevel || START_LV;
+  let teamMetrics = null;
+  let singlePassTime = null;
+  if (state.result && state.result.cache[assign]) {
+    teamMetrics = state.result.cache[assign].list.map(e => e.metrics);
+    singlePassTime = estimateSinglePassTime(teamMetrics, targetLv);
+  }
+  if (singlePassTime === null || singlePassTime <= 0) {
+    singlePassTime = estimateSinglePassTime([m], targetLv);
+  }
+  const levelScore = Math.round(expectedRate(m, targetLv) * singlePassTime);
+  const countMult = 1 + COUNT_INFLATION * (teamMetrics ? teamMetrics.length : 1);
+  const targetPassIndex = Math.max(0, Math.floor((targetLv - START_LV) / LV_PER_PASS));
+  const levelNeeded = Math.ceil((BASE_TOTAL_PT + PT_GROWTH * targetPassIndex) * countMult);
+  const levelRatio = levelNeeded > 0 ? levelScore / levelNeeded : 0;
+  const cumulativeScore = teamMetrics && teamMetrics.length > 0
+    ? estimateScoreToLevel(m, teamMetrics, targetLv)
+    : estimateScoreToLevel(m, [m], targetLv);
+  let totalNeeded = 0;
+  for (let pIdx = 0; pIdx <= targetPassIndex; pIdx++) {
+    totalNeeded += Math.ceil((BASE_TOTAL_PT + PT_GROWTH * pIdx) * countMult);
+  }
+  const cumulativeRatio = totalNeeded > 0 ? cumulativeScore / totalNeeded : 0;
+  const assignClass = 'assign-T'+(assign+1);
+  const assignContent = svgIcon(SKILL_KEYS[cfg.skill], 22, 22);
+  return { assign, assignClass, assignContent, levelScore, levelNeeded, levelRatio, cumulativeScore, totalNeeded, cumulativeRatio };
+}
+
+// 分数估算视图：仅展示 序号 / 分配 / 角色名 / 本级分数 / 本级共需 / 当前供需比 / 当前累积分数 / 当前共需 / 累计供需比。
+// 按试炼分组，组内按累计供需比降序排列。
 function renderScoreEstimateTableBody(tbody) {
   const colCount = 9;
   if (state.members.length === 0) {
     tbody.innerHTML = '<tr><td colspan="'+colCount+'" style="color:var(--text-faint);padding:20px">'+t('noMembers')+'</td></tr>';
     return;
   }
-  tbody.innerHTML = state.members.map((p, rowIdx) => {
-    const assign = state.assignment ? state.assignment[p.id] : -1;
-    const assignClass = assign >= 0 ? 'assign-T'+(assign+1) : 'assign-none';
-    let assignContent = '-';
+  // 先计算所有成员数值并按试炼分组。
+  const rows = state.members.map((p, rowIdx) => ({ p, rowIdx, est: computeScoreEstimate(p) }));
+  const byTrial = {};
+  const unassigned = [];
+  for (const row of rows) {
+    if (row.est.assign < 0) {
+      unassigned.push(row);
+    } else {
+      const key = row.est.assign;
+      if (!byTrial[key]) byTrial[key] = [];
+      byTrial[key].push(row);
+    }
+  }
+  // 组内按累计供需比降序排列。
+  for (const key of Object.keys(byTrial)) {
+    byTrial[key].sort((a, b) => b.est.cumulativeRatio - a.est.cumulativeRatio);
+  }
+  // 按试炼索引顺序拼接，未分配成员放在最后。
+  const ordered = [];
+  for (let j = 0; j < state.trials.length; j++) {
+    if (byTrial[j]) ordered.push(...byTrial[j]);
+  }
+  ordered.push(...unassigned);
+
+  tbody.innerHTML = ordered.map(({ p, rowIdx, est }) => {
     let levelScoreCell = '<td class="score-cell">-</td>';
     let levelNeededCell = '<td class="score-cell">-</td>';
     let levelRatioCell = '<td class="score-cell">-</td>';
     let cumulativeScoreCell = '<td class="final-score-cell">-</td>';
     let totalNeededCell = '<td class="final-score-cell">-</td>';
     let cumulativeRatioCell = '<td class="final-score-cell">-</td>';
-    if (assign >= 0) {
-      assignContent = svgIcon(SKILL_KEYS[state.trials[assign].skill], 22, 22);
-      const cfg = state.trials[assign];
-      const m = computePersonSkillMetrics(p, cfg.skill);
-      const targetLv = cfg.targetLevel || START_LV;
-      let teamMetrics = null;
-      let singlePassTime = null;
-      if (state.result && state.result.cache[assign]) {
-        teamMetrics = state.result.cache[assign].list.map(e => e.metrics);
-        singlePassTime = estimateSinglePassTime(teamMetrics, targetLv);
-      }
-      if (singlePassTime === null || singlePassTime <= 0) {
-        singlePassTime = estimateSinglePassTime([m], targetLv);
-      }
-      const levelScore = Math.round(expectedRate(m, targetLv) * singlePassTime);
-      const countMult = 1 + COUNT_INFLATION * (teamMetrics ? teamMetrics.length : 1);
-      const targetPassIndex = Math.max(0, Math.floor((targetLv - START_LV) / LV_PER_PASS));
-      const levelNeeded = Math.ceil((BASE_TOTAL_PT + PT_GROWTH * targetPassIndex) * countMult);
-      const levelRatio = levelNeeded > 0 ? (levelScore / levelNeeded * 100).toFixed(2) + '%' : '-';
-      const cumulativeScore = teamMetrics && teamMetrics.length > 0
-        ? estimateScoreToLevel(m, teamMetrics, targetLv)
-        : estimateScoreToLevel(m, [m], targetLv);
-      let totalNeeded = 0;
-      for (let pIdx = 0; pIdx <= targetPassIndex; pIdx++) {
-        totalNeeded += Math.ceil((BASE_TOTAL_PT + PT_GROWTH * pIdx) * countMult);
-      }
-      const cumulativeRatio = totalNeeded > 0 ? (cumulativeScore / totalNeeded * 100).toFixed(2) + '%' : '-';
-      levelScoreCell = '<td class="score-cell" title="'+escHtml(t('levelScoreTip'))+'">'+levelScore.toLocaleString()+'</td>';
-      levelNeededCell = '<td class="score-cell" title="'+escHtml(t('levelNeededTip'))+'">'+levelNeeded.toLocaleString()+'</td>';
-      levelRatioCell = '<td class="score-cell" title="'+escHtml(t('levelRatioTip'))+'">'+levelRatio+'</td>';
-      cumulativeScoreCell = '<td class="final-score-cell" title="'+escHtml(t('cumulativeScoreTip'))+'">'+cumulativeScore.toLocaleString()+'</td>';
-      totalNeededCell = '<td class="final-score-cell" title="'+escHtml(t('totalNeededTip'))+'">'+totalNeeded.toLocaleString()+'</td>';
-      cumulativeRatioCell = '<td class="final-score-cell" title="'+escHtml(t('cumulativeRatioTip'))+'">'+cumulativeRatio+'</td>';
+    if (est.assign >= 0) {
+      levelScoreCell = '<td class="score-cell" title="'+escHtml(t('levelScoreTip'))+'">'+est.levelScore.toLocaleString()+'</td>';
+      levelNeededCell = '<td class="score-cell" title="'+escHtml(t('levelNeededTip'))+'">'+est.levelNeeded.toLocaleString()+'</td>';
+      levelRatioCell = '<td class="score-cell '+((est.levelRatio * 100) < 1 ? 'ratio-low' : '')+'" title="'+escHtml(t('levelRatioTip'))+'">'+(est.levelRatio * 100).toFixed(2)+'%</td>';
+      cumulativeScoreCell = '<td class="final-score-cell" title="'+escHtml(t('cumulativeScoreTip'))+'">'+est.cumulativeScore.toLocaleString()+'</td>';
+      totalNeededCell = '<td class="final-score-cell" title="'+escHtml(t('totalNeededTip'))+'">'+est.totalNeeded.toLocaleString()+'</td>';
+      cumulativeRatioCell = '<td class="final-score-cell '+((est.cumulativeRatio * 100) < 1 ? 'ratio-low' : '')+'" title="'+escHtml(t('cumulativeRatioTip'))+'">'+(est.cumulativeRatio * 100).toFixed(2)+'%</td>';
     }
     return '<tr>'+
       '<td class="idx-cell">'+rowIdx+'</td>'+
-      '<td class="assign-cell '+assignClass+'">'+assignContent+'</td>'+
+      '<td class="assign-cell '+est.assignClass+'">'+est.assignContent+'</td>'+
       '<td class="name-cell">'+escHtml(p.name)+'</td>'+
       levelScoreCell+
       levelNeededCell+
