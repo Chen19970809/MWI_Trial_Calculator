@@ -118,6 +118,8 @@ table.member-table td.skill-input input { width:52px; text-align:center; }
 table.member-table tr:hover { background:var(--table-hover); }
 table.member-table td.assign-cell { font-weight:600; font-size:12px; }
 table.member-table td.assign-cell svg { width:22px; height:22px; }
+table.member-table th.score-col { min-width:80px; }
+table.member-table td.score-cell { font-variant-numeric:tabular-nums; text-align:right; color:var(--accent); font-weight:600; }
 .assign-T1 { background:var(--assign-t1-bg); }
 .assign-T2 { background:var(--assign-t2-bg); }
 .assign-T3 { background:var(--assign-t3-bg); }
@@ -715,7 +717,7 @@ table.member-table td.loadout-cell.loadout-empty { color:var(--text-faint); font
 const I18N = {
   zh: {
     title:'MWI 试炼计算器', trialConfig:'试炼配置', memberData:'成员数据', assignmentResult:'分配结果',
-    levelCol:'等级', successRateCol:'成功率', workPowerCol:'工作能力', speedCol:'单次速度', doubleProgressCol:'双倍进度',
+    levelCol:'等级', successRateCol:'成功率', workPowerCol:'工作能力', speedCol:'单次速度', doubleProgressCol:'双倍概率',
     addMember:'添加成员', share:'共享设置', importData:'导入',
     exportScript:'下载脚本',
     exportScriptTitle:'下载数据导出脚本（Tampermonkey），安装后可在游戏内一键导出角色数据',
@@ -759,12 +761,13 @@ const I18N = {
     teamWork:'团队工作能力', nextClearNeeds:'下1次还需', pts:'点', perSec:'点/秒',
     targetLevel:'通关目标', estTime:'估算时间', reach:'到达',
     cumulativeTime:'累计', singlePassTime:'单关',
+    estTotalScore:'估算总分', estTotalScoreTip:'成功率×[工作能力×(1-双倍概率)+工作能力×2×双倍概率]÷单次秒数×单关时长',
     levelAboveTarget:'等级高于目标', levelBelowTarget:'等级低于目标',
     lvTip:'基础等级 {base}（成员技能等级）\n+ 公会建筑等级加成 {building} 级\n= 有效等级 {eff}\n（装备 {equip} / 成就 {achievement} / Buff 房屋{buffHouse}/全服{buffServer}/其他{buffOther} / 全局 {global} / 神龛 {shrine} 的等级加成已移出，不计入有效等级）',
-    srTip:'等级差 = 有效等级 {effLv} − 目标等级 {targetLv} = {delta}（{cmp}，每级 {adjPct}%）\n等级成功率加成 = {delta} × {adjPct}% = {levelAdj}%\n额外成功率加成 = {successBonus}%（装备 {equip}% / 成就 {achievement}% / Buff 房屋{buffHouse}%/全服{buffServer}%/其他{buffOther}% / 全局 {global}% / 建筑 {building}% / 神龛 {shrine}%）\n基础成功率 = {basePct}%\n最终成功率 = {basePct}% × (1 + {levelAdj}% + {successBonus}%) = {rawPct}% → 限制后 {pct}%',
+    srTip:'等级差 = 有效等级 {effLv} − 目标等级 {targetLv} = {delta}（{cmp}，每级 {adjPct}%）\n等级成功率加成 = {delta} × {adjPct}% = {levelAdj}%\n额外成功率加成 = {successBonus}%（装备 {equip}% / 成就 {achievement}% / Buff 房屋{buffHouse}%/全服{buffServer}%/其他{buffOther}% / 全局 {global}% / 建筑 {building}% / 神龛 {shrine}%）\n基础成功率 = {basePct}%\n最终成功率 = {basePct}% + {levelAdj}% + {successBonus}% = {rawPct}% → 限制后 {pct}%',
     wpTip:'有效等级 {effLv} × (1 + 效率加成 {efficiencyBonus}%)\n= {effLv} × {effMult} = {raw}\n向下取整 = {workP}\n效率加成来源：装备 {equip}% / 成就 {achievement}% / 房屋 {buffHouse}% / 全局 {global}% / 建筑 {building}% / 神龛 {shrine}%',
     speedTip:'单次速度 = 基础时间 {baseSec} 秒 ÷ (1 + 速度加成 {speedBonus}%)\n= {baseSec} ÷ {speedMult} = {actionSeconds} 秒\n速度加成来源：装备 {equip}% / 成就 {achievement}% / 房屋 {buffHouse}% / 全局 {global}% / 建筑 {building}% / 神龛 {shrine}%',
-    dpTip:'采集加成 = {gatheringBonus}%（装备 {equip}% / 成就 {achievement}% / Buff 房屋{buffHouse}%/全服{buffServer}%/其他{buffOther}% / 全局 {global}% / 建筑 {building}% / 神龛 {shrine}%）\n限制在 0% ~ 100% 之间 = {pct}%',
+    dpTip:'双倍概率 = {gatheringBonus}%（装备 {equip}% / 成就 {achievement}% / Buff 房屋{buffHouse}%/全服{buffServer}%/其他{buffOther}% / 全局 {global}% / 建筑 {building}% / 神龛 {shrine}%）\n限制在 0% ~ 100% 之间 = {pct}%',
     trial:'试炼', language:'中/EN', theme:'🌙',
     skillLabels:['挤奶','采摘','伐木','奶酪锻造','制作','缝纫','烹饪','冲泡','炼金','强化'],
     equipLabels:['主手','副手','头部','身体','手部','腿部','脚部','项链','耳环','戒指','袋子','背部','挤奶工具','采摘工具','伐木工具','奶酪锻造工具','制作工具','缝纫工具','烹饪工具','冲泡工具','炼金工具','强化工具'],
@@ -776,7 +779,7 @@ const I18N = {
   },
   en: {
     title:'MWI Trial Calculator', trialConfig:'Trial Config', memberData:'Member Data', assignmentResult:'Assignment',
-    levelCol:'Lv', successRateCol:'Success', workPowerCol:'Work', speedCol:'Speed', doubleProgressCol:'Double',
+    levelCol:'Lv', successRateCol:'Success', workPowerCol:'Work', speedCol:'Speed', doubleProgressCol:'Double Chance',
     addMember:'Add Member', share:'Share', importData:'Import',
     exportScript:'Download Script',
     exportScriptTitle:'Download data export userscript (Tampermonkey) to export character data in-game',
@@ -820,12 +823,13 @@ const I18N = {
     teamWork:'Team Work', nextClearNeeds:'Next clear needs', pts:'pts', perSec:'pts/s',
     targetLevel:'Clear Target', estTime:'Est. Time', reach:'Reach',
     cumulativeTime:'Total', singlePassTime:'This pass',
+    estTotalScore:'Est. Total', estTotalScoreTip:'success×[work×(1-doubleChance)+work×2×doubleChance]÷actionSec×passDuration',
     levelAboveTarget:'level above target', levelBelowTarget:'level below target',
     lvTip:'Base level {base} (member skill level)\n+ Guild building level bonus {building} lv\n= Effective level {eff}\n(Equipment {equip} / achievement {achievement} / buff house{buffHouse}/server{buffServer}/other{buffOther} / global {global} / shrine {shrine} level bonuses are excluded from effective level)',
-    srTip:'Level delta = effective level {effLv} − target level {targetLv} = {delta} ({cmp}, {adjPct}% per level)\nLevel success bonus = {delta} × {adjPct}% = {levelAdj}%\nExtra success bonus = {successBonus}% (equipment {equip}% / achievement {achievement}% / buff house{buffHouse}%/server{buffServer}%/other{buffOther}% / global {global}% / building {building}% / shrine {shrine}%)\nBase success rate = {basePct}%\nFinal success rate = {basePct}% × (1 + {levelAdj}% + {successBonus}%) = {rawPct}% → capped {pct}%',
+    srTip:'Level delta = effective level {effLv} − target level {targetLv} = {delta} ({cmp}, {adjPct}% per level)\nLevel success bonus = {delta} × {adjPct}% = {levelAdj}%\nExtra success bonus = {successBonus}% (equipment {equip}% / achievement {achievement}% / buff house{buffHouse}%/server{buffServer}%/other{buffOther}% / global {global}% / building {building}% / shrine {shrine}%)\nBase success rate = {basePct}%\nFinal success rate = {basePct}% + {levelAdj}% + {successBonus}% = {rawPct}% → capped {pct}%',
     wpTip:'Effective level {effLv} × (1 + efficiency bonus {efficiencyBonus}%)\n= {effLv} × {effMult} = {raw}\nfloor = {workP}\nEfficiency sources: equipment {equip}% / achievement {achievement}% / house {buffHouse}% / global {global}% / building {building}% / shrine {shrine}%',
     speedTip:'Action time = base {baseSec}s ÷ (1 + speed bonus {speedBonus}%)\n= {baseSec} ÷ {speedMult} = {actionSeconds}s\nSpeed sources: equipment {equip}% / achievement {achievement}% / house {buffHouse}% / global {global}% / building {building}% / shrine {shrine}%',
-    dpTip:'Gathering bonus = {gatheringBonus}% (equipment {equip}% / achievement {achievement}% / buff house{buffHouse}%/server{buffServer}%/other{buffOther}% / global {global}% / building {building}% / shrine {shrine}%)\nClamped to 0% ~ 100% = {pct}%',
+    dpTip:'Double chance = {gatheringBonus}% (equipment {equip}% / achievement {achievement}% / buff house{buffHouse}%/server{buffServer}%/other{buffOther}% / global {global}% / building {building}% / shrine {shrine}%)\nClamped to 0% ~ 100% = {pct}%',
     trial:'Trial', language:'中/EN', theme:'☀️',
     skillLabels:['Milking','Foraging','Woodcutting','Cheesesmithing','Crafting','Tailoring','Cooking','Brewing','Alchemy','Enhancing'],
     equipLabels:['Main Hand','Off Hand','Head','Body','Hands','Legs','Feet','Necklace','Earring','Ring','Pouch','Back','Milking Tool','Foraging Tool','Woodcutting Tool','Cheesesmithing Tool','Crafting Tool','Tailoring Tool','Cooking Tool','Brewing Tool','Alchemy Tool','Enhancing Tool'],
@@ -843,7 +847,7 @@ function equipShortLabel(idx) { return I18N[state.lang].equipShort[idx]; }
 // 右上角「下载脚本」按钮指向的地址。部署时可直接改下面默认值；
 // 也可以在页面加载前通过 localStorage.setItem('mwi_script_download_url', '...') 覆盖，
 // 方便同一个 HTML 文件在不同环境/不同公会使用不同脚本包。
-const SCRIPT_DOWNLOAD_DEFAULT = '银河奶牛公会生活试炼分配（数据+网址）.txt';
+const SCRIPT_DOWNLOAD_DEFAULT = '单角色迷宫配装上传.txt';
 const SCRIPT_DOWNLOAD_STORAGE_KEY = 'mwi_script_download_url';
 function getScriptDownloadUrl() {
   try { return localStorage.getItem(SCRIPT_DOWNLOAD_STORAGE_KEY) || SCRIPT_DOWNLOAD_DEFAULT; }
@@ -1062,7 +1066,8 @@ function extractEquipmentBonusesFromLoadout(loadoutEntry, skillId) {
     if (idx > 0) {
       const prefix = effectiveName.slice(0, idx);
       const suffix = effectiveName.slice(idx + 1);
-      const basePct = TOOL_PREFIX_BONUS[prefix];
+      // 强化（enhancer）后缀例外：使用专属前缀数值表
+      const basePct = suffix === 'enhancer' ? ENHANCER_PREFIX_BONUS[prefix] : TOOL_PREFIX_BONUS[prefix];
       const statKey = TOOL_SUFFIX_SKILL[suffix];
       if (basePct && statKey) {
         const v = basePct * (1 + enhPct) * itemMult;
@@ -1255,89 +1260,10 @@ const EQUIPMENT_BASE_BONUSES = {
   '/items/chance_cape': {
     base: { alchemySpeed: 0.05, enhancingSpeed: 0.05},
   },
-  //奶农上衣
-  '/items/dairyhands_top': {
-    base: { milkingEfficiency: 0.1},
-  },
-  //奶农下衣
-  '/items/dairyhands_bottoms': {
-    base: { milkingEfficiency: 0.1},
-  },
-  //采摘者上衣 
-  '/items/foragers_top': {
-    base: { foragingEfficiency: 0.1},
-  },
-  //采摘者下衣
-  '/items/foragers_bottoms': {
-    base: { foragingEfficiency: 0.1},
-  },
-  //伐木工上衣
-  '/items/lumberjacks_top': {
-    base: { woodcuttingEfficiency: 0.1},
-  },
-  //伐木工下衣
-  '/items/lumberjacks_bottoms': {
-    base: { woodcuttingEfficiency: 0.1},
-  },
-  //奶酪匠上衣
-  '/items/cheesemakers_top': {
-    base: { cheesesmithingEfficiency: 0.1},
-  },
-  //奶酪匠下衣
-  '/items/cheesemakers_bottoms': {
-    base: { cheesesmithingEfficiency: 0.1},
-  },
-  //工匠上衣
-  '/items/crafters_top': {
-    base: { craftingEfficiency: 0.1},
-  },
-  //工匠下衣
-  '/items/crafters_bottoms': {
-    base: { craftingEfficiency: 0.1},
-  },
-  //裁缝上衣
-  '/items/tailors_top': {
-    base: { tailoringEfficiency: 0.1},
-  },
-  //裁缝下衣
-  '/items/tailors_bottoms': {
-    base: { tailoringEfficiency: 0.1},
-  },
-  //厨师上衣
-  '/items/chefs_top': {
-    base: { cookingEfficiency: 0.1},
-  },
-  //厨师下衣
-  '/items/chefs_bottoms': {
-    base: { cookingEfficiency: 0.1},
-  },
-  //饮品师上衣
-  '/items/brewers_top': {
-    base: { brewingEfficiency: 0.1},
-  },
-  //饮品师下衣
-  '/items/brewers_bottoms': {
-    base: { brewingEfficiency: 0.1},
-  },
-  //炼金师上衣  
-  '/items/alchemists_top': {
-    base: { alchemyEfficiency: 0.1},
-  },
-  //炼金师下衣
-  '/items/alchemists_bottoms': {
-    base: { alchemyEfficiency: 0.1},
-  },
-  //强化师上衣
-  '/items/enhancers_top': {
-    base: { enhancingSpeed: 0.1},
-  },
-  //强化师下衣
-  '/items/enhancers_bottoms': {
-    base: { enhancingSpeed: 0.1},
-  },
 };
 
 // 生活工具前缀 → 0 级速度/成功率基础加成（效率等通过配置表或 stats 补充）。
+// 注意：强化（enhancer）后缀是例外，其前缀提供的是「0 级强化成功率」而非速度。
 const TOOL_PREFIX_BONUS = {
   'cheese':    0.15,
   'verdant':   0.225,
@@ -1347,6 +1273,17 @@ const TOOL_PREFIX_BONUS = {
   'rainbow':   0.75,
   'holy':      0.90,
   'celestial': 1.05,
+};
+
+// 强化（enhancer）工具的前缀数值是例外的，按 0.6 / 0.9 / 1.2 / 1.8 / 2.4 / 3 / 3.6 给出。
+const ENHANCER_PREFIX_BONUS = {
+  'cheese':    0.6,
+  'verdant':   0.9,
+  'azure':     1.2,
+  'burble':    1.8,
+  'crimson':   2.4,
+  'rainbow':   3,
+  'holy':      3.6,
 };
 
 // 生活工具后缀 → 对应的 stats key。
@@ -1715,7 +1652,7 @@ function applyGuildShrine(combined) {
 function successRate(personLv, targetLv, successBonus) {
   const delta = personLv - targetLv;
   const adj = delta >= 0 ? SUCCESS_ABOVE*delta : SUCCESS_BELOW*delta;
-  const rate = SUCCESS_BASE * (1 + adj + (successBonus||0));
+  const rate = SUCCESS_BASE + adj + (successBonus||0);
   return Math.max(SUCCESS_MIN, Math.min(1, rate));
 }
 
@@ -1740,8 +1677,11 @@ function computePersonSkillMetrics(person, skillIdx) {
 }
 
 function expectedRate(m, T) {
-  if (m.baseRatePerSecond <= 0) return 0;
-  return m.baseRatePerSecond * successRate(m.effLevel, T, m.successBonus);
+  if (m.actionSeconds <= 0) return 0;
+  const sr = successRate(m.effLevel, T, m.successBonus);
+  // 单次贡献 = 成功率 × [工作能力×(1-双倍概率) + 工作能力×2×双倍概率] ÷ 单次秒数
+  const contributionPerAction = m.workP * (1 - m.dblP) + m.workP * 2 * m.dblP;
+  return sr * contributionPerAction / m.actionSeconds;
 }
 
 function computePasses(metricsList) {
@@ -2158,12 +2098,13 @@ function renderTableHeader() {
   const thead = document.getElementById('member-thead');
   if (state.memberView === 'assignment') {
     // 分配结果视图（两行表头）：
-    //   行1: 序号 | 分配 | 角色名 | 试炼1(跨5列) | 试炼2(跨5列) | ...
-    //   行2: 每个试炼下 等级 | 成功率 | 工作能力 | 单次速度 | 双倍进度
+    //   行1: 序号 | 分配 | 角色名 | 估算总分 | 试炼1(跨5列) | 试炼2(跨5列) | ...
+    //   行2: 每个试炼下 等级 | 成功率 | 工作能力 | 单次速度 | 双倍概率
     let row1 = '<tr>';
     row1 += '<th class="idx-col" rowspan="2">'+t('indexCol')+'</th>';
     row1 += '<th class="assign-col" rowspan="2">'+t('assignCol')+'</th>';
     row1 += '<th class="name-col" rowspan="2">'+t('nameCol')+'</th>';
+    row1 += '<th class="score-col" rowspan="2" title="'+escHtml(t('estTotalScoreTip'))+'">'+t('estTotalScore')+'</th>';
     for (let j = 0; j < state.trials.length; j++) {
       const cfg = state.trials[j];
       row1 += '<th class="skill-col trial-group-start" colspan="5" title="'+escHtml(t('trial')+' '+(j+1)+' · '+skillLabel(cfg.skill))+'">'+svgIcon(SKILL_KEYS[cfg.skill],20,20)+'</th>';
@@ -2366,13 +2307,13 @@ function renderTrialCards() {
   }).join('');
 }
 
-// 分配结果视图：仅展示 序号 / 分配 / 角色名 / 每个试炼的 等级·成功率·工作能力·双倍进度（只读）。
+// 分配结果视图：仅展示 序号 / 分配 / 角色名 / 估算总分 / 每个试炼的 等级·成功率·工作能力·单次速度·双倍概率（只读）。
 // 指标直接复用试炼算法：
 //   workP/dblP 来自 computePersonSkillMetrics（装备+个人buff+全局buff 已全部计入）；
 //   成功率 = successRate(effLevel, T, successBonus)，T 优先取该试炼计算后的最终等级
 //   （与试炼卡 "@ Lv finalLv" 语义一致），未计算时退回起始等级 START_LV。
 function renderAssignmentTableBody(tbody) {
-  const colCount = 3 + state.trials.length * 5;
+  const colCount = 4 + state.trials.length * 5;
   if (state.members.length === 0) {
     tbody.innerHTML = '<tr><td colspan="'+colCount+'" style="color:var(--text-faint);padding:20px">'+t('noMembers')+'</td></tr>';
     return;
@@ -2381,8 +2322,23 @@ function renderAssignmentTableBody(tbody) {
     const assign = state.assignment ? state.assignment[p.id] : -1;
     const assignClass = assign >= 0 ? 'assign-T'+(assign+1) : 'assign-none';
     let assignContent = '-';
+    let scoreCell = '<td class="score-cell">-</td>';
     if (assign >= 0) {
       assignContent = svgIcon(SKILL_KEYS[state.trials[assign].skill], 22, 22);
+      const cfg = state.trials[assign];
+      const m = computePersonSkillMetrics(p, cfg.skill);
+      const targetLv = cfg.targetLevel || START_LV;
+      // 估算总分 = 期望秒贡献 × 该试炼在当前目标等级的单关时长
+      let singlePassTime = null;
+      if (state.result && state.result.cache[assign]) {
+        const teamMetrics = state.result.cache[assign].list.map(e => e.metrics);
+        singlePassTime = estimateSinglePassTime(teamMetrics, targetLv);
+      }
+      if (singlePassTime === null || singlePassTime <= 0) {
+        singlePassTime = estimateSinglePassTime([m], targetLv);
+      }
+      const total = Math.round(expectedRate(m, targetLv) * singlePassTime);
+      scoreCell = '<td class="score-cell" title="'+escHtml(t('estTotalScoreTip'))+'">'+total.toLocaleString()+'</td>';
     }
     let trialCells = '';
     for (let j = 0; j < state.trials.length; j++) {
@@ -2406,7 +2362,7 @@ function renderAssignmentTableBody(tbody) {
       const cmp = t(cmpKey);
       const adjPct = (delta >= 0 ? SUCCESS_ABOVE : SUCCESS_BELOW) * 100;
       const levelAdj = (delta >= 0 ? SUCCESS_ABOVE : SUCCESS_BELOW) * delta * 100;
-      const rawRate = SUCCESS_BASE * (1 + (delta >= 0 ? SUCCESS_ABOVE : SUCCESS_BELOW) * delta + m.successBonus);
+      const rawRate = SUCCESS_BASE + (delta >= 0 ? SUCCESS_ABOVE : SUCCESS_BELOW) * delta + m.successBonus;
       const fillTip = (tpl, map) => {
         let s = tpl;
         for (const k in map) s = s.split('{' + k + '}').join(map[k]);
@@ -2495,6 +2451,7 @@ function renderAssignmentTableBody(tbody) {
       '<td class="idx-cell">'+rowIdx+'</td>'+
       '<td class="assign-cell '+assignClass+'">'+assignContent+'</td>'+
       '<td class="name-cell">'+escHtml(p.name)+'</td>'+
+      scoreCell+
       trialCells+
     '</tr>';
   }).join('');
