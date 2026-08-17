@@ -2374,7 +2374,7 @@ function renderTrialCards() {
     let resultHtml = '';
     if (state.result && state.result.cache[j]) {
       const c = state.result.cache[j];
-      const rateStr = c.rateAtFinal.toFixed(1);
+      const rateStr = c.rateAtFinal.toFixed(2);
       const metrics = c.list.map(e => e.metrics);
       const estTotal = estimateTimeToLevel(metrics, targetLv);
       const estSingle = estimateSinglePassTime(metrics, targetLv);
@@ -2580,9 +2580,9 @@ function renderAssignmentTableBody(tbody) {
         global: pct2r(succSrc.global),
         building: pct2r(succSrc.building),
         shrine: pct2r(succSrc.shrine),
-        basePct: (SUCCESS_BASE*100).toFixed(1),
-        rawPct: (rawRate*100).toFixed(1),
-        pct: Math.round(sr*100)
+        basePct: (SUCCESS_BASE*100).toFixed(2),
+        rawPct: (rawRate*100).toFixed(2),
+        pct: (sr*100).toFixed(2)
       });
       const wpTip = fillTip(t('wpTip'), {
         effLv: m.effLevel,
@@ -2626,10 +2626,10 @@ function renderAssignmentTableBody(tbody) {
         pct: Math.round(m.dblP*100)
       });
       trialCells += '<td class="trial-lv-cell trial-group-start" title="'+escHtml(lvTip)+'">'+lv+'</td>';
-      trialCells += '<td class="assign-metric" title="'+escHtml(srTip)+'">'+Math.round(sr*100)+'%</td>';
+      trialCells += '<td class="assign-metric" title="'+escHtml(srTip)+'">'+(sr*100).toFixed(2)+'%</td>';
       trialCells += '<td class="assign-metric" title="'+escHtml(wpTip)+'">'+m.workP+'</td>';
-      trialCells += '<td class="assign-metric" title="'+escHtml(speedTip)+'">'+m.actionSeconds.toFixed(1)+'s</td>';
-      trialCells += '<td class="assign-metric" title="'+escHtml(dpTip)+'">'+Math.round(m.dblP*100)+'%</td>';
+      trialCells += '<td class="assign-metric" title="'+escHtml(speedTip)+'">'+m.actionSeconds.toFixed(2)+'s</td>';
+      trialCells += '<td class="assign-metric" title="'+escHtml(dpTip)+'">'+(m.dblP*100).toFixed(2)+'%</td>';
     }
     return '<tr>'+
       '<td class="idx-cell">'+rowIdx+'</td>'+
