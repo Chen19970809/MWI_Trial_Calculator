@@ -761,6 +761,7 @@ const I18N = {
     teamWork:'团队工作能力', nextClearNeeds:'下1次还需', pts:'点', perSec:'点/秒',
     targetLevel:'通关目标', estTime:'估算时间', reach:'到达',
     cumulativeTime:'累计', singlePassTime:'单关',
+    currentLevelNeeds:'当前等级所需分数', cumulativePts:'累计分数（累加之前等级）',
     estTotalScore:'当前等级估分', estTotalScoreTip:'成功率×[工作能力×(1-双倍概率)+工作能力×2×双倍概率]÷单次秒数×单关时长',
     estFinalScore:'估算最终分', estFinalScoreTip:'累加最后一级之前的分数 + 最后一级实际时间对应的估分',
     levelAboveTarget:'等级高于目标', levelBelowTarget:'等级低于目标',
@@ -824,6 +825,7 @@ const I18N = {
     teamWork:'Team Work', nextClearNeeds:'Next clear needs', pts:'pts', perSec:'pts/s',
     targetLevel:'Clear Target', estTime:'Est. Time', reach:'Reach',
     cumulativeTime:'Total', singlePassTime:'This pass',
+    currentLevelNeeds:'Current level needs', cumulativePts:'Cumulative score',
     estTotalScore:'Est. at Level', estTotalScoreTip:'success×[work×(1-doubleChance)+work×2×doubleChance]÷actionSec×passDuration',
     estFinalScore:'Est. Final', estFinalScoreTip:'sum of scores before final level + estimated score for final level actual time',
     levelAboveTarget:'level above target', levelBelowTarget:'level below target',
@@ -1279,13 +1281,13 @@ const TOOL_PREFIX_BONUS = {
 
 // 强化（enhancer）工具的前缀数值是例外的，
 const ENHANCER_PREFIX_BONUS = {
-  'cheese':    0.06,
-  'verdant':   0.09,
-  'azure':     0.12,
-  'burble':    0.18,
-  'crimson':   0.24,
-  'rainbow':   0.3,
-  'holy':      0.36,
+  'cheese':    0.006,
+  'verdant':   0.009,
+  'azure':     0.012,
+  'burble':    0.018,
+  'crimson':   0.024,
+  'rainbow':   0.03,
+  'holy':      0.036,
 };
 
 // 生活工具后缀 → 对应的 stats key。
@@ -2331,7 +2333,12 @@ function renderTrialCards() {
       const metrics = c.list.map(e => e.metrics);
       const estTotal = estimateTimeToLevel(metrics, targetLv);
       const estSingle = estimateSinglePassTime(metrics, targetLv);
-      resultHtml = '<div class="trial-result">'+t('reach')+' Lv'+c.finalLv+' &middot; '+c.passes+t('passes')+' &middot; '+c.list.length+'/'+c.max+t('people')+'<br>'+t('teamWork')+' '+c.sumWork+' &middot; ~'+rateStr+t('perSec')+' @ Lv'+c.finalLv+'<br>'+t('nextClearNeeds')+' '+c.reqNext+' '+t('pts')+'<br>'+t('targetLevel')+' '+targetLv+' &middot; '+t('cumulativeTime')+' '+formatDuration(estTotal)+' &middot; '+t('singlePassTime')+' '+formatDuration(estSingle)+'</div>';
+      const countMult = 1 + COUNT_INFLATION * c.list.length;
+      let cumulativePts = 0;
+      for (let p = 0; p < c.passes; p++) {
+        cumulativePts += Math.ceil((BASE_TOTAL_PT + PT_GROWTH * p) * countMult);
+      }
+      resultHtml = '<div class="trial-result">'+t('reach')+' Lv'+c.finalLv+' &middot; '+c.passes+t('passes')+' &middot; '+c.list.length+'/'+c.max+t('people')+'<br>'+t('teamWork')+' '+c.sumWork+' &middot; ~'+rateStr+t('perSec')+' @ Lv'+c.finalLv+'<br>'+t('currentLevelNeeds')+' '+c.reqNext.toLocaleString()+' '+t('pts')+' &middot; '+t('cumulativePts')+' '+cumulativePts.toLocaleString()+' '+t('pts')+'<br>'+t('targetLevel')+' '+targetLv+' &middot; '+t('cumulativeTime')+' '+formatDuration(estTotal)+' &middot; '+t('singlePassTime')+' '+formatDuration(estSingle)+'</div>';
     }
     return '<div class="trial-card">'+
       '<div class="trial-card-header">'+
