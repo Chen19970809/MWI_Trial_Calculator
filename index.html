@@ -700,7 +700,7 @@ table.member-table td.loadout-cell.loadout-empty { color:var(--text-faint); font
 </div>
 
 <div class="member-section">
-  <h2 id="h2-member"><button class="btn btn-sm view-tab" id="btn-view-assignment" onclick="setMemberView('assignment')">分配结果</button><button class="btn btn-sm view-tab" id="btn-view-members" onclick="setMemberView('members')">成员数据</button><button class="btn btn-sm" id="btn-add-member" onclick="addMember()">+ 添加成员</button></h2>
+  <h2 id="h2-member"><button class="btn btn-sm view-tab" id="btn-view-assignment" onclick="setMemberView('assignment')">分配结果</button><button class="btn btn-sm view-tab" id="btn-view-score" onclick="setMemberView('score')">分数估算</button><button class="btn btn-sm view-tab" id="btn-view-members" onclick="setMemberView('members')">成员数据</button><button class="btn btn-sm" id="btn-add-member" onclick="addMember()">+ 添加成员</button></h2>
   <div class="table-wrap">
     <table class="member-table">
       <thead id="member-thead"></thead>
@@ -716,7 +716,7 @@ table.member-table td.loadout-cell.loadout-empty { color:var(--text-faint); font
 // === i18n ===
 const I18N = {
   zh: {
-    title:'MWI 试炼计算器', trialConfig:'试炼配置', memberData:'成员数据', assignmentResult:'分配结果',
+    title:'MWI 试炼计算器', trialConfig:'试炼配置', memberData:'成员数据', assignmentResult:'分配结果', scoreEstimate:'分数估算',
     levelCol:'等级', successRateCol:'成功率', workPowerCol:'工作能力', speedCol:'单次速度', doubleProgressCol:'双倍概率',
     addMember:'添加成员', share:'共享设置', importData:'导入',
     exportScript:'下载脚本',
@@ -763,8 +763,14 @@ const I18N = {
     cumulativeTime:'累计', singlePassTime:'单关',
     currentLevelNeeds:'当前等级所需分数', cumulativePts:'累计分数',
     finalRatio:'最终比例',
-    estTotalScore:'当前等级估分', estTotalScoreTip:'成功率×[工作能力×(1-双倍概率)+工作能力×2×双倍概率]÷单次秒数×单关时长',
-    estFinalScore:'估算最终分', estFinalScoreTip:'累加最后一级之前的分数 + 最后一级实际时间对应的估分',
+    levelScore:'本级分数', levelScoreTip:'成功率×[工作能力×(1-双倍概率)+工作能力×2×双倍概率]÷单次秒数×单关时长',
+    levelNeeded:'本级共需分数', levelNeededTip:'根据当前目标等级和人数计算的同关当前等级需要的分数',
+    cumulativeScore:'当前累积分数', cumulativeScoreTip:'此人累加到当前选择的目标等级分数',
+    totalNeeded:'当前共需分数', totalNeededTip:'累加到当前目标等级所需的分数',
+    levelRatio:'当前供需比', levelRatioTip:'本级分数 ÷ 本级共需分数',
+    cumulativeRatio:'累计供需比', cumulativeRatioTip:'当前累积分数 ÷ 当前共需分数',
+    estTotalScore:'本级分数/本级共需分数', estTotalScoreTip:'当前分：成功率×[工作能力×(1-双倍概率)+工作能力×2×双倍概率]÷单次秒数×单关时长\n当前所需：根据当前目标等级和人数计算的同关当前等级需要的分数',
+    estFinalScore:'当前累积分数/当前共需分数', estFinalScoreTip:'当前累积分数：此人累加到当前级贡献的分数\n当前共需分数：累加到当前目标等级所需的分数',
     levelAboveTarget:'等级高于目标', levelBelowTarget:'等级低于目标',
     lvTip:'基础等级 {base}（成员技能等级）\n+ 公会建筑等级加成 {building} 级\n= 有效等级 {eff}\n（装备 {equip} / 成就 {achievement} / Buff 房屋{buffHouse}/全服{buffServer}/其他{buffOther} / 全局 {global} / 神龛 {shrine} 的等级加成已移出，不计入有效等级）',
     srTip:'等级差 = 有效等级 {effLv} − 目标等级 {targetLv} = {delta}（{cmp}，每级 {adjPct}%）\n等级成功率加成 = {delta} × {adjPct}% = {levelAdj}%\n额外成功率加成 = {successBonus}%（装备 {equip}% / 成就 {achievement}% / Buff 房屋{buffHouse}%/全服{buffServer}%/其他{buffOther}% / 全局 {global}% / 建筑 {building}% / 神龛 {shrine}%）\n基础成功率 = {basePct}%\n最终成功率 = {basePct}% × (1 + {levelAdj}% + {successBonus}%) = {rawPct}% → 限制后 {pct}%',
@@ -781,7 +787,7 @@ const I18N = {
     extraLoadoutOrder:['ShadowArcher','PyreHunter','FrostSniper','Siren','Salamander','Dryad','GiantScorpion','GiantMantis','Cyclops','Mimic'],
   },
   en: {
-    title:'MWI Trial Calculator', trialConfig:'Trial Config', memberData:'Member Data', assignmentResult:'Assignment',
+    title:'MWI Trial Calculator', trialConfig:'Trial Config', memberData:'Member Data', assignmentResult:'Assignment', scoreEstimate:'Score Estimate',
     levelCol:'Lv', successRateCol:'Success', workPowerCol:'Work', speedCol:'Speed', doubleProgressCol:'Double Chance',
     addMember:'Add Member', share:'Share', importData:'Import',
     exportScript:'Download Script',
@@ -828,8 +834,14 @@ const I18N = {
     cumulativeTime:'Total', singlePassTime:'This pass',
     currentLevelNeeds:'Current level needs', cumulativePts:'Cumulative score',
     finalRatio:'Final ratio',
-    estTotalScore:'Est. at Level', estTotalScoreTip:'success×[work×(1-doubleChance)+work×2×doubleChance]÷actionSec×passDuration',
-    estFinalScore:'Est. Final', estFinalScoreTip:'sum of scores before final level + estimated score for final level actual time',
+    levelScore:'Level score', levelScoreTip:'success×[work×(1-doubleChance)+work×2×doubleChance]÷actionSec×passDuration',
+    levelNeeded:'Level needed', levelNeededTip:'points required for the current target level based on member count',
+    cumulativeScore:'Cumulative score', cumulativeScoreTip:'this person\'s cumulative score up to the selected target level',
+    totalNeeded:'Total needed', totalNeededTip:'total points required up to the current target level',
+    levelRatio:'Level ratio', levelRatioTip:'level score ÷ level needed',
+    cumulativeRatio:'Cumulative ratio', cumulativeRatioTip:'cumulative score ÷ total needed',
+    estTotalScore:'Score/Needed', estTotalScoreTip:'Score: success×[work×(1-doubleChance)+work×2×doubleChance]÷actionSec×passDuration\nNeeded: points required for the current target level based on member count',
+    estFinalScore:'Cumulative/Total needed', estFinalScoreTip:'Cumulative score: this person\'s cumulative contribution up to the current level\nTotal needed: total points required up to the current target level',
     levelAboveTarget:'level above target', levelBelowTarget:'level below target',
     lvTip:'Base level {base} (member skill level)\n+ Guild building level bonus {building} lv\n= Effective level {eff}\n(Equipment {equip} / achievement {achievement} / buff house{buffHouse}/server{buffServer}/other{buffOther} / global {global} / shrine {shrine} level bonuses are excluded from effective level)',
     srTip:'Level delta = effective level {effLv} − target level {targetLv} = {delta} ({cmp}, {adjPct}% per level)\nLevel success bonus = {delta} × {adjPct}% = {levelAdj}%\nExtra success bonus = {successBonus}% (equipment {equip}% / achievement {achievement}% / buff house{buffHouse}%/server{buffServer}%/other{buffOther}% / global {global}% / building {building}% / shrine {shrine}%)\nBase success rate = {basePct}%\nFinal success rate = {basePct}% × (1 + {levelAdj}% + {successBonus}%) = {rawPct}% → capped {pct}%',
@@ -1771,10 +1783,18 @@ function estimateSinglePassTime(metricsList, targetLv) {
 // 最后一级若未完整通关，则按实际剩余时间 × 该成员在该级的期望秒贡献来估算。
 function estimateFinalScoreForPerson(personMetrics, teamMetrics) {
   if (!personMetrics || !Array.isArray(teamMetrics) || teamMetrics.length === 0) return 0;
+  return estimateScoreToLevel(personMetrics, teamMetrics, Infinity);
+}
+
+// 估算某个成员随团队一起推进，累加到 targetLv（含 targetLv 这一级）时的个人贡献分数。
+// 算法与 estimateFinalScoreForPerson 相同，但到 targetLv 即停止，超出目标等级的部分不计入。
+function estimateScoreToLevel(personMetrics, teamMetrics, targetLv) {
+  if (!personMetrics || !Array.isArray(teamMetrics) || teamMetrics.length === 0) return 0;
   const countMult = 1 + COUNT_INFLATION * teamMetrics.length;
+  const targetPassIndex = Math.max(0, Math.floor((targetLv - START_LV) / LV_PER_PASS));
   let T = START_LV, passes = 0, carry = 0, timeLeft = TRIAL_DURATION;
   let totalScore = 0;
-  while (timeLeft > 1e-9 && passes < MAX_PASS_GUARD) {
+  while (timeLeft > 1e-9 && passes <= targetPassIndex && passes < MAX_PASS_GUARD) {
     let teamRate = 0;
     for (const m of teamMetrics) teamRate += expectedRate(m, T);
     const personRate = expectedRate(personMetrics, T);
@@ -2110,12 +2130,12 @@ function renderGuildShrineInputs() {
   }
 }
 
-// 成员区两个视图：'assignment'（分配结果，默认，只读简表）/ 'members'（成员数据，完整编辑表）。
+// 成员区三个视图：'assignment'（分配结果，默认）/ 'score'（分数估算，成员可查看）/ 'members'（成员数据，完整编辑表，仅会长）。
 // 切换只影响本地渲染，不动数据；选择持久化到 localStorage。
 function setMemberView(view) {
   // 《成员数据》视图仅会长端可用；非会长即使绕过按钮隐藏也切不过去
   if (view === 'members' && !isGuildLeader()) view = 'assignment';
-  state.memberView = (view === 'members') ? 'members' : 'assignment';
+  state.memberView = (view === 'members') ? 'members' : (view === 'score' ? 'score' : 'assignment');
   try { localStorage.setItem('mwi_member_view', state.memberView); } catch(e) {}
   syncMemberViewTabs();
   renderTableHeader();
@@ -2123,15 +2143,17 @@ function setMemberView(view) {
 }
 function syncMemberViewTabs() {
   const a = document.getElementById('btn-view-assignment');
+  const s = document.getElementById('btn-view-score');
   const m = document.getElementById('btn-view-members');
   const add = document.getElementById('btn-add-member');
   const leader = isGuildLeader();
-  // 非会长端：不显示《成员数据》/《+ 添加成员》，并强制停留在分配结果视图。
+  // 非会长端：不显示《成员数据》/《+ 添加成员》。
   // 只改内存 state 不写 localStorage：若之后拿到 Master Key 成为会长，原来的视图偏好还在。
   if (!leader && state.memberView === 'members') state.memberView = 'assignment';
   if (m) m.style.display = leader ? '' : 'none';
   if (add) add.style.display = leader ? '' : 'none';
-  if (a) a.classList.toggle('active', state.memberView !== 'members');
+  if (a) a.classList.toggle('active', state.memberView === 'assignment');
+  if (s) s.classList.toggle('active', state.memberView === 'score');
   if (m) m.classList.toggle('active', state.memberView === 'members');
 }
 
@@ -2139,14 +2161,12 @@ function renderTableHeader() {
   const thead = document.getElementById('member-thead');
   if (state.memberView === 'assignment') {
     // 分配结果视图（两行表头）：
-    //   行1: 序号 | 分配 | 角色名 | 当前等级估分 | 估算最终分 | 试炼1(跨5列) | 试炼2(跨5列) | ...
+    //   行1: 序号 | 分配 | 角色名 | 试炼1(跨5列) | 试炼2(跨5列) | ...
     //   行2: 每个试炼下 等级 | 成功率 | 工作能力 | 单次速度 | 双倍概率
     let row1 = '<tr>';
     row1 += '<th class="idx-col" rowspan="2">'+t('indexCol')+'</th>';
     row1 += '<th class="assign-col" rowspan="2">'+t('assignCol')+'</th>';
     row1 += '<th class="name-col" rowspan="2">'+t('nameCol')+'</th>';
-    row1 += '<th class="score-col" rowspan="2" title="'+escHtml(t('estTotalScoreTip'))+'">'+t('estTotalScore')+'</th>';
-    row1 += '<th class="final-score-col" rowspan="2" title="'+escHtml(t('estFinalScoreTip'))+'">'+t('estFinalScore')+'</th>';
     for (let j = 0; j < state.trials.length; j++) {
       const cfg = state.trials[j];
       row1 += '<th class="skill-col trial-group-start" colspan="5" title="'+escHtml(t('trial')+' '+(j+1)+' · '+skillLabel(cfg.skill))+'">'+svgIcon(SKILL_KEYS[cfg.skill],20,20)+'</th>';
@@ -2162,6 +2182,22 @@ function renderTableHeader() {
     }
     row2 += '</tr>';
     thead.innerHTML = row1 + row2;
+    return;
+  }
+  if (state.memberView === 'score') {
+    // 分数估算视图：序号 | 分配 | 角色名 | 本级分数 | 本级共需 | 当前供需比 | 当前累积分数 | 当前共需 | 累计供需比
+    let html = '<tr>';
+    html += '<th class="idx-col">'+t('indexCol')+'</th>';
+    html += '<th class="assign-col">'+t('assignCol')+'</th>';
+    html += '<th class="name-col">'+t('nameCol')+'</th>';
+    html += '<th class="score-col" title="'+escHtml(t('levelScoreTip'))+'">'+t('levelScore')+'</th>';
+    html += '<th class="score-col" title="'+escHtml(t('levelNeededTip'))+'">'+t('levelNeeded')+'</th>';
+    html += '<th class="score-col" title="'+escHtml(t('levelRatioTip'))+'">'+t('levelRatio')+'</th>';
+    html += '<th class="final-score-col" title="'+escHtml(t('cumulativeScoreTip'))+'">'+t('cumulativeScore')+'</th>';
+    html += '<th class="final-score-col" title="'+escHtml(t('totalNeededTip'))+'">'+t('totalNeeded')+'</th>';
+    html += '<th class="final-score-col" title="'+escHtml(t('cumulativeRatioTip'))+'">'+t('cumulativeRatio')+'</th>';
+    html += '</tr>';
+    thead.innerHTML = html;
     return;
   }
   let html = '<tr>';
@@ -2193,6 +2229,8 @@ function updateStaticText() {
   document.getElementById('h1-title').textContent = t('title');
   document.getElementById('h2-trial').textContent = t('trialConfig');
   document.getElementById('btn-view-assignment').textContent = t('assignmentResult');
+  const scoreBtn = document.getElementById('btn-view-score');
+  if (scoreBtn) scoreBtn.textContent = t('scoreEstimate');
   document.getElementById('btn-view-members').textContent = t('memberData');
   const gbTitle = document.getElementById('h3-global-buff');
   if (gbTitle) gbTitle.firstChild.textContent = t('globalBuffs') + ' ';
@@ -2363,13 +2401,9 @@ function renderTrialCards() {
   }).join('');
 }
 
-// 分配结果视图：仅展示 序号 / 分配 / 角色名 / 当前等级估分 / 估算最终分 / 每个试炼的 等级·成功率·工作能力·单次速度·双倍概率（只读）。
-// 指标直接复用试炼算法：
-//   workP/dblP 来自 computePersonSkillMetrics（装备+个人buff+全局buff 已全部计入）；
-//   成功率 = successRate(effLevel, T, successBonus)，T 优先取该试炼计算后的最终等级
-//   （与试炼卡 "@ Lv finalLv" 语义一致），未计算时退回起始等级 START_LV。
-function renderAssignmentTableBody(tbody) {
-  const colCount = 5 + state.trials.length * 5;
+// 分数估算视图：仅展示 序号 / 分配 / 角色名 / 本级分数 / 本级共需 / 当前累积分数 / 当前共需。
+function renderScoreEstimateTableBody(tbody) {
+  const colCount = 9;
   if (state.members.length === 0) {
     tbody.innerHTML = '<tr><td colspan="'+colCount+'" style="color:var(--text-faint);padding:20px">'+t('noMembers')+'</td></tr>';
     return;
@@ -2378,16 +2412,19 @@ function renderAssignmentTableBody(tbody) {
     const assign = state.assignment ? state.assignment[p.id] : -1;
     const assignClass = assign >= 0 ? 'assign-T'+(assign+1) : 'assign-none';
     let assignContent = '-';
-    let scoreCell = '<td class="score-cell">-</td>';
-    let finalScoreCell = '<td class="final-score-cell">-</td>';
+    let levelScoreCell = '<td class="score-cell">-</td>';
+    let levelNeededCell = '<td class="score-cell">-</td>';
+    let levelRatioCell = '<td class="score-cell">-</td>';
+    let cumulativeScoreCell = '<td class="final-score-cell">-</td>';
+    let totalNeededCell = '<td class="final-score-cell">-</td>';
+    let cumulativeRatioCell = '<td class="final-score-cell">-</td>';
     if (assign >= 0) {
       assignContent = svgIcon(SKILL_KEYS[state.trials[assign].skill], 22, 22);
       const cfg = state.trials[assign];
       const m = computePersonSkillMetrics(p, cfg.skill);
       const targetLv = cfg.targetLevel || START_LV;
-      // 当前等级估分 = 期望秒贡献 × 该试炼在当前目标等级的单关时长
-      let singlePassTime = null;
       let teamMetrics = null;
+      let singlePassTime = null;
       if (state.result && state.result.cache[assign]) {
         teamMetrics = state.result.cache[assign].list.map(e => e.metrics);
         singlePassTime = estimateSinglePassTime(teamMetrics, targetLv);
@@ -2395,13 +2432,57 @@ function renderAssignmentTableBody(tbody) {
       if (singlePassTime === null || singlePassTime <= 0) {
         singlePassTime = estimateSinglePassTime([m], targetLv);
       }
-      const total = Math.round(expectedRate(m, targetLv) * singlePassTime);
-      scoreCell = '<td class="score-cell" title="'+escHtml(t('estTotalScoreTip'))+'">'+total.toLocaleString()+'</td>';
-      // 估算最终分 = 累加最后一级之前的分数 + 最后一级实际时间对应的估分
-      const finalScore = teamMetrics && teamMetrics.length > 0
-        ? estimateFinalScoreForPerson(m, teamMetrics)
-        : estimateFinalScoreForPerson(m, [m]);
-      finalScoreCell = '<td class="final-score-cell" title="'+escHtml(t('estFinalScoreTip'))+'">'+finalScore.toLocaleString()+'</td>';
+      const levelScore = Math.round(expectedRate(m, targetLv) * singlePassTime);
+      const countMult = 1 + COUNT_INFLATION * (teamMetrics ? teamMetrics.length : 1);
+      const targetPassIndex = Math.max(0, Math.floor((targetLv - START_LV) / LV_PER_PASS));
+      const levelNeeded = Math.ceil((BASE_TOTAL_PT + PT_GROWTH * targetPassIndex) * countMult);
+      const levelRatio = levelNeeded > 0 ? (levelScore / levelNeeded * 100).toFixed(2) + '%' : '-';
+      const cumulativeScore = teamMetrics && teamMetrics.length > 0
+        ? estimateScoreToLevel(m, teamMetrics, targetLv)
+        : estimateScoreToLevel(m, [m], targetLv);
+      let totalNeeded = 0;
+      for (let pIdx = 0; pIdx <= targetPassIndex; pIdx++) {
+        totalNeeded += Math.ceil((BASE_TOTAL_PT + PT_GROWTH * pIdx) * countMult);
+      }
+      const cumulativeRatio = totalNeeded > 0 ? (cumulativeScore / totalNeeded * 100).toFixed(2) + '%' : '-';
+      levelScoreCell = '<td class="score-cell" title="'+escHtml(t('levelScoreTip'))+'">'+levelScore.toLocaleString()+'</td>';
+      levelNeededCell = '<td class="score-cell" title="'+escHtml(t('levelNeededTip'))+'">'+levelNeeded.toLocaleString()+'</td>';
+      levelRatioCell = '<td class="score-cell" title="'+escHtml(t('levelRatioTip'))+'">'+levelRatio+'</td>';
+      cumulativeScoreCell = '<td class="final-score-cell" title="'+escHtml(t('cumulativeScoreTip'))+'">'+cumulativeScore.toLocaleString()+'</td>';
+      totalNeededCell = '<td class="final-score-cell" title="'+escHtml(t('totalNeededTip'))+'">'+totalNeeded.toLocaleString()+'</td>';
+      cumulativeRatioCell = '<td class="final-score-cell" title="'+escHtml(t('cumulativeRatioTip'))+'">'+cumulativeRatio+'</td>';
+    }
+    return '<tr>'+
+      '<td class="idx-cell">'+rowIdx+'</td>'+
+      '<td class="assign-cell '+assignClass+'">'+assignContent+'</td>'+
+      '<td class="name-cell">'+escHtml(p.name)+'</td>'+
+      levelScoreCell+
+      levelNeededCell+
+      levelRatioCell+
+      cumulativeScoreCell+
+      totalNeededCell+
+      cumulativeRatioCell+
+    '</tr>';
+  }).join('');
+}
+
+// 分配结果视图：仅展示 序号 / 分配 / 角色名 / 每个试炼的 等级·成功率·工作能力·单次速度·双倍概率（只读）。
+// 指标直接复用试炼算法：
+//   workP/dblP 来自 computePersonSkillMetrics（装备+个人buff+全局buff 已全部计入）；
+//   成功率 = successRate(effLevel, T, successBonus)，T 优先取该试炼计算后的最终等级
+//   （与试炼卡 "@ Lv finalLv" 语义一致），未计算时退回起始等级 START_LV。
+function renderAssignmentTableBody(tbody) {
+  const colCount = 3 + state.trials.length * 5;
+  if (state.members.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="'+colCount+'" style="color:var(--text-faint);padding:20px">'+t('noMembers')+'</td></tr>';
+    return;
+  }
+  tbody.innerHTML = state.members.map((p, rowIdx) => {
+    const assign = state.assignment ? state.assignment[p.id] : -1;
+    const assignClass = assign >= 0 ? 'assign-T'+(assign+1) : 'assign-none';
+    let assignContent = '-';
+    if (assign >= 0) {
+      assignContent = svgIcon(SKILL_KEYS[state.trials[assign].skill], 22, 22);
     }
     let trialCells = '';
     for (let j = 0; j < state.trials.length; j++) {
@@ -2514,8 +2595,6 @@ function renderAssignmentTableBody(tbody) {
       '<td class="idx-cell">'+rowIdx+'</td>'+
       '<td class="assign-cell '+assignClass+'">'+assignContent+'</td>'+
       '<td class="name-cell">'+escHtml(p.name)+'</td>'+
-      scoreCell+
-      finalScoreCell+
       trialCells+
     '</tr>';
   }).join('');
@@ -2525,6 +2604,10 @@ function renderMemberTable() {
   const tbody = document.getElementById('member-tbody');
   if (state.memberView === 'assignment') {
     renderAssignmentTableBody(tbody);
+    return;
+  }
+  if (state.memberView === 'score') {
+    renderScoreEstimateTableBody(tbody);
     return;
   }
   if (state.members.length === 0) {
