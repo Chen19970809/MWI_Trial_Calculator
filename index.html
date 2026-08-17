@@ -761,7 +761,8 @@ const I18N = {
     teamWork:'团队工作能力', nextClearNeeds:'下1次还需', pts:'点', perSec:'点/秒',
     targetLevel:'通关目标', estTime:'估算时间', reach:'到达',
     cumulativeTime:'累计', singlePassTime:'单关',
-    currentLevelNeeds:'当前等级所需分数', cumulativePts:'累计分数（累加之前等级）',
+    currentLevelNeeds:'当前等级所需分数', cumulativePts:'累计分数',
+    finalRatio:'最终比例',
     estTotalScore:'当前等级估分', estTotalScoreTip:'成功率×[工作能力×(1-双倍概率)+工作能力×2×双倍概率]÷单次秒数×单关时长',
     estFinalScore:'估算最终分', estFinalScoreTip:'累加最后一级之前的分数 + 最后一级实际时间对应的估分',
     levelAboveTarget:'等级高于目标', levelBelowTarget:'等级低于目标',
@@ -826,6 +827,7 @@ const I18N = {
     targetLevel:'Clear Target', estTime:'Est. Time', reach:'Reach',
     cumulativeTime:'Total', singlePassTime:'This pass',
     currentLevelNeeds:'Current level needs', cumulativePts:'Cumulative score',
+    finalRatio:'Final ratio',
     estTotalScore:'Est. at Level', estTotalScoreTip:'success×[work×(1-doubleChance)+work×2×doubleChance]÷actionSec×passDuration',
     estFinalScore:'Est. Final', estFinalScoreTip:'sum of scores before final level + estimated score for final level actual time',
     levelAboveTarget:'level above target', levelBelowTarget:'level below target',
@@ -2334,11 +2336,20 @@ function renderTrialCards() {
       const estTotal = estimateTimeToLevel(metrics, targetLv);
       const estSingle = estimateSinglePassTime(metrics, targetLv);
       const countMult = 1 + COUNT_INFLATION * c.list.length;
+      const targetPassIndex = Math.max(0, Math.floor((targetLv - START_LV) / LV_PER_PASS));
+      const targetLevelNeeds = Math.ceil((BASE_TOTAL_PT + PT_GROWTH * targetPassIndex) * countMult);
       let cumulativePts = 0;
-      for (let p = 0; p < c.passes; p++) {
+      for (let p = 0; p <= targetPassIndex; p++) {
         cumulativePts += Math.ceil((BASE_TOTAL_PT + PT_GROWTH * p) * countMult);
       }
-      resultHtml = '<div class="trial-result">'+t('reach')+' Lv'+c.finalLv+' &middot; '+c.passes+t('passes')+' &middot; '+c.list.length+'/'+c.max+t('people')+'<br>'+t('teamWork')+' '+c.sumWork+' &middot; ~'+rateStr+t('perSec')+' @ Lv'+c.finalLv+'<br>'+t('currentLevelNeeds')+' '+c.reqNext.toLocaleString()+' '+t('pts')+' &middot; '+t('cumulativePts')+' '+cumulativePts.toLocaleString()+' '+t('pts')+'<br>'+t('targetLevel')+' '+targetLv+' &middot; '+t('cumulativeTime')+' '+formatDuration(estTotal)+' &middot; '+t('singlePassTime')+' '+formatDuration(estSingle)+'</div>';
+      const finalPassIndex = Math.max(0, Math.floor((c.finalLv - START_LV) / LV_PER_PASS));
+      const finalLevelNeeds = Math.ceil((BASE_TOTAL_PT + PT_GROWTH * finalPassIndex) * countMult);
+      let totalFinalScore = 0;
+      for (const e of c.list) {
+        totalFinalScore += estimateFinalScoreForPerson(e.metrics, metrics);
+      }
+      const finalRatio = finalLevelNeeds > 0 ? (totalFinalScore / finalLevelNeeds * 100).toFixed(2) + '%' : '-';
+      resultHtml = '<div class="trial-result">'+t('reach')+' Lv'+c.finalLv+' &middot; '+c.passes+t('passes')+' &middot; '+c.list.length+'/'+c.max+t('people')+'<br>'+t('teamWork')+' '+c.sumWork+' &middot; ~'+rateStr+t('perSec')+' @ Lv'+c.finalLv+'<br>'+t('currentLevelNeeds')+' '+targetLevelNeeds.toLocaleString()+' '+t('pts')+' &middot; '+t('cumulativePts')+' '+cumulativePts.toLocaleString()+' '+t('pts')+' &middot; '+t('finalRatio')+' '+finalRatio+'<br>'+t('targetLevel')+' '+targetLv+' &middot; '+t('cumulativeTime')+' '+formatDuration(estTotal)+' &middot; '+t('singlePassTime')+' '+formatDuration(estSingle)+'</div>';
     }
     return '<div class="trial-card">'+
       '<div class="trial-card-header">'+
