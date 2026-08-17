@@ -1,5 +1,5 @@
 // ==UserScript==
-// @name         银河奶牛角色数据导出（单成员迷宫配装版）
+// @name         单角色迷宫配装上传
 // @namespace    https://www.milkywayidle.com/
 // @version      0.1.0
 // @description  Export ONLY your own MWI character profile (skills + every labyrinth loadout). Send directly to the trial calculator page via URL hash, or download as JSON. Currently-equipped gear is intentionally NOT exported.
