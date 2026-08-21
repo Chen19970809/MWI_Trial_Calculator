@@ -751,9 +751,9 @@ const I18N = {
     buffEnhancingSpeed:'强化速度', buffEnhancingSpeedTip:'仅对强化技能的动作速度生效，当前等级 +{pct}%。',
     levelUnit:'级',
     guildBuildings:'公会建筑', guildBuildingsTip:'每级房子为对应技能/属性 +2 有效等级（仅本地保存）。',
-    guildShrines:'公会神龛', guildShrinesTip:'力量每级 +0.5% 效率，节奏每级 +0.5% 行动速度（仅本地保存）。',
+    guildShrines:'公会神龛', guildShrinesTip:'力量每级 +0.5% 效率，节奏每级 +0.5% 行动速度，建造者殿堂每级 +2% 公会代币（仅本地保存）。',
     buildingLabels:['挤奶','采摘','伐木','奶酪锻造','制作','缝纫','烹饪','冲泡','炼金','强化','耐力','智力','攻击','防御','近战','远程','魔法'],
-    shrinePower:'力量', shrineTempo:'节奏',
+    shrinePower:'力量', shrineTempo:'节奏', shrineBuilder:'建造者殿堂',
     shareHint:'会长创建共享空间后，生成分享链接发给成员。成员打开链接即可查看/更新数据，无需注册。',
     currentUrl:'当前共享链接', createShare:'创建共享', closeBtn:'关闭',
     shareCreated:'共享空间已创建！复制链接发给公会成员。', linkCopied:'链接已复制',
@@ -823,9 +823,9 @@ const I18N = {
     buffEnhancingSpeed:'Enhancing Spd', buffEnhancingSpeedTip:'Applies only to the Enhancing skill as action speed. Current level +{pct}%.',
     levelUnit:'lv',
     guildBuildings:'Guild Buildings', guildBuildingsTip:'Each house level gives +2 effective levels to its skill/attribute. Stored locally only.',
-    guildShrines:'Guild Shrines', guildShrinesTip:'Power gives +0.5% efficiency per level; Tempo gives +0.5% action speed per level. Stored locally only.',
+    guildShrines:'Guild Shrines', guildShrinesTip:'Power gives +0.5% efficiency per level; Tempo gives +0.5% action speed per level; Builder Hall gives +2% guild tokens per level. Stored locally only.',
     buildingLabels:['Milking','Foraging','Woodcutting','Cheesesmithing','Crafting','Tailoring','Cooking','Brewing','Alchemy','Enhancing','Stamina','Intelligence','Attack','Defense','Melee','Ranged','Magic'],
-    shrinePower:'Power', shrineTempo:'Tempo',
+    shrinePower:'Power', shrineTempo:'Tempo', shrineBuilder:'Builder Hall',
     shareHint:'After the leader creates a shared space, share the link with members. Members can view/update data without registration.',
     currentUrl:'Current Share URL', createShare:'Create Share', closeBtn:'Close',
     shareCreated:'Share space created! Copy the link to share with guild members.', linkCopied:'Link copied',
@@ -1750,8 +1750,8 @@ const GUILD_BUILDING_KEYS = ['milking','foraging','woodcutting','cheesesmithing'
 const GUILD_BUILDING_LIFE_KEYS = ['milking','foraging','woodcutting','cheesesmithing','crafting','tailoring','cooking','brewing','alchemy','enhancing'];
 const GUILD_BUILDING_COMBAT_KEYS = ['stamina','intelligence','attack','defense','melee','ranged','magic'];
 const GUILD_BUILDING_MAX_LEVEL = 50;
-// 公会神龛：力量 +0.5% 效率/级，节奏 +0.5% 行动速度/级。
-const GUILD_SHRINE_KEYS = ['power','tempo'];
+// 公会神龛：力量 +0.5% 效率/级，节奏 +0.5% 行动速度/级。建造者殿堂 +2% 公会代币/级。
+const GUILD_SHRINE_KEYS = ['power','tempo','builder'];
 const GUILD_SHRINE_MAX_LEVEL = 50;
 
 // === State ===
@@ -1787,8 +1787,8 @@ let state = {
   globalBuffs: { gathering: 0, production: 0, enhancingSpeed: 0 },
   // 公会建筑：每座房子对应一个技能/属性，每级 +2 有效等级。仅本地保存。
   guildBuildings: GUILD_BUILDING_KEYS.reduce((o,k)=>(o[k]=0,o),{}),
-  // 公会神龛：力量 +0.5% 效率/级，节奏 +0.5% 速度/级。仅本地保存。
-  guildShrines: { power: 0, tempo: 0 }
+  // 公会神龛：力量 +0.5% 效率/级，节奏 +0.5% 速度/级，建造者殿堂 +2% 公会代币/级。仅本地保存。
+  guildShrines: { power: 0, tempo: 0, builder: 0 }
 };
 let pickerState = { memberId:null, slot:null, iconId:null, enhance:0 };
 
@@ -2665,6 +2665,12 @@ function tokenReward(metricsList) {
     const progress = required > 0 && rate > 0 ? Math.min(1, rate * sim.timeLeft / required) : 0;
     total += currentReward * (progress / 2);
   }
+  // 建造者殿堂：每级 +2% 公会代币。
+  const shrines = state.guildShrines || {};
+  const builderLv = Math.max(0, Math.min(GUILD_SHRINE_MAX_LEVEL, Math.floor(Number(shrines.builder) || 0)));
+  if (builderLv > 0) {
+    total *= (1 + builderLv * 0.02);
+  }
   return total;
 }
 
@@ -3011,6 +3017,7 @@ function loadGuildBuffs() {
       if (obj && typeof obj === 'object') {
         state.guildShrines.power = Math.max(0, Math.floor(Number(obj.power) || 0));
         state.guildShrines.tempo = Math.max(0, Math.floor(Number(obj.tempo) || 0));
+        state.guildShrines.builder = Math.max(0, Math.floor(Number(obj.builder) || 0));
       }
     }
   } catch(e) {}
@@ -3030,7 +3037,7 @@ function updateGuildBuilding(key, val) {
   syncGuildBuildingInputs();
 }
 function updateGuildShrine(key, val) {
-  if (!state.guildShrines) state.guildShrines = { power:0, tempo:0 };
+  if (!state.guildShrines) state.guildShrines = { power:0, tempo:0, builder:0 };
   state.guildShrines[key] = Math.max(0, Math.min(GUILD_SHRINE_MAX_LEVEL, Math.floor(Number(val) || 0)));
   saveGuildShrines();
   if (state.members && state.members.length > 0 && state.result) calculate();
