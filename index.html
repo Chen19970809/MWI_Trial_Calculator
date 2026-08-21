@@ -725,7 +725,7 @@ const I18N = {
     calculate:'计算最优分配', assignCol:'分配', nameCol:'角色名', maxMembers:'人数上限',
     noAssign:'(暂无分配)', noMembers:'暂无成员数据，请添加成员或导入 JSON',
     loadoutCol:'配装', loadoutSuffix:'配装', noLoadout:'空配装',
-    totalFinalLv:'总最终等级', totalPasses:'总通关', assigned:'已分配', unassigned:'未分配',
+    totalFinalLv:'总最终等级', totalPasses:'总通关', totalTokens:'总代币', tokens:'代币', assigned:'已分配', unassigned:'未分配',
     deleteBtn:'删', selectEquip:'选择装备', searchEquip:'搜索装备...',
     enhanceLevel:'强化等级', clear:'清除', cancel:'取消', confirm:'确认',
     noEquip:'未选择装备', passes:'次通关', people:'人', offlineMode:'离线模式',
@@ -797,7 +797,7 @@ const I18N = {
     calculate:'Calculate', assignCol:'Assign', nameCol:'Name', maxMembers:'Max',
     noAssign:'(None)', noMembers:'No member data. Add members or import JSON.',
     loadoutCol:'Loadout', loadoutSuffix:' Loadout', noLoadout:'(no loadout)',
-    totalFinalLv:'Total Final Lv', totalPasses:'Total Passes', assigned:'Assigned', unassigned:'Unassigned',
+    totalFinalLv:'Total Final Lv', totalPasses:'Total Passes', totalTokens:'Total Tokens', tokens:'Tokens', assigned:'Assigned', unassigned:'Unassigned',
     deleteBtn:'Del', selectEquip:'Select Equipment', searchEquip:'Search equipment...',
     enhanceLevel:'Enhancement Level', clear:'Clear', cancel:'Cancel', confirm:'Confirm',
     noEquip:'No equipment selected', passes:'passes', people:'people', offlineMode:'Offline',
@@ -2644,6 +2644,30 @@ function computePasses(metricsList) {
 
 function finalLv(metricsList) { return START_LV + LV_PER_PASS * computePasses(metricsList); }
 
+// 根据通关次数与未完成进度计算该地区可获取的代币数。
+// 100 级完成=200，每 10 级 +100；未完成层只获得进度一半的奖励。
+// 未完成进度按“剩余时间 × 当前等级秒贡献 / 当前等级需求”计算，与 UI 最终比例口径一致。
+function tokenReward(metricsList) {
+  const N = metricsList.length;
+  if (N === 0) return 0;
+  const sim = simulateTrialProgress(metricsList);
+  let total = 0;
+  for (let i = 0; i < sim.passes; i++) {
+    total += 200 + i * 100;
+  }
+  if (sim.passes < MAX_PASS_GUARD && sim.timeLeft > 0) {
+    const currentReward = 200 + sim.passes * 100;
+    const currentLv = START_LV + sim.passes * LV_PER_PASS;
+    let rate = 0;
+    for (const m of metricsList) rate += expectedRate(m, currentLv);
+    const countMult = 1 + COUNT_INFLATION * N;
+    const required = (BASE_TOTAL_PT + PT_GROWTH * sim.passes) * countMult;
+    const progress = required > 0 && rate > 0 ? Math.min(1, rate * sim.timeLeft / required) : 0;
+    total += currentReward * (progress / 2);
+  }
+  return total;
+}
+
 // 估算指定队伍（metricsList）从 START_LV 开始，通关到 targetLv（包含该级）需要的秒数。
 // 例如 targetLv=100 表示通关第 1 次（100→110），targetLv=190 表示通关 10 次（100→200）。
 // 累计时间可能超过一次试炼时长（TRIAL_DURATION），这里不再截断，直接返回真实累加秒数。
@@ -2774,7 +2798,7 @@ function initialAssignment(people, cfgs, mm) {
 function localSearch(assignment, people, cfgs, mm) {
   const P=people.length; const lists=Array.from({length:NUM_TRIALS},()=>[]);
   for(let p=0;p<P;p++){ const j=assignment[p]; if(j>=0) lists[j].push(mm[p][cfgs[j].skill]); }
-  const tLv=new Array(NUM_TRIALS); for(let j=0;j<NUM_TRIALS;j++) tLv[j]=finalLv(lists[j]);
+  const tTokens=new Array(NUM_TRIALS); for(let j=0;j<NUM_TRIALS;j++) tTokens[j]=tokenReward(lists[j]);
   const without=(l,m)=>{const o=[];let r=false;for(const x of l){if(!r&&x===m){r=true;continue;}o.push(x);}return o;};
   const withAdd=(l,m)=>l.concat([m]);
   let improved=true, guard=0;
@@ -2782,24 +2806,24 @@ function localSearch(assignment, people, cfgs, mm) {
     improved=false;
     for(let p=0;p<P;p++){
       const curT=assignment[p]; const curM=curT>=0?mm[p][cfgs[curT].skill]:null;
-      let bestNew=curT, bestGain=0, bestFromLv=curT>=0?tLv[curT]:0, bestNewToLv=0;
-      const curFromLv=curT>=0?tLv[curT]:0;
+      let bestNew=curT, bestGain=0, bestFromTokens=curT>=0?tTokens[curT]:0, bestNewToTokens=0;
+      const curFromTokens=curT>=0?tTokens[curT]:0;
       for(let newT=-1;newT<NUM_TRIALS;newT++){
         if(newT===curT)continue; let newM=null;
         if(newT>=0){ newM=mm[p][cfgs[newT].skill]; if(newM.baseLevel<=0)continue; if(lists[newT].length>=cfgs[newT].max)continue; }
-        const newFromLv=curT>=0?finalLv(without(lists[curT],curM)):0;
-        const oldToLv=newT>=0?tLv[newT]:0; const newToLv=newT>=0?finalLv(withAdd(lists[newT],newM)):0;
-        const gain=(newFromLv-curFromLv)+(newToLv-oldToLv);
-        if(gain>bestGain){bestGain=gain;bestNew=newT;bestFromLv=newFromLv;bestNewToLv=newToLv;}
+        const newFromTokens=curT>=0?tokenReward(without(lists[curT],curM)):0;
+        const oldToTokens=newT>=0?tTokens[newT]:0; const newToTokens=newT>=0?tokenReward(withAdd(lists[newT],newM)):0;
+        const gain=(newFromTokens-curFromTokens)+(newToTokens-oldToTokens);
+        if(gain>bestGain){bestGain=gain;bestNew=newT;bestFromTokens=newFromTokens;bestNewToTokens=newToTokens;}
       }
-      if(bestGain>0){ if(curT>=0){const l=lists[curT];const i=l.indexOf(curM);if(i>=0)l.splice(i,1);tLv[curT]=bestFromLv;} if(bestNew>=0){lists[bestNew].push(mm[p][cfgs[bestNew].skill]);tLv[bestNew]=bestNewToLv;} assignment[p]=bestNew; improved=true; }
+      if(bestGain>0){ if(curT>=0){const l=lists[curT];const i=l.indexOf(curM);if(i>=0)l.splice(i,1);tTokens[curT]=bestFromTokens;} if(bestNew>=0){lists[bestNew].push(mm[p][cfgs[bestNew].skill]);tTokens[bestNew]=bestNewToTokens;} assignment[p]=bestNew; improved=true; }
     }
     for(let p=0;p<P;p++){ const tP=assignment[p];if(tP<0)continue; const mPinP=mm[p][cfgs[tP].skill];
       for(let q=p+1;q<P;q++){ const tQ=assignment[q];if(tQ<0||tQ===tP)continue; const mQinQ=mm[q][cfgs[tQ].skill]; const mPinQ=mm[p][cfgs[tQ].skill]; const mQinP=mm[q][cfgs[tP].skill];
         if(mPinQ.baseLevel<=0||mQinP.baseLevel<=0)continue;
-        const newLvP=finalLv(without(lists[tP],mPinP).concat([mQinP])); const newLvQ=finalLv(without(lists[tQ],mQinQ).concat([mPinQ]));
-        const gain=(newLvP+newLvQ)-(tLv[tP]+tLv[tQ]);
-        if(gain>0){const lp=lists[tP],lq=lists[tQ];lp.splice(lp.indexOf(mPinP),1);lp.push(mQinP);lq.splice(lq.indexOf(mQinQ),1);lq.push(mPinQ);tLv[tP]=newLvP;tLv[tQ]=newLvQ;assignment[p]=tQ;assignment[q]=tP;improved=true;}
+        const newTokensP=tokenReward(without(lists[tP],mPinP).concat([mQinP])); const newTokensQ=tokenReward(without(lists[tQ],mQinQ).concat([mPinQ]));
+        const gain=(newTokensP+newTokensQ)-(tTokens[tP]+tTokens[tQ]);
+        if(gain>0){const lp=lists[tP],lq=lists[tQ];lp.splice(lp.indexOf(mPinP),1);lp.push(mQinP);lq.splice(lq.indexOf(mQinQ),1);lq.push(mPinQ);tTokens[tP]=newTokensP;tTokens[tQ]=newTokensQ;assignment[p]=tQ;assignment[q]=tP;improved=true;}
       }
     }
   }
@@ -2811,23 +2835,25 @@ function runAssignment(people, cfgs) {
   localSearch(assignment,people,cfgs,mm);
   const P=people.length; const assigned=Array.from({length:NUM_TRIALS},()=>[]);
   for(let p=0;p<P;p++){const j=assignment[p];if(j>=0)assigned[j].push({person:people[p],metrics:mm[p][cfgs[j].skill]});}
-  let grandFinal=0,grandPasses=0,grandCount=0; const cache=new Array(NUM_TRIALS);
+  let grandTokens=0,grandFinal=0,grandPasses=0,grandCount=0; const cache=new Array(NUM_TRIALS);
   for(let j=0;j<NUM_TRIALS;j++){
     const list=assigned[j]; list.sort((a,b)=>a.person.name.localeCompare(b.name,'zh-Hans-CN'));
-    const passes=computePasses(list.map(e=>e.metrics));
+    const metricsList=list.map(e=>e.metrics);
+    const passes=computePasses(metricsList);
     const fLv=START_LV+LV_PER_PASS*passes;
-    grandFinal+=fLv; grandPasses+=passes; grandCount+=list.length;
+    const tokens=tokenReward(metricsList);
+    grandTokens+=tokens; grandFinal+=fLv; grandPasses+=passes; grandCount+=list.length;
     const countMult = 1 + COUNT_INFLATION * list.length;
     const reqNext = Math.ceil((BASE_TOTAL_PT + PT_GROWTH * passes) * countMult);
     let sumWork = 0; for (const e of list) sumWork += e.metrics.workP;
     const finalT = START_LV + LV_PER_PASS * passes;
     let rateAtFinal = 0; for (const e of list) rateAtFinal += expectedRate(e.metrics, finalT);
     let sum=0; for(const e of list) sum+=e.person.levels[cfgs[j].skill];
-    cache[j]={list,sum,passes,finalLv:fLv,reqNext,sumWork,rateAtFinal,max:cfgs[j].max,skill:cfgs[j].skill};
+    cache[j]={list,sum,passes,finalLv:fLv,tokens,reqNext,sumWork,rateAtFinal,max:cfgs[j].max,skill:cfgs[j].skill};
   }
   const assignedIds=new Set(); for(const l of assigned) for(const e of l) assignedIds.add(e.person.id);
   const unassigned=people.filter(p=>!assignedIds.has(p.id)).sort((a,b)=>a.name.localeCompare(b.name,'zh-Hans-CN'));
-  return {cache,unassigned,grandCount,grandFinal,grandPasses,assignment};
+  return {cache,unassigned,grandCount,grandTokens,grandFinal,grandPasses,assignment};
 }
 
 // === SVG Helper ===
@@ -3311,7 +3337,7 @@ function renderTrialCards() {
         totalFinalScore += expectedRate(e.metrics, c.finalLv) * actualTimeAtFinal;
       }
       const finalRatio = finalLevelNeeds > 0 ? (totalFinalScore / finalLevelNeeds * 100).toFixed(2) + '%' : '-';
-      resultHtml = '<div class="trial-result">'+t('reach')+' Lv'+c.finalLv+' &middot; '+c.passes+t('passes')+' &middot; '+c.list.length+'/'+c.max+t('people')+'<br>'+t('teamWork')+' '+c.sumWork+' &middot; ~'+rateStr+t('perSec')+' @ Lv'+c.finalLv+'<br>'+t('currentLevelNeeds')+' '+targetLevelNeeds.toLocaleString()+' '+t('pts')+' &middot; '+t('cumulativePts')+' '+cumulativePts.toLocaleString()+' '+t('pts')+' &middot; '+t('finalRatio')+' '+finalRatio+'<br>'+t('targetLevel')+' '+targetLv+' &middot; '+t('cumulativeTime')+' '+formatDuration(estTotal)+' &middot; '+t('singlePassTime')+' '+formatDuration(estSingle)+'</div>';
+      resultHtml = '<div class="trial-result">'+t('reach')+' Lv'+c.finalLv+' &middot; '+c.passes+t('passes')+' &middot; '+c.list.length+'/'+c.max+t('people')+' &middot; '+t('tokens')+': <strong>'+Math.floor(c.tokens)+'</strong><br>'+t('teamWork')+' '+c.sumWork+' &middot; ~'+rateStr+t('perSec')+' @ Lv'+c.finalLv+'<br>'+t('currentLevelNeeds')+' '+targetLevelNeeds.toLocaleString()+' '+t('pts')+' &middot; '+t('cumulativePts')+' '+cumulativePts.toLocaleString()+' '+t('pts')+' &middot; '+t('finalRatio')+' '+finalRatio+'<br>'+t('targetLevel')+' '+targetLv+' &middot; '+t('cumulativeTime')+' '+formatDuration(estTotal)+' &middot; '+t('singlePassTime')+' '+formatDuration(estSingle)+'</div>';
     }
     return '<div class="trial-card">'+
       '<div class="trial-card-header">'+
@@ -3633,7 +3659,7 @@ function renderSummary() {
     return;
   }
   const r = state.result;
-  bar.innerHTML = t('totalFinalLv')+': <span class="summary-num">'+r.grandFinal+'</span> | '+t('totalPasses')+': <span class="summary-num">'+r.grandPasses+'</span> | '+t('assigned')+': <span class="summary-num">'+r.grandCount+'/'+state.members.length+'</span>'+(r.unassigned.length>0 ? ' | '+t('unassigned')+': <span style="color:var(--danger)">'+r.unassigned.length+'</span>' : '');
+  bar.innerHTML = t('totalTokens')+': <span class="summary-num">'+Math.floor(r.grandTokens)+'</span> | '+t('totalFinalLv')+': <span class="summary-num">'+r.grandFinal+'</span> | '+t('totalPasses')+': <span class="summary-num">'+r.grandPasses+'</span> | '+t('assigned')+': <span class="summary-num">'+r.grandCount+'/'+state.members.length+'</span>'+(r.unassigned.length>0 ? ' | '+t('unassigned')+': <span style="color:var(--danger)">'+r.unassigned.length+'</span>' : '');
 }
 
 function renderAssignmentResults() {
