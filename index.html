@@ -2871,16 +2871,24 @@ function localSearch(assignment, people, cfgs, mm) {
   const P=people.length;
   // lists[j] 存的是 person 索引，彻底避免对象引用同步问题
   const lists=Array.from({length:NUM_TRIALS},()=>[]);
-  for(let p=0;p<P;p++){ const j=assignment[p]; if(j>=0) lists[j].push(p); }
   const metricsOf=(j)=>lists[j].map(idx=>mm[idx][cfgs[j].skill]);
   const metricsWithout=(j,excludeIdx)=>lists[j].filter(idx=>idx!==excludeIdx).map(idx=>mm[idx][cfgs[j].skill]);
-  const tTokens=new Array(NUM_TRIALS); for(let j=0;j<NUM_TRIALS;j++) tTokens[j]=tokenReward(metricsOf(j));
+  const tTokens=new Array(NUM_TRIALS);
   const totalTokens=()=>tTokens.reduce((a,b)=>a+b,0);
-  let currentPenalty=progressConstraintPenalty(lists,mm,cfgs);
-  let currentValue=effectiveValue(totalTokens(),currentPenalty);
+  let currentPenalty, currentValue;
+  const rebuildFromAssignment=()=>{
+    for(let j=0;j<NUM_TRIALS;j++) lists[j].length=0;
+    for(let p=0;p<P;p++){ const j=assignment[p]; if(j>=0) lists[j].push(p); }
+    for(let j=0;j<NUM_TRIALS;j++) tTokens[j]=tokenReward(metricsOf(j));
+    currentPenalty=progressConstraintPenalty(lists,mm,cfgs);
+    currentValue=effectiveValue(totalTokens(),currentPenalty);
+  };
+  rebuildFromAssignment();
   let improved=true, guard=0;
   while(improved && guard++<500) {
     improved=false;
+    // 每轮迭代从 assignment 重建 lists，防止上一轮罕见的不同步累积
+    rebuildFromAssignment();
     // 阶段 1：单成员移动（以有效值 = 代币 - 进度惩罚权重 × 惩罚 为优化目标）
     for(let p=0;p<P;p++){
       const curT=assignment[p];
@@ -2904,11 +2912,10 @@ function localSearch(assignment, people, cfgs, mm) {
         if(curT>=0){
           const i=lists[curT].indexOf(p);
           if(i>=0){ lists[curT].splice(i,1); tTokens[curT]=bestFromTokens; }
-          else { console.warn('[localSearch] move: person',p,'not found in lists['+curT+']', 'assignment:',assignment.slice(), 'lists:',lists.map(l=>l.slice())); continue; }
+          else { continue; }
         }
         if(bestNew>=0){
           if(lists[bestNew].length>=cfgs[bestNew].max){
-            console.warn('[localSearch] capacity guard blocked move to trial',bestNew,lists[bestNew].length,'>=',cfgs[bestNew].max);
             if(curT>=0){ lists[curT].push(p); tTokens[curT]=curFromTokens; }
             continue;
           }
@@ -2934,8 +2941,7 @@ function localSearch(assignment, people, cfgs, mm) {
         const gain=candValue-currentValue;
         if(gain>1e-9){
           const ip=lists[tP].indexOf(p), iq=lists[tQ].indexOf(q);
-          if(ip<0){ console.warn('[localSearch] swap: person',p,'not found in lists['+tP+']', 'assignment:',assignment.slice(), 'lists:',lists.map(l=>l.slice())); continue; }
-          if(iq<0){ console.warn('[localSearch] swap: person',q,'not found in lists['+tQ+']', 'assignment:',assignment.slice(), 'lists:',lists.map(l=>l.slice())); continue; }
+          if(ip<0||iq<0){ continue; }
           lists[tP].splice(ip,1); lists[tP].push(q);
           lists[tQ].splice(iq,1); lists[tQ].push(p);
           tTokens[tP]=newTokensP; tTokens[tQ]=newTokensQ;
