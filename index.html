@@ -2822,14 +2822,39 @@ function localSearch(assignment, people, cfgs, mm) {
         const gain=(newFromTokens-curFromTokens)+(newToTokens-oldToTokens);
         if(gain>bestGain){bestGain=gain;bestNew=newT;bestFromTokens=newFromTokens;bestNewToTokens=newToTokens;}
       }
-      if(bestGain>0){ if(curT>=0){const l=lists[curT];const i=l.indexOf(curM);if(i>=0)l.splice(i,1);tTokens[curT]=bestFromTokens;} if(bestNew>=0){lists[bestNew].push(mm[p][cfgs[bestNew].skill]);tTokens[bestNew]=bestNewToTokens;} assignment[p]=bestNew; improved=true; }
+      if(bestGain>0){
+        let moved=true;
+        if(curT>=0){
+          const l=lists[curT];
+          const i=l.indexOf(curM);
+          if(i>=0){ l.splice(i,1); tTokens[curT]=bestFromTokens; }
+          else { console.warn('[localSearch] move: curM not found in lists['+curT+'] for person',p); moved=false; }
+        }
+        if(moved && bestNew>=0){
+          if(lists[bestNew].length>=cfgs[bestNew].max){
+            console.warn('[localSearch] capacity guard blocked move to trial',bestNew,lists[bestNew].length,'>=',cfgs[bestNew].max);
+            moved=false;
+          } else {
+            lists[bestNew].push(mm[p][cfgs[bestNew].skill]);
+            tTokens[bestNew]=bestNewToTokens;
+          }
+        }
+        if(moved){ assignment[p]=bestNew; improved=true; }
+      }
     }
     for(let p=0;p<P;p++){ const tP=assignment[p];if(tP<0)continue; const mPinP=mm[p][cfgs[tP].skill];
       for(let q=p+1;q<P;q++){ const tQ=assignment[q];if(tQ<0||tQ===tP)continue; const mQinQ=mm[q][cfgs[tQ].skill]; const mPinQ=mm[p][cfgs[tQ].skill]; const mQinP=mm[q][cfgs[tP].skill];
         if(mPinQ.baseLevel<=0||mQinP.baseLevel<=0)continue;
         const newTokensP=tokenReward(without(lists[tP],mPinP).concat([mQinP])); const newTokensQ=tokenReward(without(lists[tQ],mQinQ).concat([mPinQ]));
         const gain=(newTokensP+newTokensQ)-(tTokens[tP]+tTokens[tQ]);
-        if(gain>0){const lp=lists[tP],lq=lists[tQ];lp.splice(lp.indexOf(mPinP),1);lp.push(mQinP);lq.splice(lq.indexOf(mQinQ),1);lq.push(mPinQ);tTokens[tP]=newTokensP;tTokens[tQ]=newTokensQ;assignment[p]=tQ;assignment[q]=tP;improved=true;}
+        if(gain>0){
+          const lp=lists[tP],lq=lists[tQ];
+          const ip=lp.indexOf(mPinP), iq=lq.indexOf(mQinQ);
+          if(ip<0){ console.warn('[localSearch] swap: mPinP not found in lists['+tP+'] for person',p); continue; }
+          if(iq<0){ console.warn('[localSearch] swap: mQinQ not found in lists['+tQ+'] for person',q); continue; }
+          lp.splice(ip,1); lp.push(mQinP); lq.splice(iq,1); lq.push(mPinQ);
+          tTokens[tP]=newTokensP; tTokens[tQ]=newTokensQ; assignment[p]=tQ; assignment[q]=tP; improved=true;
+        }
       }
     }
   }
