@@ -695,6 +695,17 @@ table.member-table td.loadout-cell.loadout-empty { color:var(--text-faint); font
   <div class="global-buff-bar" id="guild-shrines-bar"></div>
 </div>
 
+<div class="global-buff-section" id="progress-min-section">
+  <h3 id="h3-progress-min">进度约束 <span class="global-buff-hint" id="progress-min-hint" title="非最低最终等级地区在当前层的最低进度要求。仅会长端可修改，仅本地保存。"></span></h3>
+  <div class="global-buff-bar">
+    <label class="global-buff-item">
+      <span class="global-buff-label" id="progress-min-label">最低进度</span>
+      <input type="number" min="0" max="100" step="1" id="progress-min-input" onchange="updateProgressMin(this.value)">
+      <span class="global-buff-unit">%</span>
+    </label>
+  </div>
+</div>
+
 <div class="trial-section">
   <h2 id="h2-trial">试炼配置</h2>
   <div class="trial-cards" id="trial-cards"></div>
@@ -1788,7 +1799,9 @@ let state = {
   // 公会建筑：每座房子对应一个技能/属性，每级 +2 有效等级。仅本地保存。
   guildBuildings: GUILD_BUILDING_KEYS.reduce((o,k)=>(o[k]=0,o),{}),
   // 公会神龛：力量 +0.5% 效率/级，节奏 +0.5% 速度/级，建造者殿堂 +2% 公会代币/级。仅本地保存。
-  guildShrines: { power: 0, tempo: 0, builder: 0 }
+  guildShrines: { power: 0, tempo: 0, builder: 0 },
+  // 非最低区进度约束阈值（0.10 = 10%）。仅本地保存，会长端可调。
+  progressMin: 0.10
 };
 let pickerState = { memberId:null, slot:null, iconId:null, enhance:0 };
 
@@ -2688,10 +2701,16 @@ function currentLayerProgress(metricsList) {
   return Math.min(1, (sim.carry + rate * sim.timeLeft) / required);
 }
 
-const PROGRESS_MIN = 0.10;
+const PROGRESS_MIN_DEFAULT = 0.10;
 const PROGRESS_PENALTY_WEIGHT = 1500;
 
-// 对非最低最终等级的地区，若当前层进度 < 10%，按缺口累计惩罚。
+function getProgressMin() {
+  const v = Number(state && state.progressMin);
+  if (Number.isFinite(v) && v >= 0 && v <= 1) return v;
+  return PROGRESS_MIN_DEFAULT;
+}
+
+// 对非最低最终等级的地区，若当前层进度 < progressMin，按缺口累计惩罚。
 function progressConstraintPenalty(lists, mm, cfgs) {
   let minLv = Infinity;
   const levels = new Array(NUM_TRIALS);
@@ -2705,7 +2724,8 @@ function progressConstraintPenalty(lists, mm, cfgs) {
     const metrics = lists[j].map(idx => mm[idx][cfgs[j].skill]);
     if (metrics.length === 0) continue;
     const prog = currentLayerProgress(metrics);
-    if (prog < PROGRESS_MIN - 1e-9) penalty += (PROGRESS_MIN - prog);
+    const pm = getProgressMin();
+    if (prog < pm - 1e-9) penalty += (pm - prog);
   }
   return penalty;
 }
@@ -2731,7 +2751,8 @@ function progressConstraintPenaltyForCandidate(lists, mm, cfgs, changedJ1, metri
     else metrics = lists[j].map(idx => mm[idx][cfgs[j].skill]);
     if (metrics.length === 0) continue;
     const prog = currentLayerProgress(metrics);
-    if (prog < PROGRESS_MIN - 1e-9) penalty += (PROGRESS_MIN - prog);
+    const pm = getProgressMin();
+    if (prog < pm - 1e-9) penalty += (pm - prog);
   }
   return penalty;
 }
@@ -3170,6 +3191,31 @@ function saveGuildBuildings() {
 function saveGuildShrines() {
   try { localStorage.setItem('mwi_guild_shrines', JSON.stringify(state.guildShrines)); } catch(e) {}
 }
+function loadProgressMin() {
+  try {
+    const raw = localStorage.getItem('mwi_progress_min');
+    if (raw) {
+      const n = Number(raw);
+      if (Number.isFinite(n) && n >= 0 && n <= 1) state.progressMin = n;
+    }
+  } catch(e) {}
+}
+function saveProgressMin() {
+  try { localStorage.setItem('mwi_progress_min', String(state.progressMin)); } catch(e) {}
+}
+function updateProgressMin(val) {
+  if (!isGuildLeader()) { alert(t('leaderOnly')); return; }
+  const n = Math.max(0, Math.min(1, Number(val) / 100));
+  state.progressMin = n;
+  saveProgressMin();
+  if (state.members && state.members.length > 0 && state.result) calculate();
+  else { renderMemberTable(); renderSummary(); }
+  syncProgressMinInput();
+}
+function syncProgressMinInput() {
+  const el = document.getElementById('progress-min-input');
+  if (el && el !== document.activeElement) el.value = Math.round((state.progressMin || 0) * 100);
+}
 function updateGuildBuilding(key, val) {
   if (!state.guildBuildings) state.guildBuildings = GUILD_BUILDING_KEYS.reduce((o,k)=>(o[k]=0,o),{});
   state.guildBuildings[key] = Math.max(0, Math.min(GUILD_BUILDING_MAX_LEVEL, Math.floor(Number(val) || 0)));
@@ -3320,6 +3366,9 @@ function renderAll() {
   renderMemberTable();
   renderSummary();
   updateStaticText();
+  syncProgressMinInput();
+  const progressMinSection = document.getElementById('progress-min-section');
+  if (progressMinSection) progressMinSection.style.display = isGuildLeader() ? '' : 'none';
 }
 
 function updateStaticText() {
@@ -4669,8 +4718,12 @@ async function refreshFromServer() { return pullFromServer(); }
 async function init() {
   loadPrefs();
   loadGuildBuffs();
+  loadProgressMin();
   renderGuildBuildingInputs();
   renderGuildShrineInputs();
+  syncProgressMinInput();
+  const progressMinSection = document.getElementById('progress-min-section');
+  if (progressMinSection) progressMinSection.style.display = isGuildLeader() ? '' : 'none';
   const params = new URLSearchParams(window.location.search);
   const guild = params.get('guild');
   const bin = params.get('bin');
