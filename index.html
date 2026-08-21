@@ -2838,7 +2838,34 @@ function localSearch(assignment, people, cfgs, mm) {
 function runAssignment(people, cfgs) {
   const mm=buildPersonMetricsMap(people);
   const assignment=initialAssignment(people,cfgs,mm);
+  if(typeof console!=='undefined' && console.log){
+    const cnt=[0,0,0,0];
+    for(let p=0;p<people.length;p++) if(assignment[p]>=0) cnt[assignment[p]]++;
+    console.log('[initialAssignment] counts:',cnt,'max:',cfgs.map(c=>c.max));
+  }
   localSearch(assignment,people,cfgs,mm);
+  if(typeof console!=='undefined' && console.log){
+    const cnt=[0,0,0,0];
+    for(let p=0;p<people.length;p++) if(assignment[p]>=0) cnt[assignment[p]]++;
+    console.log('[localSearch] counts:',cnt,'max:',cfgs.map(c=>c.max));
+  }
+  // 兜底：若算法异常导致某地区超上限，按代币贡献从低到高移除多余成员
+  for(let j=0;j<NUM_TRIALS;j++){
+    const max=cfgs[j].max;
+    let ids=[];
+    for(let p=0;p<people.length;p++) if(assignment[p]===j) ids.push(p);
+    if(ids.length>max){
+      console.warn('[runAssignment] trial',j,'overflow',ids.length,'>',max,'clamping');
+      // 计算移除每个成员后的 trial 代币，优先移除损失最小的
+      const scores=ids.map(p=>{
+        const others=ids.filter(q=>q!==p).map(q=>mm[q][cfgs[j].skill]);
+        return {p, tokens:tokenReward(others)};
+      });
+      scores.sort((a,b)=>a.tokens-b.tokens);
+      const keep=new Set(scores.slice(ids.length-max).map(s=>s.p));
+      for(let p=0;p<people.length;p++) if(assignment[p]===j && !keep.has(p)) assignment[p]=-1;
+    }
+  }
   const P=people.length; const assigned=Array.from({length:NUM_TRIALS},()=>[]);
   for(let p=0;p<P;p++){const j=assignment[p];if(j>=0)assigned[j].push({person:people[p],metrics:mm[p][cfgs[j].skill]});}
   let grandTokens=0,grandFinal=0,grandPasses=0,grandCount=0; const cache=new Array(NUM_TRIALS);
