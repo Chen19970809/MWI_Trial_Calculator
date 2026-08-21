@@ -2645,7 +2645,7 @@ function computePasses(metricsList) {
 function finalLv(metricsList) { return START_LV + LV_PER_PASS * computePasses(metricsList); }
 
 // 根据通关次数与未完成进度计算该地区可获取的代币数。
-// 100 级完成=200，每 10 级 +100；未完成层只获得进度一半的奖励。
+// 首层完成=200，之后每层固定+100；未完成层只获得进度一半的奖励。
 // 未完成进度按“剩余时间 × 当前等级秒贡献 / 当前等级需求”计算，与 UI 最终比例口径一致。
 function tokenReward(metricsList) {
   const N = metricsList.length;
@@ -2653,10 +2653,10 @@ function tokenReward(metricsList) {
   const sim = simulateTrialProgress(metricsList);
   let total = 0;
   for (let i = 0; i < sim.passes; i++) {
-    total += 200 + i * 100;
+    total += i === 0 ? 200 : 100;
   }
   if (sim.passes < MAX_PASS_GUARD && sim.timeLeft > 0) {
-    const currentReward = 200 + sim.passes * 100;
+    const currentReward = sim.passes === 0 ? 200 : 100;
     const currentLv = START_LV + sim.passes * LV_PER_PASS;
     let rate = 0;
     for (const m of metricsList) rate += expectedRate(m, currentLv);
