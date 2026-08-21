@@ -2674,6 +2674,72 @@ function tokenReward(metricsList) {
   return total;
 }
 
+// 计算队伍在当前未完成层中的真实进度比例（包含上一层溢出的 carry）。
+function currentLayerProgress(metricsList) {
+  const sim = simulateTrialProgress(metricsList);
+  if (metricsList.length === 0) return 0;
+  if (sim.passes >= MAX_PASS_GUARD) return 1;
+  const currentLv = START_LV + sim.passes * LV_PER_PASS;
+  let rate = 0;
+  for (const m of metricsList) rate += expectedRate(m, currentLv);
+  const countMult = 1 + COUNT_INFLATION * metricsList.length;
+  const required = (BASE_TOTAL_PT + PT_GROWTH * sim.passes) * countMult;
+  if (required <= 0 || rate <= 0) return 0;
+  return Math.min(1, (sim.carry + rate * sim.timeLeft) / required);
+}
+
+const PROGRESS_MIN = 0.10;
+const PROGRESS_PENALTY_WEIGHT = 1500;
+
+// 对非最低最终等级的地区，若当前层进度 < 10%，按缺口累计惩罚。
+function progressConstraintPenalty(lists, mm, cfgs) {
+  let minLv = Infinity;
+  const levels = new Array(NUM_TRIALS);
+  for (let j = 0; j < NUM_TRIALS; j++) {
+    levels[j] = finalLv(lists[j].map(idx => mm[idx][cfgs[j].skill]));
+    if (levels[j] < minLv) minLv = levels[j];
+  }
+  let penalty = 0;
+  for (let j = 0; j < NUM_TRIALS; j++) {
+    if (levels[j] === minLv) continue;
+    const metrics = lists[j].map(idx => mm[idx][cfgs[j].skill]);
+    if (metrics.length === 0) continue;
+    const prog = currentLayerProgress(metrics);
+    if (prog < PROGRESS_MIN - 1e-9) penalty += (PROGRESS_MIN - prog);
+  }
+  return penalty;
+}
+
+// 计算候选状态的进度约束惩罚，仅 changedJ1/changedJ2 两区使用传入的 metrics 数组。
+function progressConstraintPenaltyForCandidate(lists, mm, cfgs, changedJ1, metrics1, changedJ2, metrics2) {
+  let minLv = Infinity;
+  const levels = new Array(NUM_TRIALS);
+  for (let j = 0; j < NUM_TRIALS; j++) {
+    let metrics;
+    if (j === changedJ1) metrics = metrics1;
+    else if (j === changedJ2) metrics = metrics2;
+    else metrics = lists[j].map(idx => mm[idx][cfgs[j].skill]);
+    levels[j] = finalLv(metrics);
+    if (levels[j] < minLv) minLv = levels[j];
+  }
+  let penalty = 0;
+  for (let j = 0; j < NUM_TRIALS; j++) {
+    if (levels[j] === minLv) continue;
+    let metrics;
+    if (j === changedJ1) metrics = metrics1;
+    else if (j === changedJ2) metrics = metrics2;
+    else metrics = lists[j].map(idx => mm[idx][cfgs[j].skill]);
+    if (metrics.length === 0) continue;
+    const prog = currentLayerProgress(metrics);
+    if (prog < PROGRESS_MIN - 1e-9) penalty += (PROGRESS_MIN - prog);
+  }
+  return penalty;
+}
+
+function effectiveValue(tokens, penalty) {
+  return tokens - PROGRESS_PENALTY_WEIGHT * penalty;
+}
+
 // 估算指定队伍（metricsList）从 START_LV 开始，通关到 targetLv（包含该级）需要的秒数。
 // 例如 targetLv=100 表示通关第 1 次（100→110），targetLv=190 表示通关 10 次（100→200）。
 // 累计时间可能超过一次试炼时长（TRIAL_DURATION），这里不再截断，直接返回真实累加秒数。
@@ -2802,58 +2868,79 @@ function initialAssignment(people, cfgs, mm) {
 }
 
 function localSearch(assignment, people, cfgs, mm) {
-  const P=people.length; const lists=Array.from({length:NUM_TRIALS},()=>[]);
-  for(let p=0;p<P;p++){ const j=assignment[p]; if(j>=0) lists[j].push(mm[p][cfgs[j].skill]); }
-  const tTokens=new Array(NUM_TRIALS); for(let j=0;j<NUM_TRIALS;j++) tTokens[j]=tokenReward(lists[j]);
-  const without=(l,m)=>{const o=[];let r=false;for(const x of l){if(!r&&x===m){r=true;continue;}o.push(x);}return o;};
-  const withAdd=(l,m)=>l.concat([m]);
+  const P=people.length;
+  // lists[j] 存的是 person 索引，彻底避免对象引用同步问题
+  const lists=Array.from({length:NUM_TRIALS},()=>[]);
+  for(let p=0;p<P;p++){ const j=assignment[p]; if(j>=0) lists[j].push(p); }
+  const metricsOf=(j)=>lists[j].map(idx=>mm[idx][cfgs[j].skill]);
+  const metricsWithout=(j,excludeIdx)=>lists[j].filter(idx=>idx!==excludeIdx).map(idx=>mm[idx][cfgs[j].skill]);
+  const tTokens=new Array(NUM_TRIALS); for(let j=0;j<NUM_TRIALS;j++) tTokens[j]=tokenReward(metricsOf(j));
+  const totalTokens=()=>tTokens.reduce((a,b)=>a+b,0);
+  let currentPenalty=progressConstraintPenalty(lists,mm,cfgs);
+  let currentValue=effectiveValue(totalTokens(),currentPenalty);
   let improved=true, guard=0;
   while(improved && guard++<500) {
     improved=false;
+    // 阶段 1：单成员移动（以有效值 = 代币 - 进度惩罚权重 × 惩罚 为优化目标）
     for(let p=0;p<P;p++){
-      const curT=assignment[p]; const curM=curT>=0?mm[p][cfgs[curT].skill]:null;
-      let bestNew=curT, bestGain=0, bestFromTokens=curT>=0?tTokens[curT]:0, bestNewToTokens=0;
+      const curT=assignment[p];
+      let bestNew=curT, bestGain=0, bestFromTokens=curT>=0?tTokens[curT]:0, bestNewToTokens=0, bestPenalty=currentPenalty;
       const curFromTokens=curT>=0?tTokens[curT]:0;
       for(let newT=-1;newT<NUM_TRIALS;newT++){
-        if(newT===curT)continue; let newM=null;
-        if(newT>=0){ newM=mm[p][cfgs[newT].skill]; if(newM.baseLevel<=0)continue; if(lists[newT].length>=cfgs[newT].max)continue; }
-        const newFromTokens=curT>=0?tokenReward(without(lists[curT],curM)):0;
-        const oldToTokens=newT>=0?tTokens[newT]:0; const newToTokens=newT>=0?tokenReward(withAdd(lists[newT],newM)):0;
-        const gain=(newFromTokens-curFromTokens)+(newToTokens-oldToTokens);
-        if(gain>bestGain){bestGain=gain;bestNew=newT;bestFromTokens=newFromTokens;bestNewToTokens=newToTokens;}
+        if(newT===curT)continue;
+        if(newT>=0){ const newM=mm[p][cfgs[newT].skill]; if(newM.baseLevel<=0)continue; if(lists[newT].length>=cfgs[newT].max)continue; }
+        const fromMetrics=curT>=0?metricsWithout(curT,p):[];
+        const toMetrics=newT>=0?metricsOf(newT).concat([mm[p][cfgs[newT].skill]]):[];
+        const newFromTokens=curT>=0?tokenReward(fromMetrics):0;
+        const oldToTokens=newT>=0?tTokens[newT]:0;
+        const newToTokens=newT>=0?tokenReward(toMetrics):0;
+        const candTokens=totalTokens()+(newFromTokens-curFromTokens)+(newToTokens-oldToTokens);
+        const candPenalty=progressConstraintPenaltyForCandidate(lists,mm,cfgs,curT,fromMetrics,newT,toMetrics);
+        const candValue=effectiveValue(candTokens,candPenalty);
+        const gain=candValue-currentValue;
+        if(gain>bestGain){bestGain=gain;bestNew=newT;bestFromTokens=newFromTokens;bestNewToTokens=newToTokens;bestPenalty=candPenalty;}
       }
-      if(bestGain>0){
-        let moved=true;
+      if(bestGain>1e-9){
         if(curT>=0){
-          const l=lists[curT];
-          const i=l.indexOf(curM);
-          if(i>=0){ l.splice(i,1); tTokens[curT]=bestFromTokens; }
-          else { console.warn('[localSearch] move: curM not found in lists['+curT+'] for person',p); moved=false; }
+          const i=lists[curT].indexOf(p);
+          if(i>=0){ lists[curT].splice(i,1); tTokens[curT]=bestFromTokens; }
+          else { console.warn('[localSearch] move: person',p,'not found in lists['+curT+']', 'assignment:',assignment.slice(), 'lists:',lists.map(l=>l.slice())); continue; }
         }
-        if(moved && bestNew>=0){
+        if(bestNew>=0){
           if(lists[bestNew].length>=cfgs[bestNew].max){
             console.warn('[localSearch] capacity guard blocked move to trial',bestNew,lists[bestNew].length,'>=',cfgs[bestNew].max);
-            moved=false;
-          } else {
-            lists[bestNew].push(mm[p][cfgs[bestNew].skill]);
-            tTokens[bestNew]=bestNewToTokens;
+            if(curT>=0){ lists[curT].push(p); tTokens[curT]=curFromTokens; }
+            continue;
           }
+          lists[bestNew].push(p);
+          tTokens[bestNew]=bestNewToTokens;
         }
-        if(moved){ assignment[p]=bestNew; improved=true; }
+        assignment[p]=bestNew; improved=true;
+        currentValue+=bestGain; currentPenalty=bestPenalty;
       }
     }
-    for(let p=0;p<P;p++){ const tP=assignment[p];if(tP<0)continue; const mPinP=mm[p][cfgs[tP].skill];
-      for(let q=p+1;q<P;q++){ const tQ=assignment[q];if(tQ<0||tQ===tP)continue; const mQinQ=mm[q][cfgs[tQ].skill]; const mPinQ=mm[p][cfgs[tQ].skill]; const mQinP=mm[q][cfgs[tP].skill];
+    // 阶段 2：两两交换
+    for(let p=0;p<P;p++){ const tP=assignment[p];if(tP<0)continue;
+      for(let q=p+1;q<P;q++){ const tQ=assignment[q];if(tQ<0||tQ===tP)continue;
+        const mPinQ=mm[p][cfgs[tQ].skill]; const mQinP=mm[q][cfgs[tP].skill];
         if(mPinQ.baseLevel<=0||mQinP.baseLevel<=0)continue;
-        const newTokensP=tokenReward(without(lists[tP],mPinP).concat([mQinP])); const newTokensQ=tokenReward(without(lists[tQ],mQinQ).concat([mPinQ]));
-        const gain=(newTokensP+newTokensQ)-(tTokens[tP]+tTokens[tQ]);
-        if(gain>0){
-          const lp=lists[tP],lq=lists[tQ];
-          const ip=lp.indexOf(mPinP), iq=lq.indexOf(mQinQ);
-          if(ip<0){ console.warn('[localSearch] swap: mPinP not found in lists['+tP+'] for person',p); continue; }
-          if(iq<0){ console.warn('[localSearch] swap: mQinQ not found in lists['+tQ+'] for person',q); continue; }
-          lp.splice(ip,1); lp.push(mQinP); lq.splice(iq,1); lq.push(mPinQ);
-          tTokens[tP]=newTokensP; tTokens[tQ]=newTokensQ; assignment[p]=tQ; assignment[q]=tP; improved=true;
+        const metricsP=metricsWithout(tP,p).concat([mQinP]);
+        const metricsQ=metricsWithout(tQ,q).concat([mPinQ]);
+        const newTokensP=tokenReward(metricsP);
+        const newTokensQ=tokenReward(metricsQ);
+        const candTokens=totalTokens()+(newTokensP-tTokens[tP])+(newTokensQ-tTokens[tQ]);
+        const candPenalty=progressConstraintPenaltyForCandidate(lists,mm,cfgs,tP,metricsP,tQ,metricsQ);
+        const candValue=effectiveValue(candTokens,candPenalty);
+        const gain=candValue-currentValue;
+        if(gain>1e-9){
+          const ip=lists[tP].indexOf(p), iq=lists[tQ].indexOf(q);
+          if(ip<0){ console.warn('[localSearch] swap: person',p,'not found in lists['+tP+']', 'assignment:',assignment.slice(), 'lists:',lists.map(l=>l.slice())); continue; }
+          if(iq<0){ console.warn('[localSearch] swap: person',q,'not found in lists['+tQ+']', 'assignment:',assignment.slice(), 'lists:',lists.map(l=>l.slice())); continue; }
+          lists[tP].splice(ip,1); lists[tP].push(q);
+          lists[tQ].splice(iq,1); lists[tQ].push(p);
+          tTokens[tP]=newTokensP; tTokens[tQ]=newTokensQ;
+          currentValue=candValue; currentPenalty=candPenalty;
+          assignment[p]=tQ; assignment[q]=tP; improved=true;
         }
       }
     }
@@ -2863,17 +2950,7 @@ function localSearch(assignment, people, cfgs, mm) {
 function runAssignment(people, cfgs) {
   const mm=buildPersonMetricsMap(people);
   const assignment=initialAssignment(people,cfgs,mm);
-  if(typeof console!=='undefined' && console.log){
-    const cnt=[0,0,0,0];
-    for(let p=0;p<people.length;p++) if(assignment[p]>=0) cnt[assignment[p]]++;
-    console.log('[initialAssignment] counts:',cnt,'max:',cfgs.map(c=>c.max));
-  }
   localSearch(assignment,people,cfgs,mm);
-  if(typeof console!=='undefined' && console.log){
-    const cnt=[0,0,0,0];
-    for(let p=0;p<people.length;p++) if(assignment[p]>=0) cnt[assignment[p]]++;
-    console.log('[localSearch] counts:',cnt,'max:',cfgs.map(c=>c.max));
-  }
   // 兜底：若算法异常导致某地区超上限，按代币贡献从低到高移除多余成员
   for(let j=0;j<NUM_TRIALS;j++){
     const max=cfgs[j].max;
@@ -2911,6 +2988,13 @@ function runAssignment(people, cfgs) {
   }
   const assignedIds=new Set(); for(const l of assigned) for(const e of l) assignedIds.add(e.person.id);
   const unassigned=people.filter(p=>!assignedIds.has(p.id)).sort((a,b)=>a.name.localeCompare(b.name,'zh-Hans-CN'));
+  // 最终检查进度约束（兜底日志，便于发现不可行情形）
+  const finalLists=Array.from({length:NUM_TRIALS},()=>[]);
+  for(let p=0;p<P;p++){ const j=assignment[p]; if(j>=0) finalLists[j].push(p); }
+  const finalPenalty=progressConstraintPenalty(finalLists,mm,cfgs);
+  if(finalPenalty>1e-9){
+    console.warn('[runAssignment] 进度约束未完全满足，惩罚值：',finalPenalty);
+  }
   return {cache,unassigned,grandCount,grandTokens,grandFinal,grandPasses,assignment};
 }
 
