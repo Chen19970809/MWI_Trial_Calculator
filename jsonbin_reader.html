@@ -1,0 +1,365 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>JSONBin.io 私有 Bin 管理器</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; }
+        input { margin: 4px 0; }
+        button { margin: 4px 4px 4px 0; cursor: pointer; }
+        pre { background: #f4f4f4; padding: 10px; border: 1px solid #ccc; white-space: pre-wrap; word-break: break-word; }
+        .version-item { border: 1px solid #ddd; padding: 8px; margin: 6px 0; background: #fafafa; display: inline-block; margin-right: 8px; }
+        .version-item button { font-size: 12px; }
+        .error { color: red; }
+        .success { color: green; }
+        #versionsPanel { margin-top: 20px; }
+        .hint { color: #666; font-size: 12px; }
+        .field-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+    </style>
+</head>
+<body>
+    <h2>JSONBin.io 私有 Bin 管理器</h2>
+    <label>Bin ID：<input id="binId" type="text" size="40"></label><br>
+    <label>X-Master-Key：<input id="masterKey" type="text" size="50"></label><br>
+    <label>访问密码（pwd）：<input id="password" type="text" size="30" placeholder="index.html 分享时设置的密码"></label><br>
+    <label>公会名（guild/salt）：<input id="guild" type="text" size="30" placeholder="用于解密的 salt"></label>
+    <button onclick="saveCredentials()">保存到本地</button>
+    <button onclick="clearCredentials()">清除本地记录</button><br><br>
+
+    <button onclick="fetchBin()">读取当前数据</button>
+    <button onclick="fetchVersions()">查看历史版本列表</button>
+    <button onclick="exportCurrentView()">导出当前查看</button>
+    <br><br>
+
+    <label>指定版本号：<input id="versionNo" type="number" min="1" placeholder="输入版本号" style="width:120px;"></label>
+    <button onclick="viewVersionInput()">查看该版本</button>
+    <button onclick="rollbackToVersionInput()">回退到该版本</button>
+
+    <pre id="output">结果将显示在这里</pre>
+
+    <div id="versionsPanel"></div>
+
+    <script>
+        const baseUrl = 'https://api.jsonbin.io/v3/b';
+        const STORAGE_KEY = 'jsonbin_reader_credentials';
+        let currentViewData = null;
+        let currentDecryptedData = null;
+
+        function loadCredentials() {
+            try {
+                const saved = localStorage.getItem(STORAGE_KEY);
+                if (saved) {
+                    const obj = JSON.parse(saved);
+                    document.getElementById('binId').value = obj.binId || '';
+                    document.getElementById('masterKey').value = obj.masterKey || '';
+                    document.getElementById('password').value = obj.password || '';
+                    document.getElementById('guild').value = obj.guild || '';
+                }
+            } catch (e) {
+                console.warn('读取本地凭据失败', e);
+            }
+        }
+
+        function saveCredentials() {
+            const payload = {
+                binId: document.getElementById('binId').value.trim(),
+                masterKey: document.getElementById('masterKey').value.trim(),
+                password: document.getElementById('password').value.trim(),
+                guild: document.getElementById('guild').value.trim()
+            };
+            localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
+            log('已保存凭据到浏览器本地存储。');
+        }
+
+        function clearCredentials() {
+            localStorage.removeItem(STORAGE_KEY);
+            document.getElementById('binId').value = '';
+            document.getElementById('masterKey').value = '';
+            document.getElementById('password').value = '';
+            document.getElementById('guild').value = '';
+            log('已清除本地保存的凭据。');
+        }
+
+        function getHeaders() {
+            return {
+                'X-Master-Key': document.getElementById('masterKey').value.trim(),
+                'Content-Type': 'application/json'
+            };
+        }
+
+        function getBinId() {
+            return document.getElementById('binId').value.trim();
+        }
+
+        function getPassword() {
+            return document.getElementById('password').value.trim();
+        }
+
+        function getGuild() {
+            return document.getElementById('guild').value.trim();
+        }
+
+        function getVersionInput() {
+            const v = parseInt(document.getElementById('versionNo').value, 10);
+            return isNaN(v) || v < 1 ? 0 : v;
+        }
+
+        function log(msg, isError) {
+            const output = document.getElementById('output');
+            if (typeof msg !== 'string') {
+                currentViewData = msg;
+            }
+            output.textContent = typeof msg === 'string' ? msg : JSON.stringify(msg, null, 2);
+            output.className = isError ? 'error' : '';
+        }
+
+        // === Compression ===
+        async function gunzipBytes(bytes) {
+            if (typeof DecompressionStream === 'undefined') return bytes;
+            const ds = new DecompressionStream('gzip');
+            const writer = ds.writable.getWriter();
+            writer.write(bytes); writer.close();
+            const ab = await new Response(ds.readable).arrayBuffer();
+            return new Uint8Array(ab);
+        }
+
+        // === Crypto ===
+        async function deriveKey(password, salt) {
+            const enc = new TextEncoder();
+            const keyMaterial = await crypto.subtle.importKey('raw', enc.encode(password), 'PBKDF2', false, ['deriveKey']);
+            return crypto.subtle.deriveKey(
+                { name: 'PBKDF2', salt: enc.encode(salt), iterations: 100000, hash: 'SHA-256' },
+                keyMaterial,
+                { name: 'AES-GCM', length: 256 },
+                false,
+                ['encrypt', 'decrypt']
+            );
+        }
+
+        function base64ToBytes(b64) {
+            const bin = atob(b64);
+            const bytes = new Uint8Array(bin.length);
+            for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+            return bytes;
+        }
+
+        async function decryptBytes(b64, key) {
+            const combined = base64ToBytes(b64);
+            const iv = combined.slice(0, 12);
+            const ct = combined.slice(12);
+            return new Uint8Array(await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, ct));
+        }
+
+        async function decryptRecord(rec, key) {
+            const bytes = await decryptBytes(rec.d, key);
+            const gz = await gunzipBytes(bytes);
+            return new TextDecoder().decode(gz);
+        }
+
+        async function tryDecryptRecord(record) {
+            const password = getPassword();
+            const guild = getGuild();
+            if (!password || !guild) return null;
+            if (!record || typeof record.d !== 'string') return null;
+            try {
+                const key = await deriveKey(password, guild);
+                const jsonStr = await decryptRecord(record, key);
+                return JSON.parse(jsonStr);
+            } catch (e) {
+                console.warn('解密失败', e);
+                return null;
+            }
+        }
+
+        function extractMembersForExport(decrypted) {
+            if (!decrypted) return null;
+            if (Array.isArray(decrypted)) return decrypted;
+            if (decrypted && Array.isArray(decrypted.members)) return decrypted.members;
+            return null;
+        }
+
+        async function exportCurrentView() {
+            if (currentViewData === null) {
+                log('当前没有可导出的数据，请先查看某个版本或当前数据。', true);
+                return;
+            }
+            const password = getPassword();
+            const guild = getGuild();
+            if (!password || !guild) {
+                log('请先填写「访问密码」和「公会名」，用于解密 index.html 加密的数据。', true);
+                return;
+            }
+
+            let record = currentViewData && currentViewData.record !== undefined ? currentViewData.record : currentViewData;
+            if (!record || typeof record.d !== 'string') {
+                log('当前数据没有加密字段 record.d，无法解密。', true);
+                return;
+            }
+
+            const decrypted = await tryDecryptRecord(record);
+            if (!decrypted) {
+                log('解密失败，请检查密码和公会名是否正确。', true);
+                return;
+            }
+            currentDecryptedData = decrypted;
+
+            const members = extractMembersForExport(decrypted);
+            if (!members) {
+                log('解密成功，但数据中没有找到可导入的成员数组（members）。\n解密后的字段：' + JSON.stringify(Object.keys(decrypted)), true);
+                return;
+            }
+
+            const binId = getBinId() || 'bin';
+            const version = document.getElementById('versionNo').value || 'current';
+            const filename = `${binId}_v${version}_members.json`;
+            const content = JSON.stringify(members, null, 2);
+            const blob = new Blob([content], { type: 'application/json' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = filename;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+            log(`已导出：${filename}（共 ${members.length} 位成员）`);
+        }
+
+        async function viewBinCore(versionNo) {
+            const binId = getBinId();
+            if (!binId) return log('请填写 Bin ID。', true);
+
+            const url = versionNo ? `${baseUrl}/${binId}/${versionNo}` : `${baseUrl}/${binId}`;
+            try {
+                const resp = await fetch(url, { method: 'GET', headers: getHeaders() });
+                if (!resp.ok) throw new Error(`HTTP ${resp.status}: ${await resp.text()}`);
+                const data = await resp.json();
+                currentViewData = data;
+
+                const record = data && data.record !== undefined ? data.record : data;
+                const decrypted = await tryDecryptRecord(record);
+                if (decrypted) {
+                    currentDecryptedData = decrypted;
+                    log(decrypted);
+                } else {
+                    currentDecryptedData = null;
+                    log(data);
+                }
+            } catch (err) {
+                log('错误：' + err.message, true);
+            }
+        }
+
+        function fetchBin() {
+            viewBinCore(null);
+        }
+
+        function viewVersion(versionNo) {
+            viewBinCore(versionNo);
+        }
+
+        function viewVersionInput() {
+            const v = getVersionInput();
+            if (!v) return log('请输入有效的版本号（正整数）。', true);
+            viewVersion(v);
+        }
+
+        function fetchVersions() {
+            const binId = getBinId();
+            const panel = document.getElementById('versionsPanel');
+            panel.innerHTML = '<h3>历史版本</h3><p>加载中...</p>';
+
+            if (!binId) return log('请填写 Bin ID。', true);
+
+            fetch(`${baseUrl}/${binId}/versions/count`, { method: 'GET', headers: getHeaders() })
+                .then(handleResponse)
+                .then(data => renderVersions(data, panel))
+                .catch(err => {
+                    panel.innerHTML = '<h3>历史版本</h3>';
+                    log('错误：' + err.message, true);
+                });
+        }
+
+        function renderVersions(data, panel) {
+            log('versions/count 原始响应：\n' + JSON.stringify(data, null, 2));
+
+            const count = extractVersionCount(data);
+            if (count === null || count === undefined || count <= 0) {
+                panel.innerHTML = '<h3>历史版本</h3><p>未能解析版本数量。请检查上方「versions/count 原始响应」中的字段名。</p>';
+                return;
+            }
+
+            let html = `<h3>历史版本</h3>
+                <p class="hint">JSONBin.io v3 只返回版本总数，不返回详细列表。下方根据总数生成 1 ~ ${count} 的入口，点击即可查看或回退。不存在的版本号会提示 404。</p>`;
+            for (let i = 1; i <= count; i++) {
+                html += `
+                    <div class="version-item">
+                        <b>#${i}</b><br>
+                        <button onclick="viewVersion(${i})">查看</button>
+                        <button onclick="rollbackToVersion(${i})">回退</button>
+                    </div>
+                `;
+            }
+            panel.innerHTML = html;
+        }
+
+        function rollbackToVersionInput() {
+            const v = getVersionInput();
+            if (!v) return log('请输入有效的版本号（正整数）。', true);
+            rollbackToVersion(v);
+        }
+
+        function rollbackToVersion(versionNo) {
+            const binId = getBinId();
+            if (!binId) return log('请填写 Bin ID。', true);
+            if (!confirm(`确定要回退到版本 #${versionNo} 吗？当前数据将被覆盖。`)) return;
+
+            fetch(`${baseUrl}/${binId}/${versionNo}`, { method: 'GET', headers: getHeaders() })
+                .then(handleResponse)
+                .then(versionData => {
+                    const record = versionData && versionData.record ? versionData.record : versionData;
+                    return fetch(`${baseUrl}/${binId}`, {
+                        method: 'PUT',
+                        headers: getHeaders(),
+                        body: JSON.stringify(record)
+                    });
+                })
+                .then(handleResponse)
+                .then(result => {
+                    log('回退成功：\n' + JSON.stringify(result, null, 2));
+                    fetchVersions();
+                })
+                .catch(err => log('回退失败：' + err.message, true));
+        }
+
+        function extractVersionCount(data) {
+            if (typeof data !== 'object' || data === null) return null;
+            const candidates = [
+                data.metadata && data.metadata.versionCount,
+                data.metaData && data.metaData.versionCount,
+                data.metadata && data.metadata.versionsCount,
+                data.metaData && data.metaData.versionsCount,
+                data.versionCount,
+                data.versionsCount,
+                data.count,
+                data.record && data.record.versionCount,
+                data.data && data.data.versionCount
+            ];
+            for (const v of candidates) {
+                if (typeof v === 'number') return v;
+            }
+            return null;
+        }
+
+        function handleResponse(response) {
+            if (!response.ok) {
+                return response.text().then(text => { throw new Error(`HTTP ${response.status}: ${text}`); });
+            }
+            return response.json();
+        }
+
+        // 页面加载时自动读取本地保存的凭据
+        loadCredentials();
+    </script>
+</body>
+</html>

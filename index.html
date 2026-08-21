@@ -736,6 +736,7 @@ const I18N = {
     uploadOk:'已上传到云端', uploadFail:'上传失败', uploading:'正在上传，请稍候…',
     needClickUpload:'请点右上角"上传"按钮同步到云端。',
     importDetail:'导入完成：新增 {added} 位，更新 {updated} 位，本地共 {total} 位。',
+    importMemberLossWarning:'警告：旧数据有 {old} 位成员，导入后减少为 {new} 位成员，请谨慎上传！！！\n\n是否继续导入？',
     notPulled:'未获取', pulledAtLabel:'已获取',
     pullFirstAlert:'请先点击右上角"获取"按钮，从云端拉取当前公会数据，然后再上传本人数据（避免覆盖他人）。',
     importNeedPullHint:'已加载到本地。请先点右上角"获取"按钮从云端拉取当前数据，之后再点"上传"，本人这条会以角色名为主键合并进云端。',
@@ -807,6 +808,7 @@ const I18N = {
     uploadOk:'Uploaded to cloud', uploadFail:'Upload failed', uploading:'Uploading, please wait…',
     needClickUpload:'Click the top-right "Upload" button to sync to the cloud.',
     importDetail:'Import done: +{added} added, {updated} updated, {total} total locally.',
+    importMemberLossWarning:'Warning: Old data has {old} members, after import it will be reduced to {new} members. Please be careful before uploading!!!\n\nContinue import?',
     notPulled:'Not pulled', pulledAtLabel:'Pulled',
     pullFirstAlert:'Please click the "Pull" button first to fetch the latest guild data before uploading your own data (to avoid overwriting others).',
     importNeedPullHint:'Loaded locally. Please click the top-right "Pull" button first, then click "Upload" — your entry will be merged into the cloud by character name.',
@@ -3857,7 +3859,7 @@ function parseMemberFromProfile(profile) {
 //   3) 上传时会长端强推本地、个人端按 name 主键合并，本地这份完整列表即最终版本。
 // 这样避免了"会长导入 1 个人 → 本地只剩 1 个 → 上传把云端也清成 1 个"的问题。
 // importJson() 和"数据导出脚本直送"（URL hash #mwiImport）共用本函数。
-function mergeImportedMembers(membersData) {
+function computeMergedMembers(membersData) {
   const oldByName = {};
   (state.members || []).forEach(p => { if (p && p.name) oldByName[String(p.name).trim()] = p; });
   let nextTempId = (state.members || []).reduce((mx, p) => Math.max(mx, Number(p.id) || 0), -1) + 1;
@@ -3873,11 +3875,8 @@ function mergeImportedMembers(membersData) {
     parsedByName[nm] = m;
     parsedList.push(m);
   }
-  if (parsedList.length === 0) {
-    alert(t('importFailed'));
-    return;
-  }
-  // 遍历现有 members：如果 JSON 里包含该 name → 用新的替换（沿用原 id）；否则保留原样
+  if (parsedList.length === 0) return null;
+
   const merged = [];
   let updated = 0;
   (state.members || []).forEach(old => {
@@ -3892,14 +3891,17 @@ function mergeImportedMembers(membersData) {
       merged.push(old);
     }
   });
-  // 剩下的 parsed 都是本地没有的名字 → 追加到末尾，分配递增 id
+
   const addedList = Object.values(parsedByName);
   addedList.forEach(np => {
     np.id = nextTempId++;
     merged.push(np);
   });
-  // 按 id 升序保持稳定顺序
   merged.sort((a, b) => (a.id|0) - (b.id|0));
+  return { merged, addedList, updated, parsedList };
+}
+
+function applyMergedMembers({ merged, addedList, updated, parsedList }) {
   state.members = merged;
   // 只有导入的是单人 JSON 才把它当作"本人"（个人端场景）；多人 JSON 视为会长在批量导入，
   // 不动 selfName，避免误把公会里的某个人当成自己。
@@ -3923,6 +3925,22 @@ function mergeImportedMembers(membersData) {
   } else {
     alert(detail);
   }
+}
+
+function mergeImportedMembers(membersData) {
+  const result = computeMergedMembers(membersData);
+  if (!result) { alert(t('importFailed')); return; }
+
+  const oldCount = (state.members || []).length;
+  const newCount = result.merged.length;
+  if (newCount < oldCount) {
+    const msg = t('importMemberLossWarning')
+      .replace('{old}', oldCount)
+      .replace('{new}', newCount);
+    if (!confirm(msg)) return;
+  }
+
+  applyMergedMembers(result);
 }
 function importJson() {
   const input = document.createElement('input');
@@ -4062,6 +4080,7 @@ async function uploadToServer() {
     clearDirty();
     const badge = document.getElementById('pull-status');
     if (badge) { badge.textContent = t('uploadOk'); badge.className = 'pull-status ok'; clearTimeout(window.__mwiPullFlashTimer); window.__mwiPullFlashTimer = setTimeout(updatePullStatus, 1800); }
+    showUploadSuccessModal(t('uploadOk'));
   } catch(e) {
     console.error('Upload failed:', e);
     alert(t('uploadFail')+': '+(e && e.message ? e.message : e));
@@ -4071,6 +4090,25 @@ async function uploadToServer() {
 }
 // 兼容旧调用点（现在没人调）
 function saveToBin() {}
+
+function showUploadSuccessModal(message) {
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay';
+  overlay.id = 'upload-success-overlay';
+  overlay.onclick = (e) => { if (e.target === overlay) closeUploadSuccessModal(); };
+  overlay.innerHTML = '<div class="modal-dialog" style="max-width:360px;text-align:center">'+
+    '<div class="modal-title"><span>'+t('uploadOk')+'</span><button class="modal-close" onclick="closeUploadSuccessModal()">&times;</button></div>'+
+    '<div style="padding:16px 0;font-size:14px;color:var(--text)">'+escHtml(message)+'</div>'+
+    '<div class="modal-actions" style="justify-content:center">'+
+      '<button class="btn btn-primary" onclick="closeUploadSuccessModal()">'+t('confirm')+'</button>'+
+    '</div>'+
+  '</div>';
+  document.body.appendChild(overlay);
+}
+function closeUploadSuccessModal() {
+  const o = document.getElementById('upload-success-overlay');
+  if (o) o.remove();
+}
 
 // 合并本地与远端 members / trials。
 //   * **会长端**：本地就是权威源，remote 全部丢弃，直接使用 local（保证会长端"改 index 并上传"能覆盖远端）。
