@@ -27,7 +27,7 @@
     // 计算器地址默认 GitHub Pages，可通过菜单"设置试炼计算器页面地址"覆盖
     // （浏览器禁止 https 页面 window.open file:// 本地文件，所以必须用 http(s) 地址）。
     const CALC_URL_STORAGE_KEY = 'mwi_trial_calc_url';
-    const CALC_DEFAULT_URL = 'https://chen19970809.github.io/MWI_Trial_Calculator/';
+    const CALC_DEFAULT_URL = 'https://chen19970809.github.io/MWI_Trial_Calculator/?guild=KUNPO&bin=6a671633f5f4af5e29c6b88c&pwd=827280394';
     const IMPORT_HASH_PARAM = 'mwiImport';
     // URL hash 长度上限保护（编码后字符数），超过则退回 JSON 下载
     const MAX_IMPORT_URL_PAYLOAD_LENGTH = 1800000;
