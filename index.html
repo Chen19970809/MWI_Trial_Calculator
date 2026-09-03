@@ -96,7 +96,7 @@ h2 { font-size:16px; margin:10px 0 8px; color:var(--text-muted); }
 
 /* Member Table */
 .member-section { padding:10px 20px; }
-.table-wrap { overflow-x:auto; background:var(--surface); border:1px solid var(--border); border-radius:8px; }
+.table-wrap { overflow:auto; background:var(--surface); border:1px solid var(--border); border-radius:8px; }
 table.member-table { border-collapse:collapse; width:max-content; min-width:100%; }
 table.member-table th, table.member-table td { border:1px solid var(--border); padding:4px 6px; text-align:center; white-space:nowrap; }
 table.member-table th { background:var(--table-header); font-size:11px; font-weight:600; color:var(--text-muted); position:sticky; top:0; z-index:5; }
@@ -192,6 +192,27 @@ table.member-table td.loadout-cell.loadout-empty { color:var(--text-faint); font
 ::-webkit-scrollbar { width:8px; height:8px; }
 ::-webkit-scrollbar-thumb { background:var(--scrollbar-thumb); border-radius:4px; }
 ::-webkit-scrollbar-track { background:var(--scrollbar-track); }
+
+/* ===== 固定布局：顶部固定，仅结果区内部滚动，并冻结首列 ===== */
+html, body { height:100%; }
+body { display:flex; flex-direction:column; overflow:hidden; }
+.header { flex:none; }
+#top-config { flex:0 1 auto; min-height:0; overflow-y:auto; overscroll-behavior:contain; }
+.member-section { flex:1 1 0; min-height:0; display:flex; flex-direction:column; }
+.member-section > h2 { flex:none; margin:6px 0 8px; }
+.member-section .table-wrap { flex:1 1 auto; min-height:0; }
+.summary-bar { flex:none; }
+
+/* 冻结列 / 行 */
+table.member-table thead th.sticky-lh { position:sticky; z-index:25; } /* left 由脚本按实测宽度设置 */
+table.member-table tbody td.sticky-l { position:sticky; z-index:5; background:var(--surface); } /* 前三列数据 */
+table.member-table tbody td.sticky-l.assign-none { background:var(--surface); }
+table.member-table tbody td.sticky-l.assign-T1 { background:var(--assign-t1-bg); }
+table.member-table tbody td.sticky-l.assign-T2 { background:var(--assign-t2-bg); }
+table.member-table tbody td.sticky-l.assign-T3 { background:var(--assign-t3-bg); }
+table.member-table tbody td.sticky-l.assign-T4 { background:var(--assign-t4-bg); }
+table.member-table tbody tr:hover td.sticky-l.idx-cell,
+table.member-table tbody tr:hover td.sticky-l.name-cell { background-color:var(--table-hover); }
 
 </style>
 </head>
@@ -661,6 +682,7 @@ table.member-table td.loadout-cell.loadout-empty { color:var(--text-faint); font
   </div>
 </div>
 
+<div id="top-config">
 <div class="global-buff-section">
   <h3 id="h3-global-buff">全局加成 <span class="global-buff-hint" id="global-buff-hint" title=""></span></h3>
   <div class="global-buff-bar">
@@ -710,6 +732,7 @@ table.member-table td.loadout-cell.loadout-empty { color:var(--text-faint); font
   <h2 id="h2-trial">试炼配置</h2>
   <div class="trial-cards" id="trial-cards"></div>
 </div>
+</div><!-- /#top-config -->
 
 <div class="member-section">
   <h2 id="h2-member"><button class="btn btn-sm view-tab" id="btn-view-assignment" onclick="setMemberView('assignment')">分配结果</button><button class="btn btn-sm view-tab" id="btn-view-score" onclick="setMemberView('score')">分数估算</button><button class="btn btn-sm view-tab" id="btn-view-members" onclick="setMemberView('members')">成员数据</button><button class="btn btn-sm" id="btn-add-member" onclick="addMember()">+ 添加成员</button></h2>
@@ -4714,9 +4737,59 @@ async function pullFromServer() {
 }
 async function refreshFromServer() { return pullFromServer(); }
 
+// === 冻结首列 / 吸附表头 ===
+// 表头会重新渲染（renderTableHeader/innerHTML），因此每次 DOM 变化后按实测宽度重算：
+//   前 3 列（序号/分配/角色名）冻结在左侧；多行表头按行依次吸附在各自高度。
+const STICKY_LEFT_COUNT = 3;
+function applyStickyLayout() {
+  const thead = document.getElementById('member-thead');
+  const tbody = document.getElementById('member-tbody');
+  if (!thead) return;
+  const rows = thead.querySelectorAll('tr');
+  if (!rows.length) return;
+  // 1) 垂直：每个表头行从上到下依次吸附（支持“分配结果”的两行表头）
+  let cumTop = 0;
+  for (const row of rows) {
+    row.querySelectorAll('th').forEach(th => th.style.top = cumTop + 'px');
+    cumTop += row.offsetHeight || 0;
+  }
+  // 2) 水平：前 N 列冻结，left 用首个表头行各列的实际宽度累加
+  const firstCells = rows[0].querySelectorAll('th');
+  const n = Math.min(STICKY_LEFT_COUNT, firstCells.length);
+  const lefts = [];
+  let acc = 0;
+  for (let i = 0; i < n; i++) { lefts.push(acc); acc += firstCells[i].offsetWidth || 0; }
+  for (const row of rows) {
+    const ths = row.querySelectorAll('th');
+    for (let i = 0; i < ths.length && i < n; i++) {
+      ths[i].classList.add('sticky-lh');
+      ths[i].style.left = lefts[i] + 'px';
+    }
+  }
+  if (tbody) {
+    [...tbody.rows].forEach(row => {
+      if (row.cells.length <= n) return; // 空态提示等整行 colspan 行不冻结
+      for (let i = 0; i < n && i < row.cells.length; i++) {
+        const c = row.cells[i];
+        c.classList.add('sticky-l');
+        c.style.left = lefts[i] + 'px';
+      }
+    });
+  }
+}
+function initStickyLayout() {
+  const targets = ['member-thead', 'member-tbody'].map(id => document.getElementById(id)).filter(Boolean);
+  if (!targets.length || typeof MutationObserver === 'undefined') return;
+  const mo = new MutationObserver(() => { try { applyStickyLayout(); } catch (e) {} });
+  targets.forEach(el => mo.observe(el, { childList: true, subtree: true }));
+  window.addEventListener('resize', () => { try { applyStickyLayout(); } catch (e) {} });
+  try { applyStickyLayout(); } catch (e) {}
+}
+
 // === Init ===
 async function init() {
   loadPrefs();
+  initStickyLayout();
   loadGuildBuffs();
   loadProgressMin();
   renderGuildBuildingInputs();
