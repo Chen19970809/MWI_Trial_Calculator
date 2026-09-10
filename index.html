@@ -54,6 +54,7 @@ h2 { font-size:16px; margin:10px 0 8px; color:var(--text-muted); }
 .btn-sm { padding:3px 8px; font-size:12px; }
 .btn-icon { padding:6px 10px; font-size:16px; line-height:1; }
 .connection-status { font-size:12px; color:var(--text-muted); padding:2px 8px; border-radius:3px; background:var(--conn-bg); }
+.app-version { font-size:11px; color:var(--text-faint); font-weight:400; letter-spacing:.3px; user-select:text; }
 .pull-status { font-size:12px; padding:2px 8px; border-radius:3px; background:var(--conn-bg); color:var(--text-muted); display:none; }
 .pull-status.warn { color:#c25e00; background:#fff2e0; border:1px solid #f3c98a; }
 .pull-status.ok { color:#1a7f37; background:#e6f4ea; border:1px solid #a6d8b5; }
@@ -667,6 +668,7 @@ table.member-table tbody tr:hover td.sticky-l.name-cell { background-color:var(-
 <div class="header">
   <div class="header-left">
     <h1 id="h1-title">MWI 试炼计算器</h1>
+    <span class="app-version" id="app-version">v1.0.0</span>
     <span class="connection-status" id="conn-status">离线模式</span>
     <span class="pull-status" id="pull-status" title=""></span>
   </div>
@@ -747,6 +749,9 @@ table.member-table tbody tr:hover td.sticky-l.name-cell { background-color:var(-
 <div class="summary-bar" id="summary-bar"></div>
 
 <script>
+
+// 版本号：发版时改这里即可（显示在标题“MWI 试炼计算器”后面）。
+const APP_VERSION = '1.0.0';
 
 // === i18n ===
 const I18N = {
@@ -2017,13 +2022,65 @@ function readBuffAmount(b) {
   return sum;
 }
 
-// 从 person.achievementActionTypeBuffsDict 或 person.achievements 中提取成就对某技能的加成。
-// 原始 gameState 字段 achievementActionTypeBuffsDict['/action_types/xxx'] = [buff,...] 优先。
-// 从 person.achievements 或已计算字段中提取成就对某技能的加成。
+// 成就档完成状态（achievementsValue）→ 某技能的档位 BUFF。
+// 只计算 Beginner / Adept tier，且必须该 tier 下所有成就都完成才触发本 tier 的 BUFF。
+// 共用于两条路径：0) 预计算的 achievementsValue；2) 原始 achievements 布尔表现算。
+function applyAchievementTierBuffs(out, achievementsValue, actionTypeHrid) {
+  if (!achievementsValue || typeof achievementsValue !== 'object' || Array.isArray(achievementsValue)) return;
+  const tierDetailMap = EMBEDDED_CLIENT_DATA && EMBEDDED_CLIENT_DATA.achievementTierDetailMap;
+  if (!tierDetailMap) return;
+  for (const tierHrid of ['/achievement_tiers/beginner', '/achievement_tiers/adept']) {
+    if (achievementsValue[tierHrid] !== true) continue;
+    const tierDetail = tierDetailMap[tierHrid];
+    if (!tierDetail || !tierDetail.buff || !tierDetail.usableInActionTypeMap || !tierDetail.usableInActionTypeMap[actionTypeHrid]) continue;
+    const b = tierDetail.buff;
+    const amt = readBuffAmount(b);
+    const t = b.typeHrid;
+    if      (t === '/buff_types/efficiency') out.efficiencyBonus += amt;
+    else if (t === '/buff_types/action_speed' || t === '/buff_types/speed') out.speedBonus += amt;
+    else if (t === '/buff_types/success_rate') out.successBonus += amt;
+    else if (t === '/buff_types/gathering') out.gatheringBonus += amt;
+    else if (t.endsWith('_level')) out.skillLevelBonus += amt;
+  }
+}
+
+// 导入/上传前把原始 achievements 布尔表压缩成两档完成状态：
+//   { '/achievement_tiers/beginner': bool, '/achievement_tiers/adept': bool }
+// 无有效数据时返回 null（调用方保留原状，继续走原始 achievements 路径）。
+function computeAchievementsValue(achievements) {
+  if (!achievements || typeof achievements !== 'object' || Array.isArray(achievements)) return null;
+  const detailMap = EMBEDDED_CLIENT_DATA && EMBEDDED_CLIENT_DATA.achievementDetailMap;
+  if (!detailMap) return null;
+  const val = {};
+  let any = false;
+  for (const tierHrid of ['/achievement_tiers/beginner', '/achievement_tiers/adept']) {
+    let total = 0, done = 0;
+    for (const [achHrid, achDetail] of Object.entries(detailMap)) {
+      if (!achDetail || achDetail.tierHrid !== tierHrid) continue;
+      total++;
+      if (achievements[achHrid] === true) done++;
+    }
+    if (total === 0) continue;
+    val[tierHrid] = (done === total);
+    any = true;
+  }
+  return any ? val : null;
+}
+
+// 从 person.achievementsValue / person.achievementActionTypeBuffsDict / person.achievements 中提取成就对某技能的加成。
+// 0) 预计算 achievementsValue（导入/上传时已压缩）最高优先；
+// 1) 原始 gameState 已计算字段 achievementActionTypeBuffsDict['/action_types/xxx'] = [buff,...] 次之；
+// 2) 内嵌 client data + person.achievements 现算兜底。
 function extractAchievementBonuses(person, skillId) {
   const out = { speedBonus:0, efficiencyBonus:0, successBonus:0, gatheringBonus:0, skillLevelBonus:0 };
   if (!person) return out;
   const actionTypeHrid = '/action_types/' + skillId;
+
+  // 0) 最高优先：预计算的 achievementsValue（两档完成状态），上传/导入后的数据不再携带原始 achievements
+  if (person.achievementsValue) {
+    applyAchievementTierBuffs(out, person.achievementsValue, actionTypeHrid);
+    return out;
+  }
 
   // 1) 优先：原始 gameState 已计算字段 achievementActionTypeBuffsDict
   if (person.achievementActionTypeBuffsDict && typeof person.achievementActionTypeBuffsDict === 'object' && !Array.isArray(person.achievementActionTypeBuffsDict)) {
@@ -2044,32 +2101,9 @@ function extractAchievementBonuses(person, skillId) {
     }
   }
 
-  // 2) 使用内嵌 client data + person.achievements 完成状态计算
-  //    只计算 Beginner / Adept tier，且必须该 tier 下所有成就都完成才触发本 tier 的 BUFF。
+  // 2) 使用内嵌 client data + person.achievements 现算完成状态（旧数据兜底，新导入已压缩成 achievementsValue）
   if (EMBEDDED_CLIENT_DATA && EMBEDDED_CLIENT_DATA.achievementDetailMap && EMBEDDED_CLIENT_DATA.achievementTierDetailMap && person.achievements && typeof person.achievements === 'object' && !Array.isArray(person.achievements)) {
-    const ALLOWED_TIERS = new Set(['/achievement_tiers/beginner', '/achievement_tiers/adept']);
-    const tierAchievements = {};
-    for (const [achHrid, achDetail] of Object.entries(EMBEDDED_CLIENT_DATA.achievementDetailMap)) {
-      if (!achDetail || !achDetail.tierHrid) continue;
-      if (!ALLOWED_TIERS.has(achDetail.tierHrid)) continue;
-      if (!tierAchievements[achDetail.tierHrid]) tierAchievements[achDetail.tierHrid] = [];
-      tierAchievements[achDetail.tierHrid].push(achHrid);
-    }
-    for (const [tierHrid, achHrids] of Object.entries(tierAchievements)) {
-      if (achHrids.length === 0) continue;
-      const allCompleted = achHrids.every(h => person.achievements[h] === true);
-      if (!allCompleted) continue;
-      const tierDetail = EMBEDDED_CLIENT_DATA.achievementTierDetailMap[tierHrid];
-      if (!tierDetail || !tierDetail.buff || !tierDetail.usableInActionTypeMap || !tierDetail.usableInActionTypeMap[actionTypeHrid]) continue;
-      const b = tierDetail.buff;
-      const amt = readBuffAmount(b);
-      const t = b.typeHrid;
-      if      (t === '/buff_types/efficiency') out.efficiencyBonus += amt;
-      else if (t === '/buff_types/action_speed' || t === '/buff_types/speed') out.speedBonus += amt;
-      else if (t === '/buff_types/success_rate') out.successBonus += amt;
-      else if (t === '/buff_types/gathering') out.gatheringBonus += amt;
-      else if (t.endsWith('_level')) out.skillLevelBonus += amt;
-    }
+    applyAchievementTierBuffs(out, computeAchievementsValue(person.achievements), actionTypeHrid);
     return out;
   }
 
@@ -3420,6 +3454,9 @@ function renderAll() {
 
 function updateStaticText() {
   document.getElementById('h1-title').textContent = t('title');
+  const verEl = document.getElementById('app-version');
+  if (verEl) verEl.textContent = 'v' + APP_VERSION;
+  document.title = t('title') + ' v' + APP_VERSION;
   document.getElementById('h2-trial').textContent = t('trialConfig');
   document.getElementById('btn-view-assignment').textContent = t('assignmentResult');
   const scoreBtn = document.getElementById('btn-view-score');
@@ -4173,6 +4210,11 @@ function parseMemberFromProfile(profile) {
 
   if (hasNewData) {
     // 新数据：装备通过 loadouts 精算，equipment 一律留空（UI 上的装备格失效）
+    // 成就在导入时即压缩成 achievementsValue（Beginner/Adept 两档完成状态），不再保留原始布尔表，
+    // 以缩减 localStorage 与云端上传体积（jsonbin 免费档单条记录 100KB 上限）。
+    // 若脚本直接导出了 gameState 原始 dict，则保留 dict 走老路径（此时不生成 achievementsValue，避免覆盖 dict 语义）。
+    const achDict = profile.achievementActionTypeBuffsDict;
+    const hasAchDict = achDict && typeof achDict === 'object' && !Array.isArray(achDict) && Object.keys(achDict).length > 0;
     return {
       name,
       levels,
@@ -4180,9 +4222,10 @@ function parseMemberFromProfile(profile) {
       loadouts:         Array.isArray(profile.labyrinthLoadouts) ? profile.labyrinthLoadouts : [],
       actionTypeBuffs:  profile.actionTypeBuffs  || {},
       houseRoomLevels:  profile.houseRoomLevels  || {},
-      achievements:     profile.achievements     || {},
+      // 原始 achievements → 两档完成状态（undefined 键 JSON.stringify 时自动丢弃）
+      achievementsValue: hasAchDict ? undefined : (computeAchievementsValue(profile.achievements) || undefined),
       // 若脚本直接导出 gameState 原始分来源字段，也保留下来
-      achievementActionTypeBuffsDict: profile.achievementActionTypeBuffsDict || {},
+      achievementActionTypeBuffsDict: achDict || {},
       houseActionTypeBuffsDict:       profile.houseActionTypeBuffsDict       || {},
       communityActionTypeBuffsDict:   profile.communityActionTypeBuffsDict   || {},
     };
@@ -4388,6 +4431,19 @@ function loadData() {
 const BIN_BASE = 'https://api.jsonbin.io/v3/b';
 let isUploading = false;
 
+// 上传瘦身：仍携带原始 achievements 布尔表的旧成员 → 换算成 achievementsValue 并删除布尔表。
+// 新导入的成员已无 achievements，本函数原样返回。云端与本地逐步收敛到瘦格式。
+function slimMemberForUpload(p) {
+  if (!p || !p.achievements || typeof p.achievements !== 'object' || Array.isArray(p.achievements)) return p;
+  const np = Object.assign({}, p);
+  if (!np.achievementsValue) {
+    const av = computeAchievementsValue(np.achievements);
+    if (av) np.achievementsValue = av;
+  }
+  delete np.achievements;
+  return np;
+}
+
 // 用户点顶栏"上传"按钮触发的手动同步。个人端未拉取时拒绝，避免覆盖别人。
 async function uploadToServer() {
   if (!state.isShared || !state.binId || !state.encKey) { alert(t('notShared')); return; }
@@ -4398,7 +4454,7 @@ async function uploadToServer() {
   if (btn) { btn.disabled = true; btn.classList.add('busy'); }
   let mergeFail = null; // 记录拉取远端合并这一步的失败信息，便于排查 401/403。
   try {
-    const localData = { guild:state.guild, members:state.members, trials:state.trials };
+    const localData = { guild:state.guild, members:(state.members||[]).map(slimMemberForUpload), trials:state.trials };
     const mk = localStorage.getItem('mwi_master_key') || '';
     // Fetch latest 做 merge（会长端下 mergeState 会强推本地，其他人走 name+_ts 合并）
     let merged = localData;
@@ -4649,7 +4705,7 @@ async function loadFromBin() {
 }
 async function createBin(guild, password, masterKey) {
   const encKey = await deriveKey(password, guild);
-  const data = JSON.stringify({ guild, members: state.members, trials: state.trials });
+  const data = JSON.stringify({ guild, members:(state.members||[]).map(slimMemberForUpload), trials:state.trials });
   const rec = await encryptRecord(data, encKey);
   const resp = await fetch(BIN_BASE, {
     method:'POST',
