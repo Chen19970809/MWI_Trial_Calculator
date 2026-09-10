@@ -771,6 +771,15 @@ const I18N = {
     uploadConfirmTitle:'确认上传', uploadSizeLabel:'本次上传数据大小：{size}',
     uploadSizeHint:'会长端将覆盖云端数据，确认后开始上传。',
     cancelUpload:'取消上传', confirmUpload:'确认上传',
+    uploadErrDetail:'服务器返回：',
+    uploadErrUnknown:'未知错误：请检查网络与 jsonbin 配置。',
+    uploadErrBadRequest:'请求被拒绝（400）：免费档单条记录上限 100KB，或本月请求次数已用尽。请精简数据或升级 jsonbin Pro 套餐。',
+    uploadErrUnauthorized:'鉴权失败（401）：Master Key 缺失或无效，或该云端 bin 不属于当前 Key 所属账号。请到 jsonbin.io 的 API Keys 页面核对。',
+    uploadErrForbidden:'无权限更新（403）：当前 Key 没有更新该 bin 的权限。请确认填的是 Master Key；若使用 Access Key，需在 jsonbin 中授予 Bins Update 权限，且 bin 与 Key 属同一账号。',
+    uploadErrNotFound:'云端 bin 不存在（404）：可能已被删除，请重新创建共享空间。',
+    uploadErrTooLarge:'数据过大（413）：已超过 jsonbin 单条记录上限，请精简数据或升级套餐。',
+    uploadErrServer:'云端服务异常：请稍后重试。',
+    uploadMergeFailHint:'提示：拉取远端数据也失败了（HTTP {status}）：{msg}。本次未合并远端，直接上传可能覆盖他人数据。',
     needClickUpload:'请点右上角"上传"按钮同步到云端。',
     importDetail:'导入完成：新增 {added} 位，更新 {updated} 位，本地共 {total} 位。',
     importMemberLossWarning:'警告：旧数据有 {old} 位成员，导入后减少为 {new} 位成员，请谨慎上传！！！\n\n是否继续导入？',
@@ -846,6 +855,15 @@ const I18N = {
     uploadConfirmTitle:'Confirm Upload', uploadSizeLabel:'Data size to upload: {size}',
     uploadSizeHint:'The leader will overwrite the cloud data. Upload starts after confirmation.',
     cancelUpload:'Cancel Upload', confirmUpload:'Confirm Upload',
+    uploadErrDetail:'Server says: ',
+    uploadErrUnknown:'Unknown error. Check your network and jsonbin settings.',
+    uploadErrBadRequest:'Bad request (400): the free plan allows max 100KB per record, or the monthly request quota is used up. Trim the data or upgrade to jsonbin Pro.',
+    uploadErrUnauthorized:'Unauthorized (401): X-Master-Key is missing or invalid, or this bin does not belong to your account. Check jsonbin.io API Keys.',
+    uploadErrForbidden:'Forbidden (403): this key cannot update the bin. Make sure you use the Master Key; if you use an Access Key, grant it the Bins Update permission and ensure the bin belongs to the same account.',
+    uploadErrNotFound:'Not found (404): the bin no longer exists. Please create the shared space again.',
+    uploadErrTooLarge:'Payload too large (413): exceeds the jsonbin per-record limit. Trim the data or upgrade your plan.',
+    uploadErrServer:'Cloud service error. Please retry later.',
+    uploadMergeFailHint:'Note: fetching remote data also failed (HTTP {status}): {msg}. This upload skipped merging and may overwrite others data.',
     needClickUpload:'Click the top-right "Upload" button to sync to the cloud.',
     importDetail:'Import done: +{added} added, {updated} updated, {total} total locally.',
     importMemberLossWarning:'Warning: Old data has {old} members, after import it will be reduced to {new} members. Please be careful before uploading!!!\n\nContinue import?',
@@ -4378,6 +4396,7 @@ async function uploadToServer() {
   isUploading = true;
   const btn = document.getElementById('btn-upload');
   if (btn) { btn.disabled = true; btn.classList.add('busy'); }
+  let mergeFail = null; // 记录拉取远端合并这一步的失败信息，便于排查 401/403。
   try {
     const localData = { guild:state.guild, members:state.members, trials:state.trials };
     const mk = localStorage.getItem('mwi_master_key') || '';
@@ -4393,8 +4412,10 @@ async function uploadToServer() {
           const remote = JSON.parse(dec);
           merged = mergeState(localData, remote);
         }
+      } else {
+        mergeFail = { status: resp.status, message: await readServerMessage(resp) };
       }
-    } catch(e) { console.warn('Merge fetch failed, uploading without merge:', e); }
+    } catch(e) { mergeFail = { status: 0, message: String((e && e.message) || e) }; console.warn('Merge fetch failed, uploading without merge:', e); }
     const rec = await encryptRecord(JSON.stringify(merged), state.encKey);
     // 会长端：上传前弹窗显示本次上传数据大小，用户可取消。
     if (isGuildLeader()) {
@@ -4407,7 +4428,14 @@ async function uploadToServer() {
     const putResp = await fetch(BIN_BASE+'/'+state.binId, {
       method:'PUT', headers:pHeaders, body: JSON.stringify(rec)
     });
-    if (!putResp || !putResp.ok) throw new Error('HTTP '+(putResp && putResp.status));
+    if (!putResp || !putResp.ok) {
+      const status = putResp ? putResp.status : 0;
+      const serverMsg = putResp ? await readServerMessage(putResp) : '';
+      const err = new Error(describeUploadError(status, serverMsg));
+      err.__uploadStatus = status;
+      err.__mergeFail = mergeFail;
+      throw err;
+    }
     // 本地状态同步为 merged，让 UI 反映合并后（可能被"其他人的新数据"拉进来的）内容
     const prevSig = (state.members || []).map(p => p && p.id).join(',');
     state.members = merged.members;
@@ -4423,7 +4451,13 @@ async function uploadToServer() {
   } catch(e) {
     if (!(e && e.__uploadCancelled)) {
       console.error('Upload failed:', e);
-      alert(t('uploadFail')+': '+(e && e.message ? e.message : e));
+      let msg = (e && e.message) ? e.message : String(e);
+      if (e && e.__mergeFail) {
+        msg += '\n\n' + t('uploadMergeFailHint')
+          .replace('{status}', String(e.__mergeFail.status))
+          .replace('{msg}', e.__mergeFail.message || '-');
+      }
+      alert(msg);
     }
   }
   isUploading = false;
@@ -4457,6 +4491,32 @@ function formatBytes(bytes) {
   if (b < 1024) return b + ' B';
   if (b < 1024 * 1024) return (b / 1024).toFixed(2) + ' KB';
   return (b / 1024 / 1024).toFixed(2) + ' MB';
+}
+
+// 读取响应体里的错误说明（jsonbin 以 { message: '...' } 返回失败原因）。
+async function readServerMessage(resp) {
+  try {
+    const txt = await resp.text();
+    if (!txt) return '';
+    try {
+      const j = JSON.parse(txt);
+      return (j && (j.message || j.error)) || txt.slice(0, 300);
+    } catch(e) { return txt.slice(0, 300); }
+  } catch(e) { return ''; }
+}
+
+// 根据 HTTP 状态码 + 服务器返回的 message，拼出可读的上传失败原因。
+function describeUploadError(status, serverMsg) {
+  let reason = t('uploadErrUnknown');
+  if (status === 400) reason = t('uploadErrBadRequest');
+  else if (status === 401) reason = t('uploadErrUnauthorized');
+  else if (status === 403) reason = t('uploadErrForbidden');
+  else if (status === 404) reason = t('uploadErrNotFound');
+  else if (status === 413) reason = t('uploadErrTooLarge');
+  else if (status >= 500) reason = t('uploadErrServer');
+  let msg = t('uploadFail') + ' (HTTP ' + status + ')\n\n' + reason;
+  if (serverMsg) msg += '\n\n' + t('uploadErrDetail') + serverMsg;
+  return msg;
 }
 
 // 会长端上传前确认弹窗：显示本次上传数据大小，可取消上传。
