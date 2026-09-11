@@ -90,6 +90,15 @@ h2 { font-size:16px; margin:10px 0 8px; color:var(--text-muted); }
 .trial-target-row select { min-width:70px; }
 .view-tab { margin-right:4px; }
 .view-tab.active { background:var(--accent); color:#fff; border-color:var(--accent); }
+/* 展示分配模式：展示设置 + 展示区域 */
+.display-settings-bar { display:flex; flex-wrap:wrap; gap:14px; align-items:center; }
+.display-settings-bar .global-buff-item { cursor:default; }
+#display-cols-input { width:56px; text-align:center; }
+#display-rows-input { width:160px; text-align:center; }
+#display-area { display:flex; flex-wrap:wrap; gap:12px; align-items:flex-start; background:var(--surface); border:1px solid var(--border); border-radius:8px; padding:12px; }
+.display-column { border:1px solid var(--border); border-radius:8px; padding:6px; background:var(--surface); }
+.display-column table.member-table { min-width:200px; }
+.display-empty { color:var(--text-faint); padding:20px; }
 /* 分配结果视图：每个试炼 4 列为一组，组间加分隔线 */
 .member-table .trial-group-start { border-left:2px solid var(--border); }
 .member-table th.assign-sub { font-size:11px; font-weight:500; color:var(--text-muted); padding:2px 6px; }
@@ -668,7 +677,7 @@ table.member-table tbody tr:hover td.sticky-l.name-cell { background-color:var(-
 <div class="header">
   <div class="header-left">
     <h1 id="h1-title">MWI 试炼计算器</h1>
-    <span class="app-version" id="app-version">v1.0.0</span>
+    <span class="app-version" id="app-version">v1.0.1</span>
     <span class="connection-status" id="conn-status">离线模式</span>
     <span class="pull-status" id="pull-status" title=""></span>
   </div>
@@ -679,6 +688,7 @@ table.member-table tbody tr:hover td.sticky-l.name-cell { background-color:var(-
     <button class="btn" id="btn-upload" onclick="uploadToServer()" style="display:none" title="">☁️ <span id="btn-upload-label">上传</span></button>
     <button class="btn" id="btn-share" onclick="openShareDialog()">共享设置</button>
     <button class="btn" id="btn-import-json" onclick="importJson()">导入</button>
+    <button class="btn" id="btn-update-levels" onclick="updateLevelsFromCsv()" style="display:none" title="">更新等级</button>
     <span id="export-script-links" class="export-script-links"></span>
     <button class="btn btn-primary" id="btn-calculate" onclick="calculate()">计算最优分配</button>
   </div>
@@ -730,20 +740,37 @@ table.member-table tbody tr:hover td.sticky-l.name-cell { background-color:var(-
   </div>
 </div>
 
-<div class="trial-section">
+<div class="trial-section" id="trial-config-section">
   <h2 id="h2-trial">试炼配置</h2>
   <div class="trial-cards" id="trial-cards"></div>
+</div>
+
+<!-- 展示分配模式（仅会长端）：开启后试炼配置区切换为此展示设置区 -->
+<div class="trial-section" id="display-settings-section" style="display:none">
+  <h2 id="h2-display-settings">展示设置</h2>
+  <div class="display-settings-bar">
+    <label class="global-buff-item" id="ds-item-cols" title="">
+      <span class="global-buff-label" id="ds-lbl-cols">列数</span>
+      <input type="number" min="1" max="9" step="1" id="display-cols-input" onchange="updateDisplayCols(this.value)">
+    </label>
+    <label class="global-buff-item" id="ds-item-rows" title="">
+      <span class="global-buff-label" id="ds-lbl-rows">每列行数</span>
+      <input type="text" id="display-rows-input" placeholder="4 3 2 1" onchange="updateDisplayRows(this.value)">
+    </label>
+  </div>
 </div>
 </div><!-- /#top-config -->
 
 <div class="member-section">
-  <h2 id="h2-member"><button class="btn btn-sm view-tab" id="btn-view-assignment" onclick="setMemberView('assignment')">分配结果</button><button class="btn btn-sm view-tab" id="btn-view-score" onclick="setMemberView('score')">分数估算</button><button class="btn btn-sm view-tab" id="btn-view-members" onclick="setMemberView('members')">成员数据</button><button class="btn btn-sm" id="btn-add-member" onclick="addMember()">+ 添加成员</button></h2>
-  <div class="table-wrap">
+  <h2 id="h2-member"><button class="btn btn-sm view-tab" id="btn-view-assignment" onclick="setMemberView('assignment')">分配结果</button><button class="btn btn-sm view-tab" id="btn-view-score" onclick="setMemberView('score')">分数估算</button><button class="btn btn-sm view-tab" id="btn-view-members" onclick="setMemberView('members')">成员数据</button><button class="btn btn-sm" id="btn-add-member" onclick="addMember()">+ 添加成员</button><button class="btn btn-sm view-tab" id="btn-view-display" onclick="toggleDisplayMode()">展示分配</button></h2>
+  <div class="table-wrap" id="member-table-wrap">
     <table class="member-table">
       <thead id="member-thead"></thead>
       <tbody id="member-tbody"></tbody>
     </table>
   </div>
+  <!-- 展示分配模式：替代成员表的展示区域（按列数×每列行数分列展示成员） -->
+  <div id="display-area" style="display:none"></div>
 </div>
 
 <div class="summary-bar" id="summary-bar"></div>
@@ -762,6 +789,9 @@ const I18N = {
     exportScript:'下载脚本',
     exportScriptTitle:'下载数据导出脚本（Tampermonkey），安装后可在游戏内一键导出角色数据',
     calculate:'计算最优分配', assignCol:'分配', nameCol:'角色名', maxMembers:'人数上限',
+    displayAssign:'展示分配', displaySettings:'展示设置',
+    displayCols:'列数', displayColsTip:'展示区域分成的列数（1-9 列）。修改后每列行数会按当前成员数重新生成均衡默认值。',
+    displayRows:'每列行数', displayRowsTip:'依次填写每一列的行数，以空格分隔（如 4 3 2 1 = 第1列4行、第2列3行、第3列2行、第4列1行）。行数之和不足时，剩余成员会并入最后一列。',
     noAssign:'(暂无分配)', noMembers:'暂无成员数据，请添加成员或导入 JSON',
     loadoutCol:'配装', loadoutSuffix:'配装', noLoadout:'空配装',
     totalFinalLv:'总最终等级', totalPasses:'总通关', totalTokens:'总代币', tokens:'代币', assigned:'已分配', unassigned:'未分配',
@@ -787,6 +817,13 @@ const I18N = {
     uploadMergeFailHint:'提示：拉取远端数据也失败了（HTTP {status}）：{msg}。本次未合并远端，直接上传可能覆盖他人数据。',
     needClickUpload:'请点右上角"上传"按钮同步到云端。',
     importDetail:'导入完成：新增 {added} 位，更新 {updated} 位，本地共 {total} 位。',
+    updateLevels:'更新等级',
+    updateLevelsTooltip:'选取「银河奶牛工会成员等级更新CSV」脚本导出的 CSV 文件，按角色名更新成员的技能等级与房屋等级。仅会长可用。',
+    csvParseError:'CSV 解析失败：{msg}',
+    csvNoNameCol:'未找到"角色名"列，请确认选择的是导出脚本生成的 CSV。',
+    csvNoRows:'CSV 中没有数据行。',
+    csvUpdateDetail:'等级更新完成：更新 {updated} 位，跳过（未匹配角色名）{skipped} 位。',
+    csvNeedUploadHint:'已更新到本地。请点右上角"上传"按钮同步到云端。',
     importMemberLossWarning:'警告：旧数据有 {old} 位成员，导入后减少为 {new} 位成员，请谨慎上传！！！\n\n是否继续导入？',
     notPulled:'未获取', pulledAtLabel:'已获取',
     pullFirstAlert:'请先点击右上角"获取"按钮，从云端拉取当前公会数据，然后再上传本人数据（避免覆盖他人）。',
@@ -846,6 +883,9 @@ const I18N = {
     exportScript:'Download Script',
     exportScriptTitle:'Download data export userscript (Tampermonkey) to export character data in-game',
     calculate:'Calculate', assignCol:'Assign', nameCol:'Name', maxMembers:'Max',
+    displayAssign:'Display', displaySettings:'Display Settings',
+    displayCols:'Columns', displayColsTip:'Number of columns (1-9) in the display area. Changing this regenerates a balanced rows-per-column string based on current members.',
+    displayRows:'Rows per Column', displayRowsTip:'Row count of each column in order, separated by spaces (e.g. 4 3 2 1 = 4 rows in col 1, 3 in col 2, 2 in col 3, 1 in col 4). Leftover members go to the last column.',
     noAssign:'(None)', noMembers:'No member data. Add members or import JSON.',
     loadoutCol:'Loadout', loadoutSuffix:' Loadout', noLoadout:'(no loadout)',
     totalFinalLv:'Total Final Lv', totalPasses:'Total Passes', totalTokens:'Total Tokens', tokens:'Tokens', assigned:'Assigned', unassigned:'Unassigned',
@@ -871,6 +911,13 @@ const I18N = {
     uploadMergeFailHint:'Note: fetching remote data also failed (HTTP {status}): {msg}. This upload skipped merging and may overwrite others data.',
     needClickUpload:'Click the top-right "Upload" button to sync to the cloud.',
     importDetail:'Import done: +{added} added, {updated} updated, {total} total locally.',
+    updateLevels:'Update Levels',
+    updateLevelsTooltip:'Pick a CSV exported by the "Guild member level CSV" userscript; updates each member\'s skill levels and house room levels by character name. Guild leader only.',
+    csvParseError:'CSV parse error: {msg}',
+    csvNoNameCol:'No "name" column found. Make sure the file is a CSV exported by the userscript.',
+    csvNoRows:'No data rows in the CSV.',
+    csvUpdateDetail:'Levels updated: {updated} updated, {skipped} skipped (name not found).',
+    csvNeedUploadHint:'Saved locally. Click the "Upload" button to sync to the cloud.',
     importMemberLossWarning:'Warning: Old data has {old} members, after import it will be reduced to {new} members. Please be careful before uploading!!!\n\nContinue import?',
     notPulled:'Not pulled', pulledAtLabel:'Pulled',
     pullFirstAlert:'Please click the "Pull" button first to fetch the latest guild data before uploading your own data (to avoid overwriting others).',
@@ -1835,6 +1882,11 @@ let state = {
   selectedLoadoutSuffix: 'Milking',
   // 成员区视图切换：'assignment' = 分配结果（默认，只读简表）；'members' = 成员数据（完整编辑表）。
   memberView: 'assignment',
+  // 展示分配模式（仅会长端）：开启后试炼配置区切换为《展示设置》，成员表区切换为《展示区域》。
+  displayMode: false,
+  // 展示设置：列数 + 每列行数（空格分隔，"4 3 2 1" = 第1列4行、第2列3行、第3列2行、第4列1行）。仅本地保存。
+  displayCols: 4,
+  displayRows: '4 3 2 1',
   // 本人姓名（用于个人端上传时按 name 主键覆盖同名条目）。默认取 importJson 后 members[0].name，也可持久化到 localStorage。
   selfName: '',
   // 是否已从云端拉取过一次数据。个人端必须先拉取再上传，避免覆盖别人。会话级，不持久化。
@@ -3359,6 +3411,12 @@ function renderGuildShrineInputs() {
 function setMemberView(view) {
   // 《成员数据》视图仅会长端可用；非会长即使绕过按钮隐藏也切不过去
   if (view === 'members' && !isGuildLeader()) view = 'assignment';
+  // 切到其他视图时自动退出《展示分配》模式
+  if (state.displayMode) {
+    state.displayMode = false;
+    try { localStorage.setItem('mwi_display_mode', '0'); } catch(e) {}
+    renderDisplayMode();
+  }
   state.memberView = (view === 'members') ? 'members' : (view === 'score' ? 'score' : 'assignment');
   try { localStorage.setItem('mwi_member_view', state.memberView); } catch(e) {}
   syncMemberViewTabs();
@@ -3370,15 +3428,132 @@ function syncMemberViewTabs() {
   const s = document.getElementById('btn-view-score');
   const m = document.getElementById('btn-view-members');
   const add = document.getElementById('btn-add-member');
+  const d = document.getElementById('btn-view-display');
   const leader = isGuildLeader();
-  // 非会长端：不显示《成员数据》/《+ 添加成员》。
+  // 非会长端：不显示《成员数据》/《+ 添加成员》/《展示分配》。
   // 只改内存 state 不写 localStorage：若之后拿到 Master Key 成为会长，原来的视图偏好还在。
   if (!leader && state.memberView === 'members') state.memberView = 'assignment';
+  if (!leader && state.displayMode) state.displayMode = false;
   if (m) m.style.display = leader ? '' : 'none';
   if (add) add.style.display = leader ? '' : 'none';
-  if (a) a.classList.toggle('active', state.memberView === 'assignment');
-  if (s) s.classList.toggle('active', state.memberView === 'score');
-  if (m) m.classList.toggle('active', state.memberView === 'members');
+  if (d) d.style.display = leader ? '' : 'none';
+  if (a) a.classList.toggle('active', state.memberView === 'assignment' && !state.displayMode);
+  if (s) s.classList.toggle('active', state.memberView === 'score' && !state.displayMode);
+  if (m) m.classList.toggle('active', state.memberView === 'members' && !state.displayMode);
+  if (d) d.classList.toggle('active', !!state.displayMode);
+}
+
+// === 展示分配模式（仅会长端）===
+// 开启后：试炼配置区切换为《展示设置》，成员表区切换为《展示区域》。
+// 展示设置 = 列数 + 每列行数（空格分隔，如 "4 3 2 1" = 第1列4行、第2列3行、第3列2行、第4列1行）。
+function toggleDisplayMode() {
+  if (!isGuildLeader()) { alert(t('leaderOnly')); return; }
+  state.displayMode = !state.displayMode;
+  try { localStorage.setItem('mwi_display_mode', state.displayMode ? '1' : '0'); } catch(e) {}
+  renderDisplayMode();
+  syncMemberViewTabs();
+}
+// 根据 displayMode 切换：试炼配置区 ↔ 展示设置区；成员表 ↔ 展示区域。
+function renderDisplayMode() {
+  const on = state.displayMode && isGuildLeader();
+  const trialSection = document.getElementById('trial-config-section');
+  const settingsSection = document.getElementById('display-settings-section');
+  const tableWrap = document.getElementById('member-table-wrap');
+  const displayArea = document.getElementById('display-area');
+  if (trialSection) trialSection.style.display = on ? 'none' : '';
+  if (settingsSection) settingsSection.style.display = on ? '' : 'none';
+  if (tableWrap) tableWrap.style.display = on ? 'none' : '';
+  if (displayArea) displayArea.style.display = on ? 'flex' : 'none';
+  if (on) renderDisplaySettings();
+}
+// 生成把 n 人尽量均分到 c 列的行数字符串（前多后少，空格分隔），如 10 人 4 列 → "3 3 3 1"。
+function defaultDisplayRowsStr(n, c) {
+  const rows = [];
+  let remaining = Math.max(0, n);
+  for (let j = 0; j < c; j++) {
+    const r = Math.ceil(remaining / (c - j));
+    rows.push(r);
+    remaining -= r;
+  }
+  return rows.join(' ');
+}
+// 解析"每列行数"输入（空格分隔，如 "4 3 2 1"）为每列行数的数组。
+function parseDisplayRows(s) {
+  return String(s || '').trim().split(/\s+/).filter(x => x !== '').map(x => {
+    const d = Number(x);
+    return Number.isFinite(d) && d > 0 ? Math.floor(d) : 0;
+  });
+}
+function updateDisplayCols(v) {
+  let c = Math.floor(Number(v) || 0);
+  if (!Number.isFinite(c) || c < 1) c = 1;
+  if (c > 9) c = 9;
+  state.displayCols = c;
+  // 行数字串的列数与新列数不匹配时，按当前成员数重新生成均衡默认值
+  if (parseDisplayRows(state.displayRows).length !== c) state.displayRows = defaultDisplayRowsStr(state.members.length, c);
+  try {
+    localStorage.setItem('mwi_display_cols', String(c));
+    localStorage.setItem('mwi_display_rows', state.displayRows);
+  } catch(e) {}
+  renderDisplaySettings();
+}
+function updateDisplayRows(v) {
+  const s = String(v || '').replace(/[^\d\s]/g, '').trim().replace(/\s+/g, ' ');
+  state.displayRows = s;
+  try { localStorage.setItem('mwi_display_rows', s); } catch(e) {}
+  renderDisplayArea();
+}
+function renderDisplaySettings() {
+  const colsInput = document.getElementById('display-cols-input');
+  const rowsInput = document.getElementById('display-rows-input');
+  if (colsInput && document.activeElement !== colsInput) colsInput.value = state.displayCols;
+  if (rowsInput && document.activeElement !== rowsInput) rowsInput.value = state.displayRows;
+  renderDisplayArea();
+}
+// 展示区域：按《分配结果》视图的顺序与前三列（序号/分配/角色名），把所有成员按 列数×每列行数 分列展示。
+// 行数之和不足以容纳全部成员时，剩余成员并入最后一列。
+function renderDisplayArea() {
+  const area = document.getElementById('display-area');
+  if (!area) return;
+  if (state.members.length === 0) {
+    area.innerHTML = '<div class="display-empty">'+t('noMembers')+'</div>';
+    return;
+  }
+  const cols = state.displayCols;
+  const entries = state.members.map((p, rowIdx) => ({ p, rowIdx }));
+  const parsedRows = parseDisplayRows(state.displayRows);
+  const colRows = [];
+  for (let j = 0; j < cols; j++) {
+    colRows.push(parsedRows[j] || 0);
+  }
+  const slices = [];
+  let pos = 0;
+  for (let j = 0; j < cols; j++) {
+    slices.push(entries.slice(pos, pos + colRows[j]));
+    pos += colRows[j];
+  }
+  if (pos < entries.length && slices.length > 0) {
+    slices[slices.length - 1] = slices[slices.length - 1].concat(entries.slice(pos));
+  }
+  area.innerHTML = slices.map(list => {
+    const rowsHtml = list.map(({ p, rowIdx }) => {
+      const assign = state.assignment ? state.assignment[p.id] : -1;
+      const assignClass = assign >= 0 ? 'assign-T'+(assign+1) : 'assign-none';
+      const assignContent = assign >= 0 ? svgIcon(SKILL_KEYS[state.trials[assign].skill], 22, 22) : '-';
+      return '<tr>'+
+        '<td class="idx-cell">'+rowIdx+'</td>'+
+        '<td class="assign-cell '+assignClass+'">'+assignContent+'</td>'+
+        '<td class="name-cell">'+escHtml(p.name)+'</td>'+
+      '</tr>';
+    }).join('');
+    return '<div class="display-column">'+
+      '<table class="member-table"><thead><tr>'+
+        '<th class="idx-col">'+t('indexCol')+'</th>'+
+        '<th class="assign-col">'+t('assignCol')+'</th>'+
+        '<th class="name-col">'+t('nameCol')+'</th>'+
+      '</tr></thead><tbody>'+rowsHtml+'</tbody></table>'+
+    '</div>';
+  }).join('');
 }
 
 function renderTableHeader() {
@@ -3442,6 +3617,7 @@ function renderTableHeader() {
 function renderAll() {
   document.title = t('title');
   syncMemberViewTabs();
+  renderDisplayMode();
   renderTableHeader();
   renderTrialCards();
   renderMemberTable();
@@ -3462,6 +3638,18 @@ function updateStaticText() {
   const scoreBtn = document.getElementById('btn-view-score');
   if (scoreBtn) scoreBtn.textContent = t('scoreEstimate');
   document.getElementById('btn-view-members').textContent = t('memberData');
+  const displayBtn = document.getElementById('btn-view-display');
+  if (displayBtn) displayBtn.textContent = t('displayAssign');
+  const h2DisplaySettings = document.getElementById('h2-display-settings');
+  if (h2DisplaySettings) h2DisplaySettings.textContent = t('displaySettings');
+  const dsColsLabel = document.getElementById('ds-lbl-cols');
+  if (dsColsLabel) dsColsLabel.textContent = t('displayCols');
+  const dsRowsLabel = document.getElementById('ds-lbl-rows');
+  if (dsRowsLabel) dsRowsLabel.textContent = t('displayRows');
+  const dsColsItem = document.getElementById('ds-item-cols');
+  if (dsColsItem) dsColsItem.title = t('displayColsTip');
+  const dsRowsItem = document.getElementById('ds-item-rows');
+  if (dsRowsItem) dsRowsItem.title = t('displayRowsTip');
   const gbTitle = document.getElementById('h3-global-buff');
   if (gbTitle) gbTitle.firstChild.textContent = t('globalBuffs') + ' ';
   const gb = state.globalBuffs || {};
@@ -3513,6 +3701,12 @@ function updateStaticText() {
   document.getElementById('btn-add-member').textContent = '+ '+t('addMember');
   document.getElementById('btn-share').textContent = t('share');
   document.getElementById('btn-import-json').textContent = t('importData');
+  const lvBtn = document.getElementById('btn-update-levels');
+  if (lvBtn) {
+    lvBtn.textContent = t('updateLevels');
+    lvBtn.title = t('updateLevelsTooltip');
+    lvBtn.style.display = isGuildLeader() ? '' : 'none';
+  }
   renderExportScriptLinks();
   document.getElementById('btn-calculate').textContent = t('calculate');
   document.getElementById('btn-lang').textContent = t('language');
@@ -3866,6 +4060,11 @@ function renderAssignmentTableBody(tbody) {
 }
 
 function renderMemberTable() {
+  // 展示分配模式：成员表被隐藏，改为渲染展示区域（与各处重渲染逻辑联动，保持数据同步）。
+  if (state.displayMode && isGuildLeader()) {
+    renderDisplayArea();
+    return;
+  }
   const tbody = document.getElementById('member-tbody');
   if (state.memberView === 'assignment') {
     renderAssignmentTableBody(tbody);
@@ -3976,6 +4175,12 @@ function loadPrefs() {
     if (loadoutSuffix) state.selectedLoadoutSuffix = loadoutSuffix;
     const memberView = localStorage.getItem('mwi_member_view');
     if (memberView === 'assignment' || memberView === 'members') state.memberView = memberView;
+    const displayMode = localStorage.getItem('mwi_display_mode');
+    if (displayMode === '1') state.displayMode = true;
+    const displayCols = Number(localStorage.getItem('mwi_display_cols'));
+    if (Number.isFinite(displayCols) && displayCols >= 1 && displayCols <= 9) state.displayCols = displayCols;
+    const displayRows = localStorage.getItem('mwi_display_rows');
+    if (displayRows && /^[\d\s]+$/.test(displayRows)) state.displayRows = displayRows.trim();
     const selfName = localStorage.getItem('mwi_self_name');
     if (selfName) state.selfName = selfName;
     const rawGB = localStorage.getItem('mwi_global_buffs');
@@ -4356,6 +4561,134 @@ function importJson() {
     reader.readAsText(file, 'UTF-8');
   };
   input.click();
+}
+
+// === 会长端「更新等级」：导入 CSV，按角色名更新成员等级与房屋等级 ===
+// CSV 格式来自「银河奶牛工会成员等级更新CSV」导出脚本：
+//   角色名, 游戏模式, milking...magic(17技能), 总等级,
+//   房屋_<中文标签>(17列), 神龛_<中文标签>(5列), 更新时间
+// 房屋列中文标签 → 房间 hrid（与导出脚本 HOUSE_ROOMS 保持一致）
+const CSV_HOUSE_ROOM_LABEL_MAP = {
+  '奶牛棚':   '/house_rooms/dairy_barn',
+  '花园':     '/house_rooms/garden',
+  '储木场':   '/house_rooms/log_shed',
+  '锻造间':   '/house_rooms/forge',
+  '工坊':     '/house_rooms/workshop',
+  '裁缝室':   '/house_rooms/sewing_parlor',
+  '厨房':     '/house_rooms/kitchen',
+  '酿造间':   '/house_rooms/brewery',
+  '实验室':   '/house_rooms/laboratory',
+  '天文台':   '/house_rooms/observatory',
+  '射箭场':   '/house_rooms/archery_range',
+  '甲胄室':   '/house_rooms/armory',
+  '道场':     '/house_rooms/dojo',
+  '餐厅':     '/house_rooms/dining_room',
+  '健身房':   '/house_rooms/gym',
+  '图书馆':   '/house_rooms/library',
+  '神秘书房': '/house_rooms/mystical_study',
+};
+const CSV_NAME_HEADERS = ['角色名', 'name', 'Name', '角色'];
+
+// 解析单行 CSV（支持引号包裹、双引号转义）
+function parseCsvLine(line) {
+  const out = [];
+  let cur = '', inQ = false;
+  for (let i = 0; i < line.length; i++) {
+    const c = line[i];
+    if (inQ) {
+      if (c === '"') {
+        if (line[i + 1] === '"') { cur += '"'; i++; }
+        else inQ = false;
+      } else cur += c;
+    } else {
+      if (c === '"') inQ = true;
+      else if (c === ',') { out.push(cur); cur = ''; }
+      else cur += c;
+    }
+  }
+  out.push(cur);
+  return out;
+}
+
+// 会长端顶栏「更新等级」按钮：选 CSV 文件 → 按角色名更新成员 levels 与 houseRoomLevels。
+function updateLevelsFromCsv() {
+  if (!isGuildLeader()) { alert(t('leaderOnly')); return; }
+  const input = document.createElement('input');
+  input.type = 'file'; input.accept = '.csv,text/csv';
+  input.onchange = () => {
+    const file = input.files[0]; if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      try { applyCsvLevelUpdate(String(reader.result || '')); }
+      catch(e) { alert(t('csvParseError').replace('{msg}', String(e && e.message || e))); }
+    };
+    reader.readAsText(file, 'UTF-8');
+  };
+  input.click();
+}
+
+function applyCsvLevelUpdate(csvText) {
+  const text = String(csvText || '').replace(/^\uFEFF/, '');
+  const lines = text.split(/\r?\n/).filter(l => l.length > 0);
+  if (lines.length < 2) { alert(t('csvNoRows')); return; }
+
+  const headers = parseCsvLine(lines[0]).map(h => String(h || '').trim());
+  const nameIdx = headers.findIndex(h => CSV_NAME_HEADERS.indexOf(h) >= 0);
+  if (nameIdx < 0) { alert(t('csvNoNameCol')); return; }
+  const skillIdx = {};   // SKILL_KEYS 中技能 → 列号（CSV 表头即技能英文 id）
+  SKILL_KEYS.forEach(sk => { const i = headers.indexOf(sk); if (i >= 0) skillIdx[sk] = i; });
+  const houseIdx = {};   // 房间 hrid → 列号（表头 房屋_<标签>）
+  headers.forEach((h, i) => {
+    if (h.indexOf('房屋_') === 0) {
+      const hrid = CSV_HOUSE_ROOM_LABEL_MAP[h.slice(3)];
+      if (hrid) houseIdx[hrid] = i;
+    }
+  });
+
+  const byName = {};
+  (state.members || []).forEach(p => { if (p && p.name) byName[String(p.name).trim()] = p; });
+
+  let updated = 0, skipped = 0;
+  const now = Date.now();
+  for (let r = 1; r < lines.length; r++) {
+    const cells = parseCsvLine(lines[r]);
+    const name = String(cells[nameIdx] || '').trim();
+    if (!name) continue;
+    const person = byName[name];
+    if (!person) { skipped++; continue; }
+
+    // 技能等级：CSV 17 技能列中取前 10 个生活技能（与 person.levels 顺序一致）
+    if (Object.keys(skillIdx).length > 0) {
+      const levels = SKILL_KEYS.map((sk, s) => {
+        const i = skillIdx[sk];
+        if (i == null) return Number(person.levels && person.levels[s]) || 0;
+        const n = Math.max(0, parseInt(cells[i], 10));
+        return Number.isFinite(n) ? n : 0;
+      });
+      person.levels = levels;
+    }
+
+    // 房屋等级：合并进已有 houseRoomLevels（CSV 缺列时保留原值）
+    if (Object.keys(houseIdx).length > 0) {
+      const hr = Object.assign({}, person.houseRoomLevels || {});
+      for (const [hrid, i] of Object.entries(houseIdx)) {
+        const n = Math.max(0, parseInt(cells[i], 10));
+        if (Number.isFinite(n)) hr[hrid] = n;
+      }
+      person.houseRoomLevels = hr;
+    }
+
+    person._ts = now;
+    updated++;
+  }
+
+  if (updated > 0) {
+    renderAll();
+    saveData();
+    if (state.members.length > 0) calculate();
+  }
+  const detail = t('csvUpdateDetail').replace('{updated}', updated).replace('{skipped}', skipped);
+  alert(state.isShared ? detail + '\n' + t('csvNeedUploadHint') : detail);
 }
 
 // === 数据导出脚本直送通道（URL hash #mwiImport）===
