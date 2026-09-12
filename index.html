@@ -127,8 +127,18 @@ h2 { font-size:16px; margin:10px 0 8px; color:var(--text-muted); }
 .display-column { border:1px solid var(--border); border-radius:8px; padding:6px; background:var(--surface); }
 .display-column table.member-table { min-width:340px; }
 .display-prof-select { max-width:150px; padding:1px 2px; border:1px solid var(--border); border-radius:3px; font-size:12px; background:var(--input-bg); color:var(--text); }
-.display-column .battle-cell { white-space:nowrap; }
-.display-column .battle-cell svg { vertical-align:middle; }
+/* 战斗列：图标撑满整个单元格（去掉单元格内边距，单元格尺寸由图标决定） */
+.display-column .battle-cell { white-space:nowrap; padding:0; line-height:0; }
+.display-column .battle-cell svg { display:block; }
+.display-column .battle-cell-fill { display:flex; align-items:center; justify-content:center; gap:1px; width:100%; height:100%; min-height:24px; padding:0; border:1px dashed transparent; border-radius:2px; box-sizing:border-box; }
+/* 《单独修改》：点击战斗列图标，从五种战斗图标中单独指定（下拉仅图标） */
+.display-column .battle-cell-picker { position:relative; cursor:pointer; }
+.display-column .battle-cell-picker:hover { border-color:var(--accent); }
+.battle-icon-dropdown { flex-direction:row; gap:2px; }
+.battle-icon-option { display:inline-flex; align-items:center; justify-content:center; padding:3px; border:1px solid transparent; border-radius:4px; cursor:pointer; }
+.battle-icon-option:hover { background:var(--input-bg); }
+.battle-icon-option.active { border-color:var(--accent); }
+.display-settings-bar .global-buff-item input[type="checkbox"] { width:auto; min-width:0; padding:0; cursor:pointer; }
 .display-empty { color:var(--text-faint); padding:20px; }
 /* 分配结果视图：每个试炼 4 列为一组，组间加分隔线 */
 .member-table .trial-group-start { border-left:2px solid var(--border); }
@@ -799,6 +809,11 @@ table.member-table tbody tr:hover td.sticky-l.name-cell { background-color:var(-
       <span class="global-buff-label" id="ds-lbl-prof">所有职业</span>
       <select id="display-profession-select" onchange="onProfessionSelect(this.value)"><option value="">(未导入)</option></select>
     </label>
+    <label class="global-buff-item" id="ds-item-battle-edit" title="">
+      <input type="checkbox" id="display-battle-edit-input" onchange="toggleDisplayBattleEdit(this.checked)">
+      <span class="global-buff-label" id="ds-lbl-battle-edit">单独修改</span>
+    </label>
+    <button class="btn btn-sm" id="btn-clear-battle-edit" onclick="clearDisplayBattleOverrides()" title="">清除单独修改</button>
   </div>
   <!-- 第二行：战斗试炼1（图标单选下拉 + 出战职业多选下拉） -->
   <div class="display-settings-bar" id="display-settings-row2">
@@ -807,6 +822,10 @@ table.member-table tbody tr:hover td.sticky-l.name-cell { background-color:var(-
   <!-- 第三行：战斗试炼2（图标单选下拉 + 出战职业多选下拉） -->
   <div class="display-settings-bar" id="display-settings-row3">
     <div class="battle-trial-options" id="ds-battle-trial-options-1"></div>
+  </div>
+  <!-- 第四行：平均分配（勾选职业后均分到战斗试炼1/2） -->
+  <div class="display-settings-bar" id="display-settings-row4">
+    <div class="battle-trial-options" id="ds-even-split-options"></div>
   </div>
   <div id="doc-import-result" class="doc-import-result" style="display:none"></div>
 </div>
@@ -849,6 +868,13 @@ const I18N = {
     battleProfessions:'出战职业', battleProfessionsTip:'点击展开多选下拉，可勾选多个出战职业（选项为《所有职业》导入的全部职业）',
     battleProfNone:'(未选择)',
     professionCol:'职业', battleCol:'战斗', profEmptyOption:'(未选择)',
+    displayBattleEdit:'单独修改',
+    displayBattleEditTip:'勾选后，展示区域成员「战斗」列的图标可点击：从五种战斗图标中单独指定该成员的战斗结果（下拉只显示图标，再次点击同一图标可恢复自动）。',
+    displayBattleEditCellTip:'点击选择战斗图标（再次点击同一图标恢复自动）',
+    evenSplit:'平均分配', evenSplitTip:'勾选职业后，把这些职业对应的成员平均分配到战斗试炼1与战斗试炼2：按成员顺序切成人数相等的前后两段，前半段用试炼1的图标、后半段用试炼2的图标（相邻的成员会分到同一个试炼）。取消全部勾选可撤销。',
+    evenSplitProfessions:'平均分配职业',
+    clearBattleEdit:'清除单独修改', clearBattleEditTip:'清除所有成员的单独指定，战斗结果恢复按「职业是否属于出战职业」自动计算',
+    clearBattleEditDone:'已清除 {n} 条单独修改，战斗结果恢复自动计算',
     docImportTip:'点击选择 xlsx 表格（如 试炼汇总.xlsx），自动读取所有「职业_」列的值并去重，显示在《所有职业》下拉列表中。',
     profNone:'(未导入)', docImportOk:'导入成功：读取到 {n} 个职业', docImportFail:'导入失败：{err}', docImportNoCol:'未找到「职业」开头的列',
     noAssign:'(暂无分配)', noMembers:'暂无成员数据，请添加成员或导入 JSON',
@@ -951,6 +977,13 @@ const I18N = {
     battleProfessions:'Battle Professions', battleProfessionsTip:'Click to open the multi-select dropdown; options are all professions imported into All Professions',
     battleProfNone:'(none)',
     professionCol:'Profession', battleCol:'Battle', profEmptyOption:'(none)',
+    displayBattleEdit:'Manual Edit',
+    displayBattleEditTip:'When checked, the Battle cell icons in the display area become clickable: pick one of the five battle icons to override that member’s result (icon-only dropdown; click the same icon again to restore auto).',
+    displayBattleEditCellTip:'Click to pick a battle icon (click the same icon again to restore auto)',
+    evenSplit:'Even Split', evenSplitTip:'Pick professions: the members whose profession is selected are split evenly between Battle Trial 1 and 2 — in member order, the first half gets trial 1’s icon and the second half gets trial 2’s icon (adjacent members stay in the same trial). Uncheck all to undo.',
+    evenSplitProfessions:'Split Professions',
+    clearBattleEdit:'Clear Manual', clearBattleEditTip:'Clear all manual overrides; battle results fall back to auto match by profession',
+    clearBattleEditDone:'Cleared {n} manual override(s); battle results restored to auto',
     docImportTip:'Pick an xlsx file (e.g. trial summary); all values in columns starting with 职业_ are read, deduped and shown in the All Professions dropdown.',
     profNone:'(not imported)', docImportOk:'Imported: {n} professions read', docImportFail:'Import failed: {err}', docImportNoCol:'No column starting with 职业 found',
     docImportOkWithNames:'Imported: {n} professions, {m} characters (name column header must be "name" or 角色名)',
@@ -1969,6 +2002,14 @@ let state = {
   professionsByName: {},
   // 展示区域每行选中的职业：memberId → 职业（仅本地保存）。
   displayProfessions: {},
+  // 第四行《平均分配》勾选的职业：这些职业对应的成员会被平均分配到战斗试炼1/2。仅本地保存。
+  displayEvenSplitProfessions: [],
+  // 上一次《平均分配》实际分配到的人（memberId → true），用于重新分配/撤销时恢复自动计算。仅本地保存。
+  displayEvenSplitAssigned: {},
+  // 《单独修改》：为单个成员手动指定的战斗图标（memberId → BATTLE_TRIAL_ICONS 下标）。仅本地保存。
+  displayBattleOverrides: {},
+  // 是否开启《单独修改》（可点击成员战斗列图标修改战斗结果）。仅本地保存。
+  displayBattleEdit: false,
   // 《所有职业》下拉列表当前选中项（会话级）。
   selectedProfession: '',
   // 本人姓名（用于个人端上传时按 name 主键覆盖同名条目）。默认取 importJson 后 members[0].name，也可持久化到 localStorage。
@@ -3593,6 +3634,8 @@ function renderDisplaySettings() {
   const rowsInput = document.getElementById('display-rows-input');
   if (colsInput && document.activeElement !== colsInput) colsInput.value = state.displayCols;
   if (rowsInput && document.activeElement !== rowsInput) rowsInput.value = state.displayRows;
+  const battleEditInput = document.getElementById('display-battle-edit-input');
+  if (battleEditInput) battleEditInput.checked = !!state.displayBattleEdit;
   renderProfessionSelect();
   renderBattleTrialOptions();
   renderDisplayArea();
@@ -3649,7 +3692,85 @@ function renderBattleTrialOptions() {
       '</span>'+
     '</span>';
   });
+  renderEvenSplitOptions();
   positionBattleDropdown();
+}
+// 第四行《平均分配》：职业多选下拉；勾选的职业按《所有职业》顺序均分到战斗试炼1/2。
+function evenSplitSummary() {
+  const sel = state.displayEvenSplitProfessions || [];
+  return t('evenSplitProfessions') + '(' + sel.length + ')' + (sel.length ? '：' + sel.join('、') : '');
+}
+function renderEvenSplitOptions() {
+  const box = document.getElementById('ds-even-split-options');
+  if (!box) return;
+  const profs = state.professions || [];
+  const sel = state.displayEvenSplitProfessions || [];
+  const key = 'esplit';
+  const options = profs.length
+    ? profs.map(function(p, pIdx) {
+        const checked = sel.indexOf(p) >= 0;
+        return '<span class="battle-prof-option'+(checked ? ' checked' : '')+'" title="'+escHtml(p)+'" onclick="toggleEvenSplitProfession('+pIdx+',event)">'+
+          '<span class="battle-prof-check">'+(checked ? '✓' : '')+'</span>'+
+          '<span>'+escHtml(p)+'</span>'+
+        '</span>';
+      }).join('')
+    : '<span class="battle-prof-empty">'+escHtml(t('profNone'))+'</span>';
+  const summary = evenSplitSummary();
+  box.innerHTML = '<span class="battle-trial-item">'+
+    '<span class="global-buff-label">'+escHtml(t('evenSplit'))+'</span>'+
+    '<span class="battle-prof-picker" id="battle-picker-'+key+'" title="'+escHtml(t('evenSplitTip'))+'" onclick="toggleBattleDropdown(\''+key+'\',event)">'+
+      '<span class="battle-prof-text" title="'+escHtml(summary)+'">'+escHtml(summary)+'</span>'+
+      '<span class="battle-trial-caret">▾</span>'+
+      (openBattleDropdown === key ? '<span class="battle-trial-dropdown battle-prof-dropdown" id="battle-dropdown-'+key+'">'+options+'</span>' : '')+
+    '</span>'+
+  '</span>';
+}
+// 勾选/取消一个职业后重新均分；下拉保持展开。
+function toggleEvenSplitProfession(pIdx, ev) {
+  if (ev) ev.stopPropagation();
+  const profs = state.professions || [];
+  const name = profs[pIdx];
+  if (name === undefined) return;
+  const sel = (state.displayEvenSplitProfessions || []).slice();
+  const at = sel.indexOf(name);
+  if (at >= 0) sel.splice(at, 1); else sel.push(name);
+  state.displayEvenSplitProfessions = sel;
+  try { localStorage.setItem('mwi_display_even_split_profs', JSON.stringify(sel)); } catch(e) {}
+  applyEvenSplit();
+  openBattleDropdown = 'esplit';
+  renderBattleTrialOptions();
+  renderDisplayArea();
+}
+// 均分规则：把「职业属于勾选范围」的成员，按成员顺序平均分配到战斗试炼1/2 —— 前半段用试炼1的图标，后半段用试炼2的图标。
+// 顺序相近（相邻）的成员因此落在同一个试炼里。结果写入《单独修改》的按成员指定值。
+function applyEvenSplit() {
+  const assigned = state.displayEvenSplitAssigned || (state.displayEvenSplitAssigned = {});
+  // 先撤销上一次平均分配的结果，未在此次结果中的成员恢复自动计算。
+  Object.keys(assigned).forEach(function(id) {
+    delete state.displayBattleOverrides[id];
+    delete assigned[id];
+  });
+  if (!state.displayEvenSplitProfessions.length) {
+    persistDisplayBattleOverrides();
+    return;
+  }
+  const selSet = new Set(state.displayEvenSplitProfessions);
+  const iconA = state.displayBattleTrialIcons[0] || 0;
+  const iconB = state.displayBattleTrialIcons[1] || 0;
+  // 成员顺序 = 展示区域的顺序（state.members）
+  const ids = state.members
+    .filter(function(p) { return selSet.has(displayMemberProfession(p)); })
+    .map(function(p) { return String(p.id); });
+  const half = Math.ceil(ids.length / 2);
+  ids.forEach(function(id, i) {
+    state.displayBattleOverrides[id] = (i < half) ? iconA : iconB;
+    assigned[id] = true;
+  });
+  persistDisplayBattleOverrides();
+  try { localStorage.setItem('mwi_display_even_split_assigned', JSON.stringify(assigned)); } catch(e) {}
+}
+function persistDisplayBattleOverrides() {
+  try { localStorage.setItem('mwi_display_battle_overrides', JSON.stringify(state.displayBattleOverrides)); } catch(e) {}
 }
 // 下拉用 fixed 定位（避免被 #top-config 的滚动区域裁剪），按按钮位置计算；下方空间不足时向上展开。
 function positionBattleDropdown() {
@@ -3668,7 +3789,9 @@ function positionBattleDropdown() {
 function toggleBattleDropdown(key, ev) {
   if (ev) ev.stopPropagation();
   openBattleDropdown = (openBattleDropdown === key) ? null : key;
-  renderBattleTrialOptions();
+  // 展示区域成员战斗列的下拉（bt 前缀）由 renderDisplayArea 渲染，其余由 renderBattleTrialOptions 渲染。
+  if (String(key).indexOf('bt') === 0) renderDisplayArea();
+  else renderBattleTrialOptions();
 }
 function selectBattleTrialIcon(i, kIdx, ev) {
   if (ev) ev.stopPropagation();
@@ -3676,6 +3799,8 @@ function selectBattleTrialIcon(i, kIdx, ev) {
   if (kIdx < 0 || kIdx >= BATTLE_TRIAL_ICONS.length) return;
   state.displayBattleTrialIcons[i] = kIdx;
   try { localStorage.setItem('mwi_display_battle_trial_icons', JSON.stringify(state.displayBattleTrialIcons)); } catch(e) {}
+  // 换图标后，已平均分配的人同步换成新图标。
+  if ((state.displayEvenSplitProfessions || []).length) applyEvenSplit();
   openBattleDropdown = null;
   renderBattleTrialOptions();
   renderDisplayArea();
@@ -3698,8 +3823,10 @@ function toggleBattleProfession(i, pIdx, ev) {
 }
 function closeBattleDropdown() {
   if (!openBattleDropdown) return;
+  const key = String(openBattleDropdown);
   openBattleDropdown = null;
-  renderBattleTrialOptions();
+  if (key.indexOf('bt') === 0) renderDisplayArea();
+  else renderBattleTrialOptions();
 }
 // 点击页面其它位置 / 窗口缩放 / 外部滚动时关闭已展开的下拉（fixed 定位，需跟随关闭）。
 // 注意：下拉自身内部的滚动（鼠标滑轮）不能触发关闭，否则列表无法滚动。
@@ -3742,13 +3869,14 @@ function renderDisplayArea() {
       const assign = state.assignment ? state.assignment[p.id] : -1;
       const assignClass = assign >= 0 ? 'assign-T'+(assign+1) : 'assign-none';
       const assignContent = assign >= 0 ? svgIcon(SKILL_KEYS[state.trials[assign].skill], 22, 22) : '-';
-      const prof = state.displayProfessions[String(p.id)] || '';
+      // 未手动选择过（或原选择已不在当前职业列表中）时，默认选中该成员职业列表的第一个值；手动选空则保留空。
+      const prof = displayMemberProfession(p);
       return '<tr>'+
         '<td class="idx-cell">'+rowIdx+'</td>'+
         '<td class="assign-cell '+assignClass+'">'+assignContent+'</td>'+
         '<td class="name-cell">'+escHtml(p.name)+'</td>'+
         '<td class="prof-cell">'+displayProfessionSelectHtml(p, prof)+'</td>'+
-        '<td class="battle-cell">'+battleIconsForProfession(prof)+'</td>'+
+        '<td class="battle-cell">'+displayBattleCellHtml(p, prof)+'</td>'+
       '</tr>';
     }).join('');
     return '<div class="display-column">'+
@@ -3761,6 +3889,15 @@ function renderDisplayArea() {
       '</tr></thead><tbody>'+rowsHtml+'</tbody></table>'+
     '</div>';
   }).join('');
+  positionBattleDropdown();
+}
+// 成员当前生效的职业：未手动选择过（或原选择已不在当前职业列表中）时取职业列表第一个（原始顺序）；手动选空则为空。
+function displayMemberProfession(p) {
+  const storedProf = state.displayProfessions[String(p.id)];
+  const profList = (state.professionsByName && state.professionsByName[p.name]) || [];
+  if (storedProf === undefined) return profList.length ? profList[0] : '';
+  if (storedProf && profList.length && profList.indexOf(storedProf) < 0) return profList[0];
+  return storedProf || '';
 }
 // 展示区域每行的《职业》下拉：选项为该成员在表格中「角色名 == p.name」那一行的职业。
 function displayProfessionSelectHtml(p, selected) {
@@ -3772,18 +3909,85 @@ function displayProfessionSelectHtml(p, selected) {
 }
 function onDisplayProfessionChange(id, v) {
   state.displayProfessions[String(id)] = v || '';
+  // 手动改动仅对本次会话生效；下次导入文档一律重置为职业列表的第一个值。
   try { localStorage.setItem('mwi_display_professions', JSON.stringify(state.displayProfessions)); } catch(e) {}
+  // 改职业后，平均分配的成员范围可能变化，重新均分一次。
+  if ((state.displayEvenSplitProfessions || []).length) applyEvenSplit();
   renderDisplayArea();
 }
 // 《战斗》列：选中职业被战斗试炼1/2 的出战职业包含时，显示对应试炼的图标（可同时命中两个）。
-function battleIconsForProfession(prof) {
+function battleIconsForProfession(prof, size) {
   if (!prof) return '';
+  const px = size || 20;
   let html = '';
   for (let i = 0; i < 2; i++) {
     const list = state.displayBattleTrialProfessions[i] || [];
-    if (list.indexOf(prof) >= 0) html += svgIcon(BATTLE_TRIAL_ICONS[state.displayBattleTrialIcons[i] || 0], 20, 20);
+    if (list.indexOf(prof) >= 0) html += svgIcon(BATTLE_TRIAL_ICONS[state.displayBattleTrialIcons[i] || 0], px, px);
   }
   return html;
+}
+// 展示区域《战斗》列单元格：有手动指定时显示指定图标，否则按职业自动匹配；
+// 开启《单独修改》后整格可点击，展开只含五种图标的下拉（再次点击同一图标恢复自动）。
+function displayBattleCellHtml(p, prof) {
+  const id = String(p.id);
+  const key = 'bt' + String(p.id).replace(/["'\\]/g, '');
+  const ov = state.displayBattleOverrides[id];
+  const hasOv = Number.isInteger(ov) && ov >= 0 && ov < BATTLE_TRIAL_ICONS.length;
+  // 图标尺寸 24px：与单元格最小高度一致，使图标铺满整个战斗单元格。
+  const content = hasOv ? svgIcon(BATTLE_TRIAL_ICONS[ov], 24, 24) : (battleIconsForProfession(prof, 24) || '<span style="display:block;width:24px;height:24px"></span>');
+  if (!state.displayBattleEdit) return '<span class="battle-cell-fill">'+content+'</span>';
+  const names = battleTrialIconNames();
+  const opts = BATTLE_TRIAL_ICONS.map(function(k, kIdx) {
+    const active = hasOv && ov === kIdx;
+    return '<span class="battle-icon-option'+(active ? ' active' : '')+'" title="'+escHtml(names[kIdx])+'" onclick="selectDisplayBattleIcon(\''+key+'\','+kIdx+',event)">'+
+      svgIcon(k, 20, 20)+
+    '</span>';
+  }).join('');
+  return '<span class="battle-cell-fill battle-cell-picker" id="battle-picker-'+key+'" title="'+escHtml(t('displayBattleEditCellTip'))+'" onclick="toggleBattleDropdown(\''+key+'\',event)">'+
+    content+
+    (openBattleDropdown === key ? '<span class="battle-trial-dropdown battle-icon-dropdown" id="battle-dropdown-'+key+'">'+opts+'</span>' : '')+
+  '</span>';
+}
+// 选中某个战斗图标：写入该成员的单独指定值；再次点击同一图标则清除（恢复自动）。
+function selectDisplayBattleIcon(key, kIdx, ev) {
+  if (ev) ev.stopPropagation();
+  const id = String(key).replace(/^bt/, '');
+  if (state.displayBattleOverrides[id] === kIdx) delete state.displayBattleOverrides[id];
+  else state.displayBattleOverrides[id] = kIdx;
+  // 手动改过就不再属于《平均分配》的自动结果，避免之后被撤销。
+  if (state.displayEvenSplitAssigned) {
+    delete state.displayEvenSplitAssigned[id];
+    try { localStorage.setItem('mwi_display_even_split_assigned', JSON.stringify(state.displayEvenSplitAssigned)); } catch(e) {}
+  }
+  persistDisplayBattleOverrides();
+  openBattleDropdown = null;
+  renderDisplayArea();
+}
+// 第一行的《单独修改》勾选框：切换是否允许点击成员战斗列修改结果。
+function toggleDisplayBattleEdit(checked) {
+  state.displayBattleEdit = !!checked;
+  try { localStorage.setItem('mwi_display_battle_edit', state.displayBattleEdit ? '1' : '0'); } catch(e) {}
+  openBattleDropdown = null;
+  renderDisplayArea();
+}
+// 《清除单独修改》：清空所有成员的单独指定，战斗结果回到按职业自动匹配（旧规则）。
+function clearDisplayBattleOverrides(ev) {
+  if (ev) ev.stopPropagation();
+  const n = Object.keys(state.displayBattleOverrides || {}).length;
+  state.displayBattleOverrides = {};
+  state.displayEvenSplitAssigned = {}; // 自动分配记录一并作废
+  try {
+    localStorage.removeItem('mwi_display_battle_overrides');
+    localStorage.removeItem('mwi_display_even_split_assigned');
+  } catch(e) {}
+  openBattleDropdown = null;
+  renderDisplayArea();
+  const box = document.getElementById('doc-import-result');
+  if (box) {
+    box.style.display = '';
+    box.className = 'doc-import-result doc-import-ok';
+    box.textContent = t('clearBattleEditDone').replace('{n}', n);
+  }
 }
 
 // === 职业文档导入（xlsx）===
@@ -3799,6 +4003,19 @@ function importDocFile(input) {
     const profs = (res && res.professions) || [];
     state.professions = profs;
     state.professionsByName = (res && res.byName) || {};
+    // 《平均分配》中已不存在的职业去掉。
+    state.displayEvenSplitProfessions = (state.displayEvenSplitProfessions || []).filter(p => profs.indexOf(p) >= 0);
+    try { localStorage.setItem('mwi_display_even_split_profs', JSON.stringify(state.displayEvenSplitProfessions)); } catch(e) {}
+    // 导入后不记忆上次结果：每位成员一律选中其职业列表（原始读取顺序）的第一个值。
+    state.members.forEach(p => {
+      const id = String(p.id);
+      const list = state.professionsByName[p.name] || [];
+      if (list.length) state.displayProfessions[id] = list[0];
+      else state.displayProfessions[id] = '';
+    });
+    try { localStorage.setItem('mwi_display_professions', JSON.stringify(state.displayProfessions)); } catch(e) {}
+    // 成员职业重置后重新均分（没选职业时即为撤销上一次平均分配）。
+    applyEvenSplit();
     renderProfessionSelect();
     renderBattleTrialOptions();
     renderDisplayArea();
@@ -3866,8 +4083,34 @@ async function unzipEntries(buf, patterns) {
   }
   return out;
 }
+// 职业排序用的关键字优先级（越靠前越优先）。
+const PROFESSION_KEYWORDS = ['枪','剑','锤','弩','弓','水叉','水法','火叉','火法','绿叉','自然','奶','盾','发育中'];
+// 取职业名的排序键：关键字下标（未命中排在最后）+ 关键字后面的数字（无数字时用一个极大值排在最后）。
+function professionSortKey(v) {
+  const s = String(v == null ? '' : v);
+  // 包含「发育中」的一律强制排在最后（连未命中任何关键字的也排在它前面）。
+  const devAt = s.indexOf('发育中');
+  if (devAt >= 0) {
+    const dm = s.slice(devAt + 3).match(/\d+/);
+    return { keyword: PROFESSION_KEYWORDS.length + 1, number: dm ? Number(dm[0]) : Number.MAX_SAFE_INTEGER };
+  }
+  let keyword = PROFESSION_KEYWORDS.length, number = Number.MAX_SAFE_INTEGER;
+  for (let i = 0; i < PROFESSION_KEYWORDS.length; i++) {
+    const at = s.indexOf(PROFESSION_KEYWORDS[i]);
+    if (at < 0) continue;
+    keyword = i;
+    const m = s.slice(at + PROFESSION_KEYWORDS[i].length).match(/\d+/);
+    if (m) number = Number(m[0]);
+    else {
+      const any = s.match(/\d+/); // 关键字后没有数字时，退回取整个名字里的数字
+      if (any) number = Number(any[0]);
+    }
+    break;
+  }
+  return { keyword: keyword, number: number };
+}
 // 解析 xlsx：返回 { professions, byName }
-//   professions：所有「职业」开头的列的值（按出现顺序去重并排序）
+//   professions：所有「职业」开头的列的值（按出现顺序去重，再按关键字+数字排序）
 //   byName：角色名 → 该行的职业列表（用于展示区域每行的《职业》下拉）
 async function parseXlsxProfessions(buf) {
   const files = await unzipEntries(buf, [/^xl\/sharedStrings\.xml$/, /^xl\/worksheets\/sheet\d+\.xml$/]);
@@ -3948,27 +4191,15 @@ async function parseXlsxProfessions(buf) {
     }
   }
   if (!values.length) throw new Error(t('docImportNoCol'));
-  // 排序：85_ 前缀 → 95_ 前缀 → 纯 开头 → 其他；组内按中文排序。
-  const profGroup = v => {
-    const s = String(v);
-    if (s.startsWith('85')) return 0;
-    if (s.startsWith('95')) return 1;
-    if (s.startsWith('纯')) return 2;
-    return 3;
-  };
+  // 排序：按关键字优先级（枪>剑>锤>弩>弓>水叉>水法>火叉>火法>绿叉>自然>奶>盾>发育中），
+  // 命中同一关键字时按关键字后面的数字从小到大排；都没命中/都没数字时按中文排序兜底。
   values.sort((a, b) => {
-    const ga = profGroup(a), gb = profGroup(b);
-    if (ga !== gb) return ga - gb;
+    const ka = professionSortKey(a), kb = professionSortKey(b);
+    if (ka.keyword !== kb.keyword) return ka.keyword - kb.keyword;
+    if (ka.number !== kb.number) return ka.number - kb.number; // 无数字时视为最大，排在最后
     return String(a).localeCompare(String(b), 'zh-Hans-CN');
   });
-  // 每个角色名下的职业也按同样规则排序。
-  for (const nm of Object.keys(byName)) {
-    byName[nm].sort((a, b) => {
-      const ga = profGroup(a), gb = profGroup(b);
-      if (ga !== gb) return ga - gb;
-      return String(a).localeCompare(String(b), 'zh-Hans-CN');
-    });
-  }
+  // 每个角色名下的职业保持表格中读取到的原始排列顺序（不重新排序）。
   return { professions: values, byName: byName };
 }
 
@@ -4070,6 +4301,15 @@ function updateStaticText() {
   if (dsProfLabel) dsProfLabel.textContent = t('allProfessions');
   const dsProfItem = document.getElementById('ds-item-prof');
   if (dsProfItem) dsProfItem.title = t('docImportTip');
+  const dsEditLabel = document.getElementById('ds-lbl-battle-edit');
+  if (dsEditLabel) dsEditLabel.textContent = t('displayBattleEdit');
+  const dsEditItem = document.getElementById('ds-item-battle-edit');
+  if (dsEditItem) dsEditItem.title = t('displayBattleEditTip');
+  const clearBtn = document.getElementById('btn-clear-battle-edit');
+  if (clearBtn) {
+    clearBtn.textContent = t('clearBattleEdit');
+    clearBtn.title = t('clearBattleEditTip');
+  }
   renderBattleTrialOptions();
   const docImportBtn = document.getElementById('btn-doc-import');
   if (docImportBtn) docImportBtn.textContent = t('docImportBtn');
@@ -4613,7 +4853,19 @@ function loadPrefs() {
       }
       const dispProfs = JSON.parse(localStorage.getItem('mwi_display_professions') || 'null');
       if (dispProfs && typeof dispProfs === 'object' && !Array.isArray(dispProfs)) state.displayProfessions = dispProfs;
+      const esProfs = JSON.parse(localStorage.getItem('mwi_display_even_split_profs') || 'null');
+      if (Array.isArray(esProfs) && esProfs.every(s => typeof s === 'string')) state.displayEvenSplitProfessions = esProfs;
+      const esAssigned = JSON.parse(localStorage.getItem('mwi_display_even_split_assigned') || 'null');
+      if (esAssigned && typeof esAssigned === 'object' && !Array.isArray(esAssigned)) state.displayEvenSplitAssigned = esAssigned;
+      const btOv = JSON.parse(localStorage.getItem('mwi_display_battle_overrides') || 'null');
+      if (btOv && typeof btOv === 'object' && !Array.isArray(btOv)) {
+        for (const k of Object.keys(btOv)) {
+          const v = btOv[k];
+          if (Number.isInteger(v) && v >= 0 && v < BATTLE_TRIAL_ICONS.length) state.displayBattleOverrides[k] = v;
+        }
+      }
     } catch(e) {}
+    state.displayBattleEdit = localStorage.getItem('mwi_display_battle_edit') === '1';
     const displayCols = Number(localStorage.getItem('mwi_display_cols'));
     if (Number.isFinite(displayCols) && displayCols >= 1 && displayCols <= 9) state.displayCols = displayCols;
     const displayRows = localStorage.getItem('mwi_display_rows');
