@@ -110,7 +110,10 @@ h2 { font-size:16px; margin:10px 0 8px; color:var(--text-muted); }
 .battle-trial-option-name { font-size:11px; color:var(--text-faint); white-space:nowrap; }
 .battle-trial-option.active .battle-trial-option-name { color:var(--accent); }
 /* 出战职业多选下拉 */
-/* 出战职业宽度自适应：占满该行剩余空间，尽量多显示已选职业，超出再省略 */
+/* 出战职业选择框只占该行一半宽度，右侧留给「人数/奶/盾」统计 */
+.battle-trial-item .battle-prof-picker { flex:0 1 50%; max-width:50%; }
+.battle-trial-stats { flex:none; display:inline-flex; align-items:center; gap:8px; font-size:12px; color:var(--text-muted); white-space:nowrap; }
+.battle-trial-stats b { color:var(--text); font-weight:600; }
 .battle-prof-picker { position:relative; display:flex; align-items:center; gap:2px; flex:1 1 auto; min-width:140px; max-width:100%; padding:2px 6px; border:1px solid var(--border); border-radius:4px; background:var(--input-bg); cursor:pointer; }
 .battle-prof-picker:hover { border-color:var(--accent); }
 .battle-prof-text { flex:1 1 auto; min-width:0; font-size:12px; color:var(--text); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
@@ -873,6 +876,7 @@ const I18N = {
     displayBattleEditCellTip:'点击选择战斗图标（再次点击同一图标恢复自动）',
     evenSplit:'平均分配', evenSplitTip:'勾选职业后，把这些职业对应的成员平均分配到战斗试炼1与战斗试炼2：按成员顺序切成人数相等的前后两段，前半段用试炼1的图标、后半段用试炼2的图标（相邻的成员会分到同一个试炼）。取消全部勾选可撤销。',
     evenSplitProfessions:'平均分配职业',
+    battleStatTotal:'人数', battleStatHeal:'奶', battleStatShield:'盾',
     clearBattleEdit:'清除单独修改', clearBattleEditTip:'清除所有成员的单独指定，战斗结果恢复按「职业是否属于出战职业」自动计算',
     clearBattleEditDone:'已清除 {n} 条单独修改，战斗结果恢复自动计算',
     docImportTip:'点击选择 xlsx 表格（如 试炼汇总.xlsx），自动读取所有「职业_」列的值并去重，显示在《所有职业》下拉列表中。',
@@ -982,6 +986,7 @@ const I18N = {
     displayBattleEditCellTip:'Click to pick a battle icon (click the same icon again to restore auto)',
     evenSplit:'Even Split', evenSplitTip:'Pick professions: the members whose profession is selected are split evenly between Battle Trial 1 and 2 — in member order, the first half gets trial 1’s icon and the second half gets trial 2’s icon (adjacent members stay in the same trial). Uncheck all to undo.',
     evenSplitProfessions:'Split Professions',
+    battleStatTotal:'Members', battleStatHeal:'Heal', battleStatShield:'Shield',
     clearBattleEdit:'Clear Manual', clearBattleEditTip:'Clear all manual overrides; battle results fall back to auto match by profession',
     clearBattleEditDone:'Cleared {n} manual override(s); battle results restored to auto',
     docImportTip:'Pick an xlsx file (e.g. trial summary); all values in columns starting with 职业_ are read, deduped and shown in the All Professions dropdown.',
@@ -3640,6 +3645,38 @@ function renderDisplaySettings() {
   renderBattleTrialOptions();
   renderDisplayArea();
 }
+// 某成员最终归属的战斗图标下标集合：有《单独修改》/《平均分配》指定时取指定值，否则按职业是否属于各试炼的出战职业。
+function displayMemberBattleIcons(p) {
+  const ov = state.displayBattleOverrides[String(p.id)];
+  if (Number.isInteger(ov) && ov >= 0 && ov < BATTLE_TRIAL_ICONS.length) return [ov];
+  const prof = displayMemberProfession(p);
+  const icons = [];
+  for (let j = 0; j < 2; j++) {
+    if ((state.displayBattleTrialProfessions[j] || []).indexOf(prof) >= 0) icons.push(state.displayBattleTrialIcons[j] || 0);
+  }
+  return icons;
+}
+// 战斗试炼 i 的统计：分配总人数（图标命中该试炼的人数）、其中职业含「奶」的人数、含「盾」的人数。
+function battleTrialStats(i) {
+  const icon = state.displayBattleTrialIcons[i] || 0;
+  let total = 0, heal = 0, shield = 0;
+  (state.members || []).forEach(function(p) {
+    if (displayMemberBattleIcons(p).indexOf(icon) < 0) return;
+    total++;
+    const prof = displayMemberProfession(p);
+    if (prof.indexOf('奶') >= 0) heal++;
+    if (prof.indexOf('盾') >= 0) shield++;
+  });
+  return { total: total, heal: heal, shield: shield };
+}
+function battleTrialStatsHtml(i) {
+  const s = battleTrialStats(i);
+  return '<span class="battle-trial-stats">'+
+    '<span>'+escHtml(t('battleStatTotal'))+' <b>'+s.total+'</b></span>'+
+    '<span>'+escHtml(t('battleStatHeal'))+' <b>'+s.heal+'</b></span>'+
+    '<span>'+escHtml(t('battleStatShield'))+' <b>'+s.shield+'</b></span>'+
+  '</span>';
+}
 // 展示设置第二行：战斗试炼1 / 战斗试炼2，各带两个下拉：
 //   1) 「仅图标可点击」的单选下拉：刺猬 / 虫群 / 变色龙 / 水母 / 獾
 //   2) 出战职业多选下拉：选项为《所有职业》导入的全部职业（state.professions）
@@ -3689,9 +3726,10 @@ function renderBattleTrialOptions() {
         '<span class="battle-prof-text" title="'+escHtml(summary)+'">'+escHtml(summary)+'</span>'+
         '<span class="battle-trial-caret">▾</span>'+
         (openBattleDropdown === profKey ? '<span class="battle-trial-dropdown battle-prof-dropdown" id="battle-dropdown-'+profKey+'">'+profOptions+'</span>' : '')+
-      '</span>'+
-    '</span>';
-  });
+        '</span>'+
+        battleTrialStatsHtml(i)+
+        '</span>';
+        });
   renderEvenSplitOptions();
   positionBattleDropdown();
 }
@@ -3913,6 +3951,7 @@ function onDisplayProfessionChange(id, v) {
   try { localStorage.setItem('mwi_display_professions', JSON.stringify(state.displayProfessions)); } catch(e) {}
   // 改职业后，平均分配的成员范围可能变化，重新均分一次。
   if ((state.displayEvenSplitProfessions || []).length) applyEvenSplit();
+  renderBattleTrialOptions(); // 右侧人数/奶/盾统计随职业变化
   renderDisplayArea();
 }
 // 《战斗》列：选中职业被战斗试炼1/2 的出战职业包含时，显示对应试炼的图标（可同时命中两个）。
@@ -3961,6 +4000,7 @@ function selectDisplayBattleIcon(key, kIdx, ev) {
   }
   persistDisplayBattleOverrides();
   openBattleDropdown = null;
+  renderBattleTrialOptions(); // 右侧人数/奶/盾统计随单独修改变化
   renderDisplayArea();
 }
 // 第一行的《单独修改》勾选框：切换是否允许点击成员战斗列修改结果。
@@ -3981,6 +4021,7 @@ function clearDisplayBattleOverrides(ev) {
     localStorage.removeItem('mwi_display_even_split_assigned');
   } catch(e) {}
   openBattleDropdown = null;
+  renderBattleTrialOptions();
   renderDisplayArea();
   const box = document.getElementById('doc-import-result');
   if (box) {
