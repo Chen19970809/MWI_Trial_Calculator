@@ -129,7 +129,9 @@ h2 { font-size:16px; margin:10px 0 8px; color:var(--text-muted); }
 .doc-import-result { margin-top:8px; padding:6px 10px; border-radius:4px; font-size:12px; line-height:1.6; word-break:break-all; }
 .doc-import-result.doc-import-ok { background:#e6f4ea; border:1px solid #a6d8b5; color:#1a7f37; }
 .doc-import-result.doc-import-error { background:#fde8e8; border:1px solid #f5b2b2; color:#c0392b; }
-#display-area { display:flex; flex-wrap:wrap; gap:12px; align-items:flex-start; background:var(--surface); border:1px solid var(--border); border-radius:8px; padding:12px; }
+/* 展示区域：窗口变窄时各列不换行，改为横向滚动（可左右拖动查看），纵向超出则内部纵向滚动 */
+#display-area { display:flex; flex-wrap:nowrap; gap:12px; align-items:flex-start; flex:1 1 auto; min-height:0; overflow:auto; overscroll-behavior:contain; background:var(--surface); border:1px solid var(--border); border-radius:8px; padding:12px; }
+#display-area .display-column { flex:none; }
 .display-column { border:1px solid var(--border); border-radius:8px; padding:6px; background:var(--surface); }
 .display-column table.member-table { min-width:340px; }
 .display-prof-select { max-width:150px; padding:1px 2px; border:1px solid var(--border); border-radius:3px; font-size:12px; background:var(--input-bg); color:var(--text); }
