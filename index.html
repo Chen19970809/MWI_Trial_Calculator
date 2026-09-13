@@ -2016,6 +2016,8 @@ let state = {
   displayProfessions: {},
   // 第四行《平均分配》勾选的职业：这些职业对应的成员会被平均分配到战斗试炼1/2。仅本地保存。
   displayEvenSplitProfessions: [],
+  // 《单独修改》里手动指定过的成员（memberId → true）：优先级最高，平均分配不会覆盖他们。仅本地保存。
+  displayBattleManual: {},
   // 上一次《平均分配》实际分配到的人（memberId → true），用于重新分配/撤销时恢复自动计算。仅本地保存。
   displayEvenSplitAssigned: {},
   // 《单独修改》：为单个成员手动指定的战斗图标（memberId → BATTLE_TRIAL_ICONS 下标）。仅本地保存。
@@ -3806,10 +3808,12 @@ function toggleEvenSplitProfession(pIdx, ev) {
 // 分组间交替「哪一半给试炼1」，使两个试炼的总人数也尽量相等。结果写入《单独修改》的按成员指定值。
 function applyEvenSplit() {
   const assigned = state.displayEvenSplitAssigned || (state.displayEvenSplitAssigned = {});
-  // 先撤销上一次平均分配的结果，未在此次结果中的成员恢复自动计算。
+  const manual = state.displayBattleManual || (state.displayBattleManual = {});
+  // 先撤销上一次平均分配的结果，未在此次结果中的成员恢复自动计算（手动指定过的不动）。
   Object.keys(assigned).forEach(function(id) {
-    delete state.displayBattleOverrides[id];
     delete assigned[id];
+    if (manual[id]) return;
+    delete state.displayBattleOverrides[id];
   });
   if (!state.displayEvenSplitProfessions.length) {
     persistDisplayBattleOverrides();
@@ -3822,10 +3826,12 @@ function applyEvenSplit() {
   // 这样同一职业（如两个盾）不会全挤在一个试炼里，组内顺序相近的人仍在一起。
   const groups = new Map();
   (state.members || []).forEach(function(p) {
+    const id = String(p.id);
+    if (manual[id]) return; // 《单独修改》手动指定过的人不参与平均分配
     const prof = displayMemberProfession(p);
     if (!selSet.has(prof)) return;
     if (!groups.has(prof)) groups.set(prof, []);
-    groups.get(prof).push(String(p.id));
+    groups.get(prof).push(id);
   });
   // 分组顺序沿用《所有职业》的顺序；奇偶组交替「哪一半给试炼1」，避免总人数都往试炼1 偏。
   const orderedProfs = (state.professions || []).filter(function(pf) { return groups.has(pf); });
@@ -4031,7 +4037,11 @@ function selectDisplayBattleIcon(key, kIdx, ev) {
   const id = String(key).replace(/^bt/, '');
   if (state.displayBattleOverrides[id] === kIdx) state.displayBattleOverrides[id] = BATTLE_OVERRIDE_EMPTY;
   else state.displayBattleOverrides[id] = kIdx;
-  // 手动改过就不再属于《平均分配》的自动结果，避免之后被撤销。
+  // 手动改过即标记为「手动指定」：不再属于《平均分配》的自动结果，也不会被之后的均分覆盖。
+  if (state.displayBattleManual) {
+    state.displayBattleManual[id] = true;
+    try { localStorage.setItem('mwi_display_battle_manual', JSON.stringify(state.displayBattleManual)); } catch(e) {}
+  }
   if (state.displayEvenSplitAssigned) {
     delete state.displayEvenSplitAssigned[id];
     try { localStorage.setItem('mwi_display_even_split_assigned', JSON.stringify(state.displayEvenSplitAssigned)); } catch(e) {}
@@ -4054,9 +4064,11 @@ function clearDisplayBattleOverrides(ev) {
   const n = Object.keys(state.displayBattleOverrides || {}).length;
   state.displayBattleOverrides = {};
   state.displayEvenSplitAssigned = {}; // 自动分配记录一并作废
+  state.displayBattleManual = {};      // 手动指定标记一并作废
   try {
     localStorage.removeItem('mwi_display_battle_overrides');
     localStorage.removeItem('mwi_display_even_split_assigned');
+    localStorage.removeItem('mwi_display_battle_manual');
   } catch(e) {}
   openBattleDropdown = null;
   renderBattleTrialOptions();
@@ -4936,6 +4948,8 @@ function loadPrefs() {
       if (Array.isArray(esProfs) && esProfs.every(s => typeof s === 'string')) state.displayEvenSplitProfessions = esProfs;
       const esAssigned = JSON.parse(localStorage.getItem('mwi_display_even_split_assigned') || 'null');
       if (esAssigned && typeof esAssigned === 'object' && !Array.isArray(esAssigned)) state.displayEvenSplitAssigned = esAssigned;
+      const btManual = JSON.parse(localStorage.getItem('mwi_display_battle_manual') || 'null');
+      if (btManual && typeof btManual === 'object' && !Array.isArray(btManual)) state.displayBattleManual = btManual;
       const btOv = JSON.parse(localStorage.getItem('mwi_display_battle_overrides') || 'null');
       if (btOv && typeof btOv === 'object' && !Array.isArray(btOv)) {
         for (const k of Object.keys(btOv)) {
