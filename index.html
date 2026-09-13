@@ -877,7 +877,7 @@ const I18N = {
     displayBattleEdit:'单独修改',
     displayBattleEditTip:'勾选后，展示区域成员「战斗」列的图标可点击：从五种战斗图标中单独指定该成员的战斗结果（下拉只显示图标，再次点击同一图标可恢复自动）。',
     displayBattleEditCellTip:'点击选择战斗图标（再次点击同一图标恢复自动）',
-    evenSplit:'平均分配', evenSplitTip:'勾选职业后，把这些职业对应的成员平均分配到战斗试炼1与战斗试炼2：按成员顺序切成人数相等的前后两段，前半段用试炼1的图标、后半段用试炼2的图标（相邻的成员会分到同一个试炼）。取消全部勾选可撤销。',
+    evenSplit:'平均分配', evenSplitTip:'勾选职业后，把这些职业对应的成员平均分配到战斗试炼1与战斗试炼2：先按职业分组，每个职业内按展示顺序切成两半，一半去试炼1、一半去试炼2（同职业不会全在一个试炼，组内相邻的人仍在一起）。取消全部勾选可撤销。',
     evenSplitProfessions:'平均分配职业',
     battleStatTotal:'人数', battleStatHeal:'奶', battleStatShield:'盾', battleStatBow:'弓',
     clearBattleEdit:'清除单独修改', clearBattleEditTip:'清除所有成员的单独指定，战斗结果恢复按「职业是否属于出战职业」自动计算',
@@ -987,7 +987,7 @@ const I18N = {
     displayBattleEdit:'Manual Edit',
     displayBattleEditTip:'When checked, the Battle cell icons in the display area become clickable: pick one of the five battle icons to override that member’s result (icon-only dropdown; click the same icon again to restore auto).',
     displayBattleEditCellTip:'Click to pick a battle icon (click the same icon again to restore auto)',
-    evenSplit:'Even Split', evenSplitTip:'Pick professions: the members whose profession is selected are split evenly between Battle Trial 1 and 2 — in member order, the first half gets trial 1’s icon and the second half gets trial 2’s icon (adjacent members stay in the same trial). Uncheck all to undo.',
+    evenSplit:'Even Split', evenSplitTip:'Pick professions: the matching members are grouped by profession, and each profession is split in half (in display order) between Battle Trial 1 and 2, so one profession never lands entirely in a single trial. Uncheck all to undo.',
     evenSplitProfessions:'Split Professions',
     battleStatTotal:'Members', battleStatHeal:'Heal', battleStatShield:'Shield', battleStatBow:'Bow',
     clearBattleEdit:'Clear Manual', clearBattleEditTip:'Clear all manual overrides; battle results fall back to auto match by profession',
@@ -3799,8 +3799,9 @@ function toggleEvenSplitProfession(pIdx, ev) {
   renderBattleTrialOptions();
   renderDisplayArea();
 }
-// 均分规则：把「职业属于勾选范围」的成员，按成员顺序平均分配到战斗试炼1/2 —— 前半段用试炼1的图标，后半段用试炼2的图标。
-// 顺序相近（相邻）的成员因此落在同一个试炼里。结果写入《单独修改》的按成员指定值。
+// 均分规则：把「职业属于勾选范围」的成员先按职业分组，每个职业内按展示顺序切成前后两半，
+// 一半用试炼1的图标、另一半用试炼2的图标（组内顺序相近的人仍在一起；同一职业不会被全分到一个试炼）。
+// 分组间交替「哪一半给试炼1」，使两个试炼的总人数也尽量相等。结果写入《单独修改》的按成员指定值。
 function applyEvenSplit() {
   const assigned = state.displayEvenSplitAssigned || (state.displayEvenSplitAssigned = {});
   // 先撤销上一次平均分配的结果，未在此次结果中的成员恢复自动计算。
@@ -3815,14 +3816,27 @@ function applyEvenSplit() {
   const selSet = new Set(state.displayEvenSplitProfessions);
   const iconA = state.displayBattleTrialIcons[0] || 0;
   const iconB = state.displayBattleTrialIcons[1] || 0;
-  // 成员顺序 = 展示区域的顺序（state.members）
-  const ids = state.members
-    .filter(function(p) { return selSet.has(displayMemberProfession(p)); })
-    .map(function(p) { return String(p.id); });
-  const half = Math.ceil(ids.length / 2);
-  ids.forEach(function(id, i) {
-    state.displayBattleOverrides[id] = (i < half) ? iconA : iconB;
-    assigned[id] = true;
+  // 先按职业分组（成员在组内保持展示顺序），再把每个职业的人切成前后两半分别给试炼1/2，
+  // 这样同一职业（如两个盾）不会全挤在一个试炼里，组内顺序相近的人仍在一起。
+  const groups = new Map();
+  (state.members || []).forEach(function(p) {
+    const prof = displayMemberProfession(p);
+    if (!selSet.has(prof)) return;
+    if (!groups.has(prof)) groups.set(prof, []);
+    groups.get(prof).push(String(p.id));
+  });
+  // 分组顺序沿用《所有职业》的顺序；奇偶组交替「哪一半给试炼1」，避免总人数都往试炼1 偏。
+  const orderedProfs = (state.professions || []).filter(function(pf) { return groups.has(pf); });
+  groups.forEach(function(_, pf) { if (orderedProfs.indexOf(pf) < 0) orderedProfs.push(pf); });
+  orderedProfs.forEach(function(pf, g) {
+    const ids = groups.get(pf);
+    const half = Math.ceil(ids.length / 2);
+    const first = (g % 2 === 0) ? iconA : iconB;
+    const second = (g % 2 === 0) ? iconB : iconA;
+    ids.forEach(function(id, i) {
+      state.displayBattleOverrides[id] = (i < half) ? first : second;
+      assigned[id] = true;
+    });
   });
   persistDisplayBattleOverrides();
   try { localStorage.setItem('mwi_display_even_split_assigned', JSON.stringify(assigned)); } catch(e) {}
