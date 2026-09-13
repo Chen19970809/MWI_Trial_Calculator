@@ -112,8 +112,11 @@ h2 { font-size:16px; margin:10px 0 8px; color:var(--text-muted); }
 /* 出战职业多选下拉 */
 /* 出战职业选择框只占该行一半宽度，右侧留给「人数/奶/盾」统计 */
 .battle-trial-item .battle-prof-picker { flex:0 1 50%; max-width:50%; }
-.battle-trial-stats { flex:none; display:inline-flex; align-items:center; gap:8px; font-size:12px; color:var(--text-muted); white-space:nowrap; }
-.battle-trial-stats b { color:var(--text); font-weight:600; }
+.battle-trial-stats { flex:1 1 auto; min-width:0; display:flex; flex-wrap:wrap; align-items:baseline; gap:4px 12px; font-size:12px; color:var(--text-muted); }
+.battle-trial-stats .bts-item { display:inline-flex; align-items:baseline; gap:4px; min-width:0; max-width:100%; }
+.battle-trial-stats .bts-label { flex:none; color:var(--text-faint); }
+.battle-trial-stats b { color:var(--text); font-weight:600; flex:none; }
+.battle-trial-stats .bts-names { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--text-muted); }
 .battle-prof-picker { position:relative; display:flex; align-items:center; gap:2px; flex:1 1 auto; min-width:140px; max-width:100%; padding:2px 6px; border:1px solid var(--border); border-radius:4px; background:var(--input-bg); cursor:pointer; }
 .battle-prof-picker:hover { border-color:var(--accent); }
 .battle-prof-text { flex:1 1 auto; min-width:0; font-size:12px; color:var(--text); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
@@ -861,7 +864,7 @@ const I18N = {
     addMember:'添加成员', share:'共享设置', importData:'导入',
     exportScript:'下载脚本',
     exportScriptTitle:'下载数据导出脚本（Tampermonkey），安装后可在游戏内一键导出角色数据',
-    calculate:'计算最优分配', assignCol:'分配', nameCol:'角色名', maxMembers:'人数上限',
+    calculate:'计算最优分配', assignCol:'生活', nameCol:'角色名', maxMembers:'人数上限',
     displayAssign:'展示分配', displaySettings:'展示设置',
     displayCols:'列数', displayColsTip:'展示区域分成的列数（1-9 列）。修改后每列行数会按当前成员数重新生成均衡默认值。',
     displayRows:'每列行数', displayRowsTip:'依次填写每一列的行数，以空格分隔（如 4 3 2 1 = 第1列4行、第2列3行、第3列2行、第4列1行）。行数之和不足时，剩余成员会并入最后一列。',
@@ -876,7 +879,7 @@ const I18N = {
     displayBattleEditCellTip:'点击选择战斗图标（再次点击同一图标恢复自动）',
     evenSplit:'平均分配', evenSplitTip:'勾选职业后，把这些职业对应的成员平均分配到战斗试炼1与战斗试炼2：按成员顺序切成人数相等的前后两段，前半段用试炼1的图标、后半段用试炼2的图标（相邻的成员会分到同一个试炼）。取消全部勾选可撤销。',
     evenSplitProfessions:'平均分配职业',
-    battleStatTotal:'人数', battleStatHeal:'奶', battleStatShield:'盾',
+    battleStatTotal:'人数', battleStatHeal:'奶', battleStatShield:'盾', battleStatBow:'弓',
     clearBattleEdit:'清除单独修改', clearBattleEditTip:'清除所有成员的单独指定，战斗结果恢复按「职业是否属于出战职业」自动计算',
     clearBattleEditDone:'已清除 {n} 条单独修改，战斗结果恢复自动计算',
     docImportTip:'点击选择 xlsx 表格（如 试炼汇总.xlsx），自动读取所有「职业_」列的值并去重，显示在《所有职业》下拉列表中。',
@@ -971,7 +974,7 @@ const I18N = {
     addMember:'Add Member', share:'Share', importData:'Import',
     exportScript:'Download Script',
     exportScriptTitle:'Download data export userscript (Tampermonkey) to export character data in-game',
-    calculate:'Calculate', assignCol:'Assign', nameCol:'Name', maxMembers:'Max',
+    calculate:'Calculate', assignCol:'Skilling', nameCol:'Name', maxMembers:'Max',
     displayAssign:'Display', displaySettings:'Display Settings',
     displayCols:'Columns', displayColsTip:'Number of columns (1-9) in the display area. Changing this regenerates a balanced rows-per-column string based on current members.',
     displayRows:'Rows per Column', displayRowsTip:'Row count of each column in order, separated by spaces (e.g. 4 3 2 1 = 4 rows in col 1, 3 in col 2, 2 in col 3, 1 in col 4). Leftover members go to the last column.',
@@ -986,7 +989,7 @@ const I18N = {
     displayBattleEditCellTip:'Click to pick a battle icon (click the same icon again to restore auto)',
     evenSplit:'Even Split', evenSplitTip:'Pick professions: the members whose profession is selected are split evenly between Battle Trial 1 and 2 — in member order, the first half gets trial 1’s icon and the second half gets trial 2’s icon (adjacent members stay in the same trial). Uncheck all to undo.',
     evenSplitProfessions:'Split Professions',
-    battleStatTotal:'Members', battleStatHeal:'Heal', battleStatShield:'Shield',
+    battleStatTotal:'Members', battleStatHeal:'Heal', battleStatShield:'Shield', battleStatBow:'Bow',
     clearBattleEdit:'Clear Manual', clearBattleEditTip:'Clear all manual overrides; battle results fall back to auto match by profession',
     clearBattleEditDone:'Cleared {n} manual override(s); battle results restored to auto',
     docImportTip:'Pick an xlsx file (e.g. trial summary); all values in columns starting with 职业_ are read, deduped and shown in the All Professions dropdown.',
@@ -1100,6 +1103,8 @@ const TRIAL_DURATION = 3600, START_LV = 100, LV_PER_PASS = 10, COUNT_INFLATION =
 const BASE_ACTION_SEC = 10, SUCCESS_BASE = 0.80, SUCCESS_BELOW = 0.01, SUCCESS_ABOVE = 0.005, SUCCESS_MIN = 0.05;
 // 展示设置第二行：战斗试炼下拉的可选图标（对应 SVG symbol id：刺猬/虫群/变色龙/水母/獾）。
 const BATTLE_TRIAL_ICONS = ['hedgehog', 'swarm', 'chameleon', 'jellyfish', 'badger'];
+// 《单独修改》里「手动清空」的标记值：与「没有单独修改（未设置）」区分，显示为空且不回落自动计算。
+const BATTLE_OVERRIDE_EMPTY = -1;
 // 当前展开的战斗试炼下拉（null = 无；'icon0'/'prof0'/'icon1'/'prof1'）。
 let openBattleDropdown = null;
 const BASE_TOTAL_PT = 40000, PT_GROWTH = 4000, MAX_PASS_GUARD = 10000, NUM_TRIALS = 4;
@@ -3648,7 +3653,10 @@ function renderDisplaySettings() {
 // 某成员最终归属的战斗图标下标集合：有《单独修改》/《平均分配》指定时取指定值，否则按职业是否属于各试炼的出战职业。
 function displayMemberBattleIcons(p) {
   const ov = state.displayBattleOverrides[String(p.id)];
-  if (Number.isInteger(ov) && ov >= 0 && ov < BATTLE_TRIAL_ICONS.length) return [ov];
+  if (ov !== undefined && ov !== null) {
+    // 单独指定：正常图标 → [图标]；手动清空 → 无任何图标
+    return (Number.isInteger(ov) && ov >= 0 && ov < BATTLE_TRIAL_ICONS.length) ? [ov] : [];
+  }
   const prof = displayMemberProfession(p);
   const icons = [];
   for (let j = 0; j < 2; j++) {
@@ -3656,25 +3664,37 @@ function displayMemberBattleIcons(p) {
   }
   return icons;
 }
-// 战斗试炼 i 的统计：分配总人数（图标命中该试炼的人数）、其中职业含「奶」的人数、含「盾」的人数。
+// 战斗试炼 i 的统计：分配总人数（图标命中该试炼的人数），以及其中职业含「奶」「盾」「弓」的人（记数量与名单）。
 function battleTrialStats(i) {
   const icon = state.displayBattleTrialIcons[i] || 0;
-  let total = 0, heal = 0, shield = 0;
+  let total = 0;
+  const heal = [], shield = [], bow = [];
   (state.members || []).forEach(function(p) {
     if (displayMemberBattleIcons(p).indexOf(icon) < 0) return;
     total++;
     const prof = displayMemberProfession(p);
-    if (prof.indexOf('奶') >= 0) heal++;
-    if (prof.indexOf('盾') >= 0) shield++;
+    if (prof.indexOf('奶') >= 0) heal.push(p.name);
+    if (prof.indexOf('盾') >= 0) shield.push(p.name);
+    if (prof.indexOf('弓') >= 0) bow.push(p.name);
   });
-  return { total: total, heal: heal, shield: shield };
+  return { total: total, heal: heal, shield: shield, bow: bow };
+}
+// 统计块：总人数只显示数量；奶/盾/弓显示「标签 数量 名字1 名字2 …」。
+function battleTrialStatBlock(label, names) {
+  const n = names.length;
+  return '<span class="bts-item">'+
+    '<span class="bts-label">'+escHtml(label)+'</span>'+
+    '<b>'+n+'</b>'+
+    (n ? '<span class="bts-names" title="'+escHtml(names.join(' '))+'">'+escHtml(names.join(' '))+'</span>' : '')+
+  '</span>';
 }
 function battleTrialStatsHtml(i) {
   const s = battleTrialStats(i);
   return '<span class="battle-trial-stats">'+
-    '<span>'+escHtml(t('battleStatTotal'))+' <b>'+s.total+'</b></span>'+
-    '<span>'+escHtml(t('battleStatHeal'))+' <b>'+s.heal+'</b></span>'+
-    '<span>'+escHtml(t('battleStatShield'))+' <b>'+s.shield+'</b></span>'+
+    '<span class="bts-item"><span class="bts-label">'+escHtml(t('battleStatTotal'))+'</span><b>'+s.total+'</b></span>'+
+    battleTrialStatBlock(t('battleStatHeal'), s.heal)+
+    battleTrialStatBlock(t('battleStatShield'), s.shield)+
+    battleTrialStatBlock(t('battleStatBow'), s.bow)+
   '</span>';
 }
 // 展示设置第二行：战斗试炼1 / 战斗试炼2，各带两个下拉：
@@ -3972,8 +3992,10 @@ function displayBattleCellHtml(p, prof) {
   const key = 'bt' + String(p.id).replace(/["'\\]/g, '');
   const ov = state.displayBattleOverrides[id];
   const hasOv = Number.isInteger(ov) && ov >= 0 && ov < BATTLE_TRIAL_ICONS.length;
+  // ov === BATTLE_OVERRIDE_EMPTY 表示《单独修改》里手动清空：显示为空，不再回落到自动计算。
+  const emptyOv = ov === BATTLE_OVERRIDE_EMPTY;
   // 图标尺寸 24px：与单元格最小高度一致，使图标铺满整个战斗单元格。
-  const content = hasOv ? svgIcon(BATTLE_TRIAL_ICONS[ov], 24, 24) : (battleIconsForProfession(prof, 24) || '<span style="display:block;width:24px;height:24px"></span>');
+  const content = emptyOv ? '' : (hasOv ? svgIcon(BATTLE_TRIAL_ICONS[ov], 24, 24) : (battleIconsForProfession(prof, 24) || '<span style="display:block;width:24px;height:24px"></span>'));
   if (!state.displayBattleEdit) return '<span class="battle-cell-fill">'+content+'</span>';
   const names = battleTrialIconNames();
   const opts = BATTLE_TRIAL_ICONS.map(function(k, kIdx) {
@@ -3987,11 +4009,11 @@ function displayBattleCellHtml(p, prof) {
     (openBattleDropdown === key ? '<span class="battle-trial-dropdown battle-icon-dropdown" id="battle-dropdown-'+key+'">'+opts+'</span>' : '')+
   '</span>';
 }
-// 选中某个战斗图标：写入该成员的单独指定值；再次点击同一图标则清除（恢复自动）。
+// 选中某个战斗图标：写入该成员的单独指定值；再次点击同一图标则手动清空（显示为空，不回落到自动计算）。
 function selectDisplayBattleIcon(key, kIdx, ev) {
   if (ev) ev.stopPropagation();
   const id = String(key).replace(/^bt/, '');
-  if (state.displayBattleOverrides[id] === kIdx) delete state.displayBattleOverrides[id];
+  if (state.displayBattleOverrides[id] === kIdx) state.displayBattleOverrides[id] = BATTLE_OVERRIDE_EMPTY;
   else state.displayBattleOverrides[id] = kIdx;
   // 手动改过就不再属于《平均分配》的自动结果，避免之后被撤销。
   if (state.displayEvenSplitAssigned) {
@@ -4902,7 +4924,7 @@ function loadPrefs() {
       if (btOv && typeof btOv === 'object' && !Array.isArray(btOv)) {
         for (const k of Object.keys(btOv)) {
           const v = btOv[k];
-          if (Number.isInteger(v) && v >= 0 && v < BATTLE_TRIAL_ICONS.length) state.displayBattleOverrides[k] = v;
+          if (v === BATTLE_OVERRIDE_EMPTY || (Number.isInteger(v) && v >= 0 && v < BATTLE_TRIAL_ICONS.length)) state.displayBattleOverrides[k] = v;
         }
       }
     } catch(e) {}
