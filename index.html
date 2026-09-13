@@ -66,6 +66,13 @@ h2 { font-size:16px; margin:10px 0 8px; color:var(--text-muted); }
 .trial-cards { display:grid; grid-template-columns:repeat(4,1fr); gap:12px; }
 @media(max-width:1000px){ .trial-cards{grid-template-columns:repeat(2,1fr);} }
 @media(max-width:600px){ .trial-cards{grid-template-columns:1fr;} }
+/* 可折叠分组：加成与约束（全局加成 / 公会建筑 / 公会神龛 / 进度约束） */
+.config-group { display:flex; flex-direction:column; gap:6px; }
+.config-group-header { display:flex; align-items:center; padding:8px 20px 0 20px; }
+.config-group-toggle { display:inline-flex; align-items:center; gap:6px; padding:3px 10px; border:1px solid var(--border); border-radius:4px; background:var(--conn-bg); color:var(--text); font-size:12px; font-weight:600; font-family:inherit; cursor:pointer; }
+.config-group-toggle:hover { border-color:var(--accent); }
+.config-group-body { display:flex; flex-direction:column; }
+.config-group.collapsed .config-group-body { display:none; }
 .global-buff-section { padding:8px 20px 0 20px; }
 .global-buff-section h3 { font-size:13px; font-weight:600; margin:0 0 6px 0; color:var(--text-muted); display:flex; align-items:center; gap:6px; }
 .global-buff-hint { font-size:11px; color:var(--text-faint); font-weight:400; cursor:help; }
@@ -148,6 +155,14 @@ h2 { font-size:16px; margin:10px 0 8px; color:var(--text-muted); }
 .battle-icon-option.active { border-color:var(--accent); }
 .battle-icon-auto { margin-left:4px; padding:3px 6px; font-size:14px; line-height:1; color:var(--text-faint); border-left:1px solid var(--border); border-radius:0 4px 4px 0; }
 .battle-icon-auto:hover { color:var(--accent); }
+/* 报名导入：可拖到书签栏的书签按钮 + 临时提示条 */
+#btn-signup-bookmark { text-decoration:none; display:inline-flex; align-items:center; cursor:pointer; }
+/* 报名对比《当前》列：与相邻结果不一致时红框标记 */
+.display-column th.signup-col { min-width:34px; font-size:11px; padding:2px 4px; }
+.display-column td.signup-cell { padding:1px 3px; }
+.display-column td.signup-cell svg { display:block; margin:0 auto; }
+.display-column td.signup-mismatch { background:rgba(217,48,48,.18); box-shadow:inset 0 0 0 2px var(--danger); border-radius:3px; }
+.signup-toast { position:fixed; left:50%; bottom:28px; transform:translateX(-50%); z-index:200; max-width:80vw; padding:8px 14px; border:1px solid var(--border); border-radius:6px; background:var(--surface); color:var(--text); font-size:13px; line-height:1.5; box-shadow:0 6px 18px rgba(0,0,0,.22); }
 .display-settings-bar .global-buff-item input[type="checkbox"] { width:auto; min-width:0; padding:0; cursor:pointer; }
 .display-empty { color:var(--text-faint); padding:20px; }
 /* 分配结果视图：每个试炼 4 列为一组，组间加分隔线 */
@@ -751,6 +766,12 @@ table.member-table tbody tr:hover td.sticky-l.name-cell { background-color:var(-
 </div>
 
 <div id="top-config">
+<!-- 加成与约束：全局加成 / 公会建筑 / 公会神龛 / 进度约束，整组可一键折叠 -->
+<div class="config-group" id="buff-config-group">
+  <div class="config-group-header">
+    <button class="config-group-toggle" id="btn-toggle-buff-group" type="button" onclick="toggleBuffGroup()" title="">加成与约束 ▾</button>
+  </div>
+  <div class="config-group-body" id="buff-config-body">
 <div class="global-buff-section">
   <h3 id="h3-global-buff">全局加成 <span class="global-buff-hint" id="global-buff-hint" title=""></span></h3>
   <div class="global-buff-bar">
@@ -795,6 +816,8 @@ table.member-table tbody tr:hover td.sticky-l.name-cell { background-color:var(-
     </label>
   </div>
 </div>
+  </div><!-- /#buff-config-body -->
+</div><!-- /#buff-config-group -->
 
 <div class="trial-section" id="trial-config-section">
   <h2 id="h2-trial">试炼配置</h2>
@@ -824,6 +847,8 @@ table.member-table tbody tr:hover td.sticky-l.name-cell { background-color:var(-
       <span class="global-buff-label" id="ds-lbl-battle-edit">单独修改</span>
     </label>
     <button class="btn btn-sm" id="btn-clear-battle-edit" onclick="clearDisplayBattleOverrides()" title="">清除单独修改</button>
+    <a class="btn btn-sm" id="btn-signup-bookmark" draggable="true" onclick="return false" title="" href="javascript:(function(){try{var t=document.querySelector('table[class*=&quot;membersTable&quot;]')||document.querySelector('table[class*=&quot;member&quot;]');if(!t){alert('未找到成员表，请先打开 公会 > 成员 > 贡献');return;}var out=[];Array.prototype.forEach.call(t.rows,function(tr){var n=tr.querySelector('[data-name]');if(!n)return;var trials=[],skills=[];Array.prototype.forEach.call(tr.querySelectorAll('span[class*=&quot;signupIcon&quot;]'),function(sp){var u=sp.querySelector('use');var href=u?(u.getAttribute('href')||u.getAttribute('xlink:href')||''):'';var id=href.split('#')[1]||'';if(!id)return;if(id.indexOf('trial_')===0)trials.push(id.slice(6));else skills.push(id);});var tt=tr.querySelector('[class*=&quot;trialTiers&quot;]');out.push({name:n.getAttribute('data-name'),trials:trials,skills:skills,tier:tt?(tt.textContent||'').trim():''});});if(!out.length){alert('表格里没有成员行');return;}var text='MWI_SIGNUPS_V1'+JSON.stringify({v:1,capturedAt:Date.now(),members:out});try{navigator.clipboard.writeText(text).catch(function(){});}catch(e){}alert('已抓取 '+out.length+' 位成员报名状态。回到 MWI 计算器页面会自动导入（或点“导入报名”）。');}catch(e){alert('抓取失败：'+e.message);}})()">抓取报名状态</a>
+    <button class="btn btn-sm" id="btn-signup-compare" onclick="toggleSignupCompare()" title="">对比报名状态</button>
   </div>
   <!-- 第二行：战斗试炼1（图标单选下拉 + 出战职业多选下拉） -->
   <div class="display-settings-bar" id="display-settings-row2">
@@ -885,7 +910,15 @@ const I18N = {
     evenSplit:'平均分配', evenSplitTip:'勾选职业后，把这些职业对应的成员平均分配到战斗试炼1与战斗试炼2：先按职业分组，每个职业内按展示顺序切成两半，一半去试炼1、一半去试炼2（同职业不会全在一个试炼，组内相邻的人仍在一起）。取消全部勾选可撤销。',
     evenSplitProfessions:'平均分配职业',
     battleStatTotal:'人数', battleStatHeal:'奶', battleStatFork:'绿叉', battleStatShield:'盾', battleStatBow:'弓',
+    buffGroupTitle:'加成与约束', buffGroupTip:'点击折叠/展开：全局加成、公会建筑、公会神龛、进度约束',
     clearBattleEdit:'清除单独修改', clearBattleEditTip:'清除所有成员的单独指定，战斗结果恢复按「职业是否属于出战职业」自动计算',
+    signupBookmark:'抓取报名状态', signupBookmarkTip:'把我拖到浏览器书签栏；之后在「公会 > 成员 > 贡献」页面点这个书签，会把全员报名状态复制到剪贴板，切回本页即自动导入',
+    signupCompare:'对比报名状态', signupCompareTip:'点一次：提示按 Ctrl+V 粘贴《抓取报名状态》书签抓到的报名数据，并在展示区「分配」「战斗」后各加一列《当前》（红框=与当前结果不一致）；再点一次关闭',
+    signupPastePrompt:'请在本页按 Ctrl+V 粘贴报名数据：先在「公会 > 成员 > 贡献」页点击《抓取报名状态》书签，再回到本页按 Ctrl+V。',
+    signupCol:'当前', signupNone:'(无)',
+    signupCompareOn:'已读取 {n} 位成员报名状态，展示区已加《当前》对比列（红框＝与当前结果不一致）',
+    signupCompareOff:'已关闭报名对比',
+    signupNoData:'剪贴板里没有报名数据，请先在「公会 > 成员 > 贡献」页点击《抓取报名状态》书签',
     clearBattleEditDone:'已清除 {n} 条单独修改，战斗结果恢复自动计算',
     docImportTip:'点击选择 xlsx 表格（如 试炼汇总.xlsx），自动读取所有「职业_」列的值并去重，显示在《所有职业》下拉列表中。',
     profNone:'(未导入)', docImportOk:'导入成功：读取到 {n} 个职业', docImportFail:'导入失败：{err}', docImportNoCol:'未找到「职业」开头的列',
@@ -996,7 +1029,15 @@ const I18N = {
     evenSplit:'Even Split', evenSplitTip:'Pick professions: the matching members are grouped by profession, and each profession is split in half (in display order) between Battle Trial 1 and 2, so one profession never lands entirely in a single trial. Uncheck all to undo.',
     evenSplitProfessions:'Split Professions',
     battleStatTotal:'Members', battleStatHeal:'Heal', battleStatFork:'Blooming Trident', battleStatShield:'Shield', battleStatBow:'Bow',
+    buffGroupTitle:'Buffs & Constraints', buffGroupTip:'Click to collapse/expand: Global Buffs, Guild Buildings, Guild Shrines, Progress Constraint',
     clearBattleEdit:'Clear Manual', clearBattleEditTip:'Clear all manual overrides; battle results fall back to auto match by profession',
+    signupBookmark:'Fetch Signups', signupBookmarkTip:'Drag me to the bookmarks bar; clicking it on Guild > Members > Contributions copies every signup to the clipboard, and this page imports it automatically when you switch back',
+    signupCompare:'Compare Signups', signupCompareTip:'Click once to be prompted to paste (Ctrl+V) the signup data captured by the Fetch Signups bookmark, then a Current column is added after Assign and Battle (red box = mismatch); click again to turn it off',
+    signupPastePrompt:'Press Ctrl+V on this page to paste the signup data: first click the Fetch Signups bookmark on Guild > Members > Contributions, then come back and press Ctrl+V.',
+    signupCol:'Current', signupNone:'(none)',
+    signupCompareOn:'Loaded {n} members’ signups; Current comparison columns added (red box = mismatch)',
+    signupCompareOff:'Signup comparison turned off',
+    signupNoData:'No signup data in the clipboard. Click the Fetch Signups bookmark on Guild > Members > Contributions first',
     clearBattleEditDone:'Cleared {n} manual override(s); battle results restored to auto',
     docImportTip:'Pick an xlsx file (e.g. trial summary); all values in columns starting with 职业_ are read, deduped and shown in the All Professions dropdown.',
     profNone:'(not imported)', docImportOk:'Imported: {n} professions read', docImportFail:'Import failed: {err}', docImportNoCol:'No column starting with 职业 found',
@@ -2022,12 +2063,17 @@ let state = {
   displayEvenSplitProfessions: [],
   // 《单独修改》里手动指定过的成员（memberId → true）：优先级最高，平均分配不会覆盖他们。仅本地保存。
   displayBattleManual: {},
+  // 报名对比：是否显示《当前》对比列（会话级）+ 角色名 → { trials, skills, tier }。
+  signupCompare: false,
+  signupByName: {},
   // 上一次《平均分配》实际分配到的人（memberId → true），用于重新分配/撤销时恢复自动计算。仅本地保存。
   displayEvenSplitAssigned: {},
   // 《单独修改》：为单个成员手动指定的战斗图标（memberId → BATTLE_TRIAL_ICONS 下标）。仅本地保存。
   displayBattleOverrides: {},
   // 是否开启《单独修改》（可点击成员战斗列图标修改战斗结果）。仅本地保存。
   displayBattleEdit: false,
+  // 「加成与约束」分组（全局加成/公会建筑/公会神龛/进度约束）是否折叠。仅本地保存。
+  buffGroupCollapsed: false,
   // 《所有职业》下拉列表当前选中项（会话级）。
   selectedProfession: '',
   // 本人姓名（用于个人端上传时按 name 主键覆盖同名条目）。默认取 importJson 后 members[0].name，也可持久化到 localStorage。
@@ -3943,6 +3989,7 @@ function renderDisplayArea() {
   }
   const slices = [];
   let pos = 0;
+  const cmp = !!state.signupCompare;
   for (let j = 0; j < cols; j++) {
     slices.push(entries.slice(pos, pos + colRows[j]));
     pos += colRows[j];
@@ -3960,18 +4007,22 @@ function renderDisplayArea() {
       return '<tr>'+
         '<td class="idx-cell">'+rowIdx+'</td>'+
         '<td class="assign-cell '+assignClass+'">'+assignContent+'</td>'+
+        (cmp ? signupLifeCellHtml(p, assign) : '')+
         '<td class="name-cell">'+escHtml(p.name)+'</td>'+
         '<td class="prof-cell">'+displayProfessionSelectHtml(p, prof)+'</td>'+
         '<td class="battle-cell">'+displayBattleCellHtml(p, prof)+'</td>'+
+        (cmp ? signupBattleCellHtml(p) : '')+
       '</tr>';
     }).join('');
     return '<div class="display-column">'+
       '<table class="member-table"><thead><tr>'+
         '<th class="idx-col">'+t('indexCol')+'</th>'+
         '<th class="assign-col">'+t('assignCol')+'</th>'+
+        (cmp ? '<th class="signup-col">'+t('signupCol')+'</th>' : '')+
         '<th class="name-col">'+t('nameCol')+'</th>'+
         '<th class="prof-col">'+t('professionCol')+'</th>'+
         '<th class="battle-col">'+t('battleCol')+'</th>'+
+        (cmp ? '<th class="signup-col">'+t('signupCol')+'</th>' : '')+
       '</tr></thead><tbody>'+rowsHtml+'</tbody></table>'+
     '</div>';
   }).join('');
@@ -4073,6 +4124,98 @@ function selectDisplayBattleIcon(key, kIdx, ev) {
   openBattleDropdown = null;
   renderBattleTrialOptions(); // 右侧人数/奶/盾统计随单独修改变化
   renderDisplayArea();
+}
+// === 公会试炼报名对比 ===
+// 书签脚本抓取「公会 > 成员 > 贡献」页成员表，产出以 MWI_SIGNUPS_V1 开头的 JSON 写入剪贴板；
+// 点《对比报名状态》（或在本页 Ctrl+V / 切回本页且已授权）读取后，在展示区「职业」「战斗」后各加一列《当前》。
+const SIGNUP_MARKER = 'MWI_SIGNUPS_V1';
+let lastSignupCapturedAt = 0;
+let signupToastTimer = null;
+function signupNameKey(s) { return String(s == null ? '' : s).trim().toLowerCase(); }
+function showSignupToast(text, sticky) {
+  let el = document.getElementById('signup-toast');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'signup-toast';
+    el.className = 'signup-toast';
+    document.body.appendChild(el);
+  }
+  el.textContent = text;
+  el.style.display = '';
+  if (signupToastTimer) { clearTimeout(signupToastTimer); signupToastTimer = null; }
+  if (!sticky) signupToastTimer = setTimeout(function() { if (el) el.style.display = 'none'; }, 8000);
+}
+// 只读取报名数据用于对比展示，不改动任何分配/战斗结果。
+function loadSignupData(payload) {
+  const list = (payload && payload.members) || [];
+  if (!list.length) { showSignupToast(t('signupNoData')); return false; }
+  const byName = {};
+  list.forEach(function(m) { if (m && m.name) byName[signupNameKey(m.name)] = m; });
+  state.signupByName = byName;
+  state.signupCompare = true;
+  renderDisplayArea();
+  showSignupToast(t('signupCompareOn').replace('{n}', list.length));
+  return true;
+}
+function signupRecord(p) { return (state.signupByName || {})[signupNameKey(p.name)] || null; }
+// 《当前》- 生活：显示报名图标，与「分配」列当前分配到的试炼不一致时标红。
+function signupLifeCellHtml(p, assignIdx) {
+  const rec = signupRecord(p);
+  const signed = rec && rec.skills && rec.skills.length ? rec.skills[0] : '';
+  const assigned = (assignIdx >= 0 && state.trials[assignIdx]) ? SKILL_KEYS[state.trials[assignIdx].skill] : '';
+  const bad = !signed || signed !== assigned;
+  const title = t('signupCol') + '：' + (signed ? skillNameOfIcon(signed) : t('signupNone')) + ' / ' + t('assignCol') + '：' + (assigned ? skillNameOfIcon(assigned) : t('noAssign'));
+  return '<td class="signup-cell'+(bad ? ' signup-mismatch' : '')+'" title="'+escHtml(title)+'">'+(signed ? svgIcon(signed, 20, 20) : '')+'</td>';
+}
+// 《当前》- 战斗：显示报名图标，与「战斗」列当前结果不一致时标红。
+function signupBattleCellHtml(p) {
+  const rec = signupRecord(p);
+  const signed = rec && rec.trials && rec.trials.length ? rec.trials[0] : '';
+  const curNames = displayMemberBattleIcons(p).map(function(i) { return BATTLE_TRIAL_ICONS[i]; });
+  const bad = !signed || curNames.indexOf(signed) < 0;
+  const title = t('signupCol') + '：' + (signed ? battleTrialNameOfIcon(signed) : t('signupNone')) + ' / ' + t('battleCol') + '：' + (curNames.length ? curNames.map(battleTrialNameOfIcon).join('、') : t('signupNone'));
+  return '<td class="signup-cell'+(bad ? ' signup-mismatch' : '')+'" title="'+escHtml(title)+'">'+(signed ? svgIcon(signed, 20, 20) : '')+'</td>';
+}
+function skillNameOfIcon(iconId) {
+  const idx = (SKILL_KEYS || []).indexOf(iconId);
+  if (idx >= 0) { try { return skillLabel(idx); } catch(e) { return iconId; } }
+  return iconId;
+}
+function battleTrialNameOfIcon(iconId) {
+  const idx = BATTLE_TRIAL_ICONS.indexOf(iconId);
+  const names = battleTrialIconNames();
+  return idx >= 0 ? names[idx] : iconId;
+}
+function handleSignupText(text) {
+  if (!text || String(text).indexOf(SIGNUP_MARKER) !== 0) return false;
+  try {
+    const payload = JSON.parse(String(text).slice(SIGNUP_MARKER.length));
+    if (payload && payload.capturedAt === lastSignupCapturedAt && state.signupCompare) return true;
+    lastSignupCapturedAt = payload.capturedAt;
+    return loadSignupData(payload);
+  } catch(e) { return false; }
+}
+// 《对比报名状态》：不再主动读取剪贴板（避免权限弹窗），只提示在本页按 Ctrl+V 粘贴。
+function toggleSignupCompare() {
+  if (state.signupCompare) {
+    state.signupCompare = false;
+    state.signupByName = {};
+    renderDisplayArea();
+    showSignupToast(t('signupCompareOff'));
+    return;
+  }
+  showSignupToast(t('signupPastePrompt'), true);
+}
+// 粘贴通道：在本页按 Ctrl+V 直接导入（无需剪贴板权限）。
+function handleSignupPaste(ev) {
+  try {
+    const data = ev.clipboardData || window.clipboardData;
+    const text = data ? data.getData('text') : '';
+    if (handleSignupText(text)) ev.preventDefault();
+  } catch(e) {}
+}
+function startSignupReceiver() {
+  document.addEventListener('paste', handleSignupPaste);
 }
 // 第一行的《单独修改》勾选框：切换是否允许点击成员战斗列修改结果。
 function toggleDisplayBattleEdit(checked) {
@@ -4389,7 +4532,26 @@ function renderAll() {
   if (progressMinSection) progressMinSection.style.display = isGuildLeader() ? '' : 'none';
 }
 
+// 「加成与约束」分组：一键折叠/展开（全局加成 / 公会建筑 / 公会神龛 / 进度约束）。
+function toggleBuffGroup() {
+  state.buffGroupCollapsed = !state.buffGroupCollapsed;
+  try { localStorage.setItem('mwi_buff_group_collapsed', state.buffGroupCollapsed ? '1' : '0'); } catch(e) {}
+  renderBuffGroup();
+}
+function renderBuffGroup() {
+  const box = document.getElementById('buff-config-group');
+  const btn = document.getElementById('btn-toggle-buff-group');
+  if (!box) return;
+  const collapsed = !!state.buffGroupCollapsed;
+  box.classList.toggle('collapsed', collapsed);
+  if (btn) {
+    btn.textContent = t('buffGroupTitle') + (collapsed ? ' ▸' : ' ▾');
+    btn.title = t('buffGroupTip');
+    btn.setAttribute('aria-expanded', String(!collapsed));
+  }
+}
 function updateStaticText() {
+  renderBuffGroup(); // 「加成与约束」分组标题与折叠状态
   document.getElementById('h1-title').textContent = t('title');
   const verEl = document.getElementById('app-version');
   if (verEl) verEl.textContent = 'v' + APP_VERSION;
@@ -4423,6 +4585,16 @@ function updateStaticText() {
   if (clearBtn) {
     clearBtn.textContent = t('clearBattleEdit');
     clearBtn.title = t('clearBattleEditTip');
+  }
+  const signupBookmark = document.getElementById('btn-signup-bookmark');
+  if (signupBookmark) {
+    signupBookmark.textContent = t('signupBookmark');
+    signupBookmark.title = t('signupBookmarkTip');
+  }
+  const signupCompareBtn = document.getElementById('btn-signup-compare');
+  if (signupCompareBtn) {
+    signupCompareBtn.textContent = t('signupCompare');
+    signupCompareBtn.title = t('signupCompareTip');
   }
   renderBattleTrialOptions();
   const docImportBtn = document.getElementById('btn-doc-import');
@@ -4982,6 +5154,7 @@ function loadPrefs() {
       }
     } catch(e) {}
     state.displayBattleEdit = localStorage.getItem('mwi_display_battle_edit') === '1';
+    state.buffGroupCollapsed = localStorage.getItem('mwi_buff_group_collapsed') === '1';
     const displayCols = Number(localStorage.getItem('mwi_display_cols'));
     if (Number.isFinite(displayCols) && displayCols >= 1 && displayCols <= 9) state.displayCols = displayCols;
     const displayRows = localStorage.getItem('mwi_display_rows');
@@ -6131,6 +6304,7 @@ async function init() {
   // 数据导出脚本直送：若 URL hash 带 #mwiImport=...，走与"导入 JSON"相同的合并逻辑
   // 放在 loadFromBin/loadData 之后，保证直送数据在共享模式下合并到最新云端快照上。
   tryImportFromHash();
+  startSignupReceiver(); // 接收《抓取报名状态》书签推来的报名数据
 }
 init();
 
