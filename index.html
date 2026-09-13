@@ -4163,7 +4163,8 @@ function signupLifeCellHtml(p, assignIdx) {
   const rec = signupRecord(p);
   const signed = rec && rec.skills && rec.skills.length ? rec.skills[0] : '';
   const assigned = (assignIdx >= 0 && state.trials[assignIdx]) ? SKILL_KEYS[state.trials[assignIdx].skill] : '';
-  const bad = !signed || signed !== assigned;
+  // 两边都为空视为一致；只有「一方有、另一方没有」或「都有但不同」才算不一致。
+  const bad = signed ? (signed !== assigned) : (assigned !== '');
   const title = t('signupCol') + '：' + (signed ? skillNameOfIcon(signed) : t('signupNone')) + ' / ' + t('assignCol') + '：' + (assigned ? skillNameOfIcon(assigned) : t('noAssign'));
   return '<td class="signup-cell'+(bad ? ' signup-mismatch' : '')+'" title="'+escHtml(title)+'">'+(signed ? svgIcon(signed, 20, 20) : '')+'</td>';
 }
@@ -4172,7 +4173,8 @@ function signupBattleCellHtml(p) {
   const rec = signupRecord(p);
   const signed = rec && rec.trials && rec.trials.length ? rec.trials[0] : '';
   const curNames = displayMemberBattleIcons(p).map(function(i) { return BATTLE_TRIAL_ICONS[i]; });
-  const bad = !signed || curNames.indexOf(signed) < 0;
+  // 报名为空且当前战斗结果也为空 → 一致，不标红；只有一方为空或图标不同才标红。
+  const bad = signed ? (curNames.indexOf(signed) < 0) : (curNames.length > 0);
   const title = t('signupCol') + '：' + (signed ? battleTrialNameOfIcon(signed) : t('signupNone')) + ' / ' + t('battleCol') + '：' + (curNames.length ? curNames.map(battleTrialNameOfIcon).join('、') : t('signupNone'));
   return '<td class="signup-cell'+(bad ? ' signup-mismatch' : '')+'" title="'+escHtml(title)+'">'+(signed ? svgIcon(signed, 20, 20) : '')+'</td>';
 }
