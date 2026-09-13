@@ -146,6 +146,8 @@ h2 { font-size:16px; margin:10px 0 8px; color:var(--text-muted); }
 .battle-icon-option { display:inline-flex; align-items:center; justify-content:center; padding:3px; border:1px solid transparent; border-radius:4px; cursor:pointer; }
 .battle-icon-option:hover { background:var(--input-bg); }
 .battle-icon-option.active { border-color:var(--accent); }
+.battle-icon-auto { margin-left:4px; padding:3px 6px; font-size:14px; line-height:1; color:var(--text-faint); border-left:1px solid var(--border); border-radius:0 4px 4px 0; }
+.battle-icon-auto:hover { color:var(--accent); }
 .display-settings-bar .global-buff-item input[type="checkbox"] { width:auto; min-width:0; padding:0; cursor:pointer; }
 .display-empty { color:var(--text-faint); padding:20px; }
 /* 分配结果视图：每个试炼 4 列为一组，组间加分隔线 */
@@ -878,10 +880,11 @@ const I18N = {
     professionCol:'职业', battleCol:'战斗', profEmptyOption:'(未选择)',
     displayBattleEdit:'单独修改',
     displayBattleEditTip:'勾选后，展示区域成员「战斗」列的图标可点击：从五种战斗图标中单独指定该成员的战斗结果（下拉只显示图标，再次点击同一图标可恢复自动）。',
-    displayBattleEditCellTip:'点击选择战斗图标（再次点击同一图标恢复自动）',
+    displayBattleEditCellTip:'点击选择战斗图标（再次点击同一图标清空，点末尾 ↺ 恢复自动计算）',
+    battleCellAuto:'自动：清除单独修改，按职业重新计算',
     evenSplit:'平均分配', evenSplitTip:'勾选职业后，把这些职业对应的成员平均分配到战斗试炼1与战斗试炼2：先按职业分组，每个职业内按展示顺序切成两半，一半去试炼1、一半去试炼2（同职业不会全在一个试炼，组内相邻的人仍在一起）。取消全部勾选可撤销。',
     evenSplitProfessions:'平均分配职业',
-    battleStatTotal:'人数', battleStatHeal:'奶', battleStatShield:'盾', battleStatBow:'弓',
+    battleStatTotal:'人数', battleStatHeal:'奶', battleStatFork:'绿叉', battleStatShield:'盾', battleStatBow:'弓',
     clearBattleEdit:'清除单独修改', clearBattleEditTip:'清除所有成员的单独指定，战斗结果恢复按「职业是否属于出战职业」自动计算',
     clearBattleEditDone:'已清除 {n} 条单独修改，战斗结果恢复自动计算',
     docImportTip:'点击选择 xlsx 表格（如 试炼汇总.xlsx），自动读取所有「职业_」列的值并去重，显示在《所有职业》下拉列表中。',
@@ -988,10 +991,11 @@ const I18N = {
     professionCol:'Profession', battleCol:'Battle', profEmptyOption:'(none)',
     displayBattleEdit:'Manual Edit',
     displayBattleEditTip:'When checked, the Battle cell icons in the display area become clickable: pick one of the five battle icons to override that member’s result (icon-only dropdown; click the same icon again to restore auto).',
-    displayBattleEditCellTip:'Click to pick a battle icon (click the same icon again to restore auto)',
+    displayBattleEditCellTip:'Click to pick a battle icon (click the same icon again to clear; click the trailing ↺ to restore auto)',
+    battleCellAuto:'Auto: clear the manual override and recalculate by profession',
     evenSplit:'Even Split', evenSplitTip:'Pick professions: the matching members are grouped by profession, and each profession is split in half (in display order) between Battle Trial 1 and 2, so one profession never lands entirely in a single trial. Uncheck all to undo.',
     evenSplitProfessions:'Split Professions',
-    battleStatTotal:'Members', battleStatHeal:'Heal', battleStatShield:'Shield', battleStatBow:'Bow',
+    battleStatTotal:'Members', battleStatHeal:'Heal', battleStatFork:'Blooming Trident', battleStatShield:'Shield', battleStatBow:'Bow',
     clearBattleEdit:'Clear Manual', clearBattleEditTip:'Clear all manual overrides; battle results fall back to auto match by profession',
     clearBattleEditDone:'Cleared {n} manual override(s); battle results restored to auto',
     docImportTip:'Pick an xlsx file (e.g. trial summary); all values in columns starting with 职业_ are read, deduped and shown in the All Professions dropdown.',
@@ -3672,16 +3676,17 @@ function displayMemberBattleIcons(p) {
 function battleTrialStats(i) {
   const icon = state.displayBattleTrialIcons[i] || 0;
   let total = 0;
-  const heal = [], shield = [], bow = [];
+  const heal = [], fork = [], shield = [], bow = [];
   (state.members || []).forEach(function(p) {
     if (displayMemberBattleIcons(p).indexOf(icon) < 0) return;
     total++;
     const prof = displayMemberProfession(p);
     if (prof.indexOf('奶') >= 0) heal.push(p.name);
+    if (prof.indexOf('绿叉') >= 0) fork.push(p.name);
     if (prof.indexOf('盾') >= 0) shield.push(p.name);
     if (prof.indexOf('弓') >= 0) bow.push(p.name);
   });
-  return { total: total, heal: heal, shield: shield, bow: bow };
+  return { total: total, heal: heal, fork: fork, shield: shield, bow: bow };
 }
 // 统计块：总人数只显示数量；奶/盾/弓显示「标签 数量 名字1 名字2 …」。
 function battleTrialStatBlock(label, names) {
@@ -3697,6 +3702,7 @@ function battleTrialStatsHtml(i) {
   return '<span class="battle-trial-stats">'+
     '<span class="bts-item"><span class="bts-label">'+escHtml(t('battleStatTotal'))+'</span><b>'+s.total+'</b></span>'+
     battleTrialStatBlock(t('battleStatHeal'), s.heal)+
+    battleTrialStatBlock(t('battleStatFork'), s.fork)+
     battleTrialStatBlock(t('battleStatShield'), s.shield)+
     battleTrialStatBlock(t('battleStatBow'), s.bow)+
   '</span>';
@@ -4026,10 +4032,27 @@ function displayBattleCellHtml(p, prof) {
       svgIcon(k, 20, 20)+
     '</span>';
   }).join('');
+  // 末尾一个「自动」项：清除手动指定，恢复按职业自动计算。
+  const isManual = !!(state.displayBattleManual && state.displayBattleManual[id]);
+  const autoOpt = '<span class="battle-icon-option battle-icon-auto'+(isManual ? ' active' : '')+'" title="'+escHtml(t('battleCellAuto'))+'" onclick="resetDisplayBattleIcon(\''+key+'\',event)">↺</span>';
   return '<span class="battle-cell-fill battle-cell-picker" id="battle-picker-'+key+'" title="'+escHtml(t('displayBattleEditCellTip'))+'" onclick="toggleBattleDropdown(\''+key+'\',event)">'+
     content+
-    (openBattleDropdown === key ? '<span class="battle-trial-dropdown battle-icon-dropdown" id="battle-dropdown-'+key+'">'+opts+'</span>' : '')+
+    (openBattleDropdown === key ? '<span class="battle-trial-dropdown battle-icon-dropdown" id="battle-dropdown-'+key+'">'+opts+autoOpt+'</span>' : '')+
   '</span>';
+}
+// 「自动」项：清除该成员的单独指定（含手动清空标记），恢复按职业自动计算，并重新纳入平均分配池。
+function resetDisplayBattleIcon(key, ev) {
+  if (ev) ev.stopPropagation();
+  const id = String(key).replace(/^bt/, '');
+  delete state.displayBattleOverrides[id];
+  if (state.displayBattleManual) {
+    delete state.displayBattleManual[id];
+    try { localStorage.setItem('mwi_display_battle_manual', JSON.stringify(state.displayBattleManual)); } catch(e) {}
+  }
+  persistDisplayBattleOverrides();
+  openBattleDropdown = null;
+  renderBattleTrialOptions();
+  renderDisplayArea();
 }
 // 选中某个战斗图标：写入该成员的单独指定值；再次点击同一图标则手动清空（显示为空，不回落到自动计算）。
 function selectDisplayBattleIcon(key, kIdx, ev) {
