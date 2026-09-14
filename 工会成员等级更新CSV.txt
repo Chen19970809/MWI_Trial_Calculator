@@ -1,0 +1,1124 @@
+// ==UserScript==
+// @name       工会成员等级更新CSV
+// @namespace    https://www.milkywayidle.com/
+// @version      1.2.1
+// @description  Export your MWI character levels, house room levels and guild shrine levels to a local CSV file (opens in Excel).
+// @description:zh-CN 把你的银河奶牛等级、房屋等级和神龛等级导出到本地 CSV 文件（Excel 可直接打开）。进入公会成员页后会自动通过 /profile 命令采集全部成员数据。
+// @author       Guild Tools (modified)
+// @license      MIT
+// @match        https://www.milkywayidle.com/*
+// @match        https://test.milkywayidle.com/*
+// @match        https://www.milkywayidlecn.com/*
+// @match        https://test.milkywayidlecn.com/*
+// @run-at       document-start
+// @grant        GM_registerMenuCommand
+// ==/UserScript==
+
+(function () {
+    'use strict';
+
+    const SCRIPT_VERSION = '0.6.1';
+    const EQUIPPED_LOCATION_PREFIX = '/item_locations/';
+    const INVENTORY_LOCATION = '/item_locations/inventory';
+
+    const SKILL_ORDER = [
+        'milking', 'foraging', 'woodcutting',
+        'cheesesmithing', 'crafting', 'tailoring',
+        'cooking', 'brewing', 'alchemy', 'enhancing',
+        'stamina', 'intelligence', 'attack', 'defense',
+        'melee', 'ranged', 'magic',
+    ];
+
+    // 房屋房间导出顺序（新版房屋系统 17 个房间各对应一项技能），
+    // 末尾几个是旧版系统的房间名，用于兼容。实际数据里出现但不在
+    // 列表中的房间会自动追加在后面，不依赖此表也能正常导出。
+    const ROOM_ORDER = [
+        'dairy_barn', 'garden', 'log_shed',
+        'forge', 'workshop', 'sewing_parlor',
+        'kitchen', 'brewery', 'laboratory', 'observatory',
+        'dining_room', 'library', 'dojo', 'armory',
+        'gym', 'archery_range', 'magic_room',
+        'meditation', 'auditorium', 'cauldron',
+    ];
+
+    const ZH_ROOM_NAMES = {
+        dairy_barn: '奶牛棚', garden: '花园', log_shed: '柴棚',
+        forge: '熔炉', workshop: '工坊', sewing_parlor: '缝纫室',
+        kitchen: '厨房', brewery: '酿酒坊', laboratory: '实验室', observatory: '天文台',
+        dining_room: '餐厅', library: '图书馆', dojo: '道场', armory: '军械库',
+        gym: '健身房', archery_range: '射箭场', magic_room: '魔法室',
+        meditation: '冥想室', auditorium: '礼堂', cauldron: '大锅',
+    };
+
+    const isRoomHrid = (hrid) => /^\/(?:house_)?rooms\//.test(hrid);
+    const isShrineHrid = (hrid) => /shrine/i.test(hrid);
+
+    // 递归扫描任意结构，收集「hrid + level」数据为 Map。
+    // 游戏消息字段名可能随版本变化（characterHouseRooms / houseRoomLevels / ...），
+    // 这里不依赖具体字段名，只按 hrid 前缀识别，天然抗字段改名。
+    // 同时兼容两种形态：
+    //   1) 数组：[{ houseRoomHrid: '/rooms/library', level: 3 }, ...]
+    //   2) 映射表：{ '/rooms/library': 3, ... }
+    function collectHridLevels(container, matchHrid, out, depth = 5) {
+        if (!container || typeof container !== 'object' || depth < 0) return;
+        if (Array.isArray(container)) {
+            for (const el of container) {
+                if (!el || typeof el !== 'object') continue;
+                let hrid = null;
+                for (const v of Object.values(el)) {
+                    if (typeof v === 'string' && v.startsWith('/') && matchHrid(v)) hrid = v;
+                }
+                if (hrid !== null && el.level !== undefined) {
+                    out.set(hrid, Number(el.level) || 0);
+                }
+            }
+            return;
+        }
+        let mapLike = false;
+        for (const [k, v] of Object.entries(container)) {
+            if (typeof k === 'string' && k.startsWith('/') && matchHrid(k)) {
+                if (typeof v === 'number') {
+                    // { "/rooms/x": 3 } 形态
+                    out.set(k, v);
+                    mapLike = true;
+                } else if (v && typeof v === 'object' && v.level !== undefined) {
+                    // { "/rooms/x": { level: 3, ... } } 形态（characterHouseRoomMap 就是这种）
+                    out.set(k, Number(v.level) || 0);
+                    mapLike = true;
+                }
+            }
+        }
+        if (mapLike) return;
+        for (const v of Object.values(container)) {
+            if (v && typeof v === 'object') collectHridLevels(v, matchHrid, out, depth - 1);
+        }
+    }
+
+    const state = {
+        // Official Chinese item names, sourced from the game's Chinese localization table.
+        character: null,
+        skills: new Map(),
+        items: new Map(),
+        localizedItemNames: new Map(),
+        abilities: new Map(),
+        houseRooms: new Map(),
+        guildShrines: new Map(),
+        profileDumpedOnce: false,
+        dataReady: false,
+        cachedProfiles: new Map(),
+        statusButton: null,
+        seenEvents: new WeakSet(),
+        mwiSocket: null,
+        chatPayloadTemplate: (() => {
+            try { return localStorage.getItem('mwi-export:chat-payload-template'); } catch (_) { return null; }
+        })(),
+    };
+
+    function setStatus(text, kind = 'idle') {
+        if (!state.statusButton) return;
+        state.statusButton.textContent = `导出：${text}`;
+        state.statusButton.dataset.kind = kind;
+        const colors = {
+            idle: ['#2f3448', '#d9ddf2'],
+            good: ['#24543a', '#d8ffe8'],
+            busy: ['#66511f', '#fff0bd'],
+            error: ['#6a2d35', '#ffe0e4'],
+        };
+        const [background, color] = colors[kind] || colors.idle;
+        state.statusButton.style.background = background;
+        state.statusButton.style.color = color;
+    }
+
+    function addStatusButton() {
+        if (state.statusButton || !document.body) return;
+        const btnStyle = {
+            position: 'fixed',
+            zIndex: '2147483647',
+            border: '1px solid rgba(255,255,255,.22)',
+            borderRadius: '8px',
+            padding: '7px 10px',
+            fontSize: '12px',
+            cursor: 'pointer',
+            boxShadow: '0 2px 10px rgba(0,0,0,.3)',
+        };
+
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.title = '点击导出数据到 CSV / Click to export data';
+        Object.assign(button.style, btnStyle, { right: '12px', bottom: '12px' });
+        button.addEventListener('click', exportData);
+        document.body.appendChild(button);
+        state.statusButton = button;
+        setStatus('等待人物数据');
+
+        const autoBtn = document.createElement('button');
+        autoBtn.type = 'button';
+        autoBtn.textContent = '重新采集';
+        autoBtn.title = '进入公会成员页会自动采集；点此可强制重新采集一遍';
+        Object.assign(autoBtn.style, btnStyle, { right: '12px', bottom: '48px', background: '#3a5fc8', color: '#fff' });
+        autoBtn.addEventListener('click', () => {
+            autoTrigger.reset();
+            autoClickMembers({ force: true });
+        });
+        document.body.appendChild(autoBtn);
+    }
+
+    function itemKey(item) {
+        if (item?.id !== undefined && item?.id !== null) return `id:${item.id}`;
+        if (item?.hash) return `hash:${item.hash}`;
+        return `loc:${item?.itemLocationHrid || ''}:${item?.itemHrid || ''}`;
+    }
+
+    function mergeSkills(skills, replace = false) {
+        if (!Array.isArray(skills)) return;
+        if (replace) state.skills.clear();
+        for (const skill of skills) {
+            if (!skill?.skillHrid) continue;
+            state.skills.set(skill.skillHrid, {
+                level: Number(skill.level || 0),
+                experience: Number(skill.experience || 0),
+            });
+        }
+    }
+
+    function mergeItems(items, replace = false) {
+        if (!Array.isArray(items)) return;
+        if (replace) state.items.clear();
+        for (const item of items) {
+            if (!item?.itemHrid) continue;
+            const key = itemKey(item);
+            if (Number(item.count || 0) <= 0) {
+                state.items.delete(key);
+                for (const [existingKey, existing] of state.items.entries()) {
+                    if (existing.itemLocationHrid === item.itemLocationHrid && existing.itemHrid === item.itemHrid) {
+                        state.items.delete(existingKey);
+                    }
+                }
+                continue;
+            }
+            if (item.itemLocationHrid && item.itemLocationHrid !== INVENTORY_LOCATION) {
+                for (const [existingKey, existing] of state.items.entries()) {
+                    if (existing.itemLocationHrid === item.itemLocationHrid && existingKey !== key) {
+                        state.items.delete(existingKey);
+                    }
+                }
+            }
+            state.items.set(key, { ...item });
+        }
+    }
+
+    function mergeAbilities(abilities, replace = false) {
+        if (!Array.isArray(abilities)) return;
+        if (replace) state.abilities.clear();
+        for (const ability of abilities) {
+            if (!ability?.abilityHrid) continue;
+            const old = state.abilities.get(ability.abilityHrid) || {};
+            state.abilities.set(ability.abilityHrid, { ...old, ...ability });
+        }
+    }
+
+    function collectLocalizedItemNamesFromPage() {
+        if (!document?.querySelectorAll) return;
+        for (const use of document.querySelectorAll('svg[aria-label] use')) {
+            const svg = use.closest('svg');
+            const localizedName = String(svg?.getAttribute('aria-label') || '').trim();
+            const href = String(use.getAttribute('href') || use.getAttribute('xlink:href') || '');
+            const match = href.match(/#(?:item_)?([a-z0-9_]+)$/i);
+            if (localizedName && match) {
+                state.localizedItemNames.set(`/items/${match[1]}`, localizedName);
+            }
+        }
+    }
+
+    function handleGameMessage(message) {
+        let obj;
+        try {
+            obj = typeof message === 'string' ? JSON.parse(message) : message;
+        } catch {
+            return;
+        }
+        if (!obj?.type) return;
+
+        let changed = false;
+        if (obj.type === 'init_character_data') {
+            if (!obj.character?.id) return;
+            state.character = {
+                id: String(obj.character.id),
+                name: String(obj.character.name || ''),
+                gameMode: String(obj.character.gameMode || ''),
+            };
+            mergeSkills(obj.characterSkills, true);
+            mergeItems(obj.characterItems, true);
+            mergeAbilities(obj.characterAbilities, true);
+            collectHridLevels(obj, isRoomHrid, state.houseRooms);
+            changed = true;
+        } else if (obj.type === 'skills_updated') {
+            mergeSkills(obj.endCharacterSkills || obj.characterSkills);
+            changed = true;
+        } else if (obj.type === 'items_updated') {
+            mergeItems(obj.endCharacterItems || obj.characterItems);
+            changed = true;
+        } else if (obj.type === 'abilities_updated') {
+            mergeAbilities(obj.endCharacterAbilities || obj.characterAbilities);
+            changed = true;
+        } else if (obj.type === 'action_completed') {
+            if (obj.endCharacterSkills) mergeSkills(obj.endCharacterSkills);
+            if (obj.endCharacterItems) mergeItems(obj.endCharacterItems);
+            if (obj.endCharacterAbilities) mergeAbilities(obj.endCharacterAbilities);
+            changed = Boolean(obj.endCharacterSkills || obj.endCharacterItems || obj.endCharacterAbilities);
+        }
+
+        // 房屋房间变化（建造/升级）消息：字段名不固定，整体扫描一遍
+        if (String(obj.type).includes('house')) {
+            collectHridLevels(obj, isRoomHrid, state.houseRooms);
+        }
+
+        // 公会相关消息：提取神龛等级（公会全员共享一份）
+        if (/init|guild|shrine/i.test(String(obj.type))) {
+            const found = new Map();
+            collectHridLevels(obj, isShrineHrid, found);
+            if (found.size > 0) {
+                for (const [hrid, level] of found) state.guildShrines.set(hrid, level);
+                console.log('[MWI Export] 捕获到神龛等级:', Object.fromEntries(found));
+            }
+        }
+
+        if (obj.type === 'profile_shared') {
+            const profile = obj.profile;
+            const charName = profile?.sharableCharacter?.name;
+            if (charName && profile) {
+                // 只在第一个 profile 时 dump 一份完整数据，方便排查字段（避免刷屏）
+                if (!state.profileDumpedOnce) {
+                    state.profileDumpedOnce = true;
+                    console.log('[MWI Export] profile_shared 顶层字段:', Object.keys(profile));
+                    console.log('[MWI Export] profile_shared 完整数据(仅首个):', JSON.parse(JSON.stringify(profile)));
+                }
+                const skills = {};
+                for (const s of (profile.characterSkills || [])) {
+                    if (s?.skillHrid) skills[s.skillHrid.replace('/skills/', '')] = Number(s.level || 0);
+                }
+                // 自动发现 profile 里的房屋房间等级（不依赖字段名）
+                const houseRooms = {};
+                {
+                    const found = new Map();
+                    collectHridLevels(profile, isRoomHrid, found);
+                    for (const [hrid, level] of found) houseRooms[hrid.replace(/^\/(?:house_)?rooms\//, '')] = level;
+                }
+                if (Object.keys(houseRooms).length === 0) {
+                    console.warn(`[MWI Export] ${charName} 的 profile 里未发现房屋数据。characterHouseRoomMap 原始内容:`, profile.characterHouseRoomMap);
+                }
+                state.cachedProfiles.set(charName, {
+                    name: charName,
+                    gameMode: profile.sharableCharacter?.gameMode || '',
+                    skills,
+                    houseRooms,
+                    capturedAt: new Date().toISOString(),
+                });
+                const total = state.cachedProfiles.size + (state.character ? 1 : 0);
+                setStatus(`已缓存 ${total} 人，点击导出`, 'good');
+            }
+        }
+
+        if (changed) {
+            state.dataReady = true;
+            const total = state.cachedProfiles.size + 1;
+            setStatus(`已缓存 ${total} 人，点击导出`, 'good');
+        }
+    }
+
+    function hookWebSocketMessages() {
+        const descriptor = Object.getOwnPropertyDescriptor(MessageEvent.prototype, 'data');
+        if (!descriptor?.get) {
+            console.error('[MWI Guild Sync] MessageEvent.data getter is unavailable.');
+            return;
+        }
+        const previousGetter = descriptor.get;
+        descriptor.get = function () {
+            const message = previousGetter.call(this);
+            try {
+                const socket = this.currentTarget;
+                if (!(socket instanceof WebSocket)) return message;
+                const url = String(socket.url || '');
+                if (!/api(?:-test)?\.milkywayidle(?:cn)?\.com\/ws/.test(url)) return message;
+                // 顺手记住最近使用的 socket，方便后面通过 WS 直发
+                state.mwiSocket = socket;
+                if (state.seenEvents.has(this)) return message;
+                state.seenEvents.add(this);
+                handleGameMessage(message);
+            } catch (error) {
+                console.error('[MWI Guild Sync] WebSocket processing failed:', error);
+            }
+            return message;
+        };
+        Object.defineProperty(MessageEvent.prototype, 'data', descriptor);
+    }
+
+    // Hook WebSocket.prototype.send，抓到 MWI 发送 chat 消息时的完整 payload，
+    // 用作后续脚本自己构造 /profile 命令的模板（key/format 一致，MWI 无法
+    // 识别是脚本还是玩家发出）。捕获到的模板会缓存到 localStorage。
+    const CHAT_TEMPLATE_STORAGE_KEY = 'mwi-export:chat-payload-template';
+    function hookWebSocketSend() {
+        const origSend = WebSocket.prototype.send;
+        WebSocket.prototype.send = function (data) {
+            try {
+                const url = String(this.url || '');
+                if (/api(?:-test)?\.milkywayidle(?:cn)?\.com\/ws/.test(url)) {
+                    state.mwiSocket = this;
+                    // 非字符串（Blob/ArrayBuffer/protobuf 之类二进制协议）单独提示
+                    if (typeof data !== 'string') {
+                        console.log('[MWI Export] WS send (non-string):', typeof data,
+                            data?.constructor?.name, 'size=', data?.byteLength || data?.size);
+                    }
+                    // 把所有发出去的短 payload 都打出来，方便手动核对 chat 消息格式
+                    if (typeof data === 'string' && data.length < 4096) {
+                        console.log('[MWI Export] WS send:', data);
+
+                        // 首选：payload 里字面含 "/profile " —— 一定是用户在
+                        // 聊天框敲的 /profile 命令，直接拿来当模板最保险
+                        if (data.includes('/profile ') || data.includes('/profile"')) {
+                            state.chatPayloadTemplate = data;
+                            try { localStorage.setItem(CHAT_TEMPLATE_STORAGE_KEY, data); } catch (_) {}
+                            console.log('[MWI Export] ✓ 捕获到 /profile 模板:', data);
+                            return origSend.apply(this, arguments);
+                        }
+
+                        // 次选：能解析成对象且带斜杠命令或普通聊天字段
+                        let parsed = null;
+                        try { parsed = JSON.parse(data); } catch (_) { /* 非 JSON 忽略 */ }
+                        if (parsed && typeof parsed === 'object') {
+                            const stringFields = Object.values(parsed).filter(v => typeof v === 'string');
+                            const hasCmdString = stringFields.some(v => v.startsWith('/'));
+                            const typeStr = String(parsed.type || '').toLowerCase();
+                            const looksLikeChat = hasCmdString
+                                || typeStr.includes('chat')
+                                || typeStr.includes('message')
+                                || typeStr.includes('send')
+                                || 'message' in parsed
+                                || 'text' in parsed
+                                || 'content' in parsed
+                                || 'msg' in parsed;
+                            if (looksLikeChat) {
+                                state.chatPayloadTemplate = data;
+                                try { localStorage.setItem(CHAT_TEMPLATE_STORAGE_KEY, data); } catch (_) {}
+                                console.log('[MWI Export] ✓ 捕获到 chat payload 模板:', data);
+                            }
+                        }
+                    }
+                }
+            } catch (_) { /* noop */ }
+            return origSend.apply(this, arguments);
+        };
+    }
+
+    // 从上次捕获的 chat payload 模板出发，把里面的"消息文本"字段替换成新指令。
+    // MWI 的 payload 大概率是 { type: "...", message: "/profile xxx", channel?: "..." } 结构，
+    // 我们逐个字段找"看起来是消息文本"的 string 字段替换，避免硬编码字段名。
+    function buildChatPayloadFromTemplate(template, text) {
+        try {
+            const obj = JSON.parse(template);
+            let replaced = false;
+            for (const key of Object.keys(obj)) {
+                if (typeof obj[key] === 'string' && (
+                    obj[key].startsWith('/') ||
+                    key.toLowerCase() === 'message' ||
+                    key.toLowerCase() === 'text' ||
+                    key.toLowerCase() === 'content'
+                )) {
+                    obj[key] = text;
+                    replaced = true;
+                }
+            }
+            if (!replaced) return null;
+            return JSON.stringify(obj);
+        } catch (_) {
+            return null;
+        }
+    }
+
+    // 通过 WebSocket 直接发送 chat 指令，绕开 UI 的 isTrusted 校验。
+    function sendChatByWebSocket(text) {
+        const socket = state.mwiSocket;
+        if (!socket || socket.readyState !== 1) {
+            console.warn('[MWI Export] WebSocket 未就绪，无法直发');
+            return false;
+        }
+        const template = state.chatPayloadTemplate || (() => {
+            try { return localStorage.getItem(CHAT_TEMPLATE_STORAGE_KEY); } catch (_) { return null; }
+        })();
+        if (!template) {
+            console.warn('[MWI Export] 尚未捕获 chat payload 模板，请先手动发送一条聊天/命令让脚本抓取格式');
+            return false;
+        }
+        state.chatPayloadTemplate = template;
+        const payload = buildChatPayloadFromTemplate(template, text);
+        if (!payload) {
+            console.warn('[MWI Export] 无法基于模板构造新 payload:', template);
+            return false;
+        }
+        try {
+            socket.send(payload);
+            return true;
+        } catch (err) {
+            console.error('[MWI Export] socket.send 失败:', err);
+            return false;
+        }
+    }
+
+    // MWI 客户端把 /profile 命令翻译成了专用的结构化消息发送，格式如下：
+    // { "type": "view_profile", "viewProfileData": { "characterName": "..." }, "ts": <epoch ms> }
+    // 直接按这个格式硬编码，装完脚本即可用，无需预热捕获模板。
+    function sendViewProfileByWebSocket(characterName) {
+        const socket = state.mwiSocket;
+        if (!socket || socket.readyState !== 1) {
+            console.warn('[MWI Export] WebSocket 未就绪，无法直发');
+            return false;
+        }
+        const payload = JSON.stringify({
+            type: 'view_profile',
+            viewProfileData: { characterName },
+            ts: Date.now(),
+        });
+        try {
+            socket.send(payload);
+            return true;
+        } catch (err) {
+            console.error('[MWI Export] socket.send view_profile 失败:', err);
+            return false;
+        }
+    }
+
+    function buildPayload() {
+        if (!state.character) return null;
+        const skills = {};
+        for (const [hrid, value] of state.skills.entries()) {
+            skills[hrid.replace('/skills/', '')] = Number(value.level || 0);
+        }
+
+        const houseRooms = {};
+        for (const [hrid, level] of state.houseRooms.entries()) {
+            houseRooms[hrid.replace(/^\/(?:house_)?rooms\//, '')] = Number(level || 0);
+        }
+
+        return {
+            schemaVersion: 2,
+            scriptVersion: SCRIPT_VERSION,
+            character: { ...state.character },
+            skills,
+            houseRooms,
+            capturedAt: new Date().toISOString(),
+            source: location.hostname,
+        };
+    }
+
+    // ── CSV export ───────────────────────────────────────────────
+
+    function csvEscape(v) {
+        const s = String(v ?? '');
+        return s.includes(',') || s.includes('"') || s.includes('\n')
+            ? '"' + s.replace(/"/g, '""') + '"' : s;
+    }
+
+    function downloadCSV(filename, headers, rows) {
+        const lines = [
+            headers.map(csvEscape).join(','),
+            ...rows.map(r => r.map(csvEscape).join(',')),
+        ];
+        const csv = '\uFEFF' + lines.join('\r\n');
+        const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        setTimeout(() => { document.body.removeChild(a); URL.revokeObjectURL(url); }, 200);
+    }
+
+    function roomLabel(short) {
+        return ZH_ROOM_NAMES[short] || short;
+    }
+
+    function skillCells(skills) {
+        return [
+            ...SKILL_ORDER.map(s => Number(skills[s] || 0)),
+            SKILL_ORDER.reduce((sum, s) => sum + Number(skills[s] || 0), 0),
+        ];
+    }
+
+    // 没采集到房屋数据时该行留空，采集到了但房间未建造记 0
+    function roomCells(rooms, roomColumns) {
+        const has = rooms && Object.keys(rooms).length > 0;
+        return roomColumns.map(r => (has ? Number(rooms[r] || 0) : ''));
+    }
+
+    function exportData() {
+        const payload = buildPayload();
+        if (!payload && state.cachedProfiles.size === 0) {
+            setStatus('尚未读取人物', 'error');
+            alert('请先进入游戏，等待人物数据加载完成后再导出。\n\n如需导出公会成员，请进入公会成员页，脚本会自动采集。');
+            return;
+        }
+
+        const now = new Date().toLocaleString('zh-CN');
+        const dateStr = new Date().toISOString().slice(0, 10);
+
+        // 汇总所有出现过的房屋房间，ROOM_ORDER 里有的优先按该顺序排
+        const roomSet = new Set();
+        const addRooms = (rooms) => { for (const k of Object.keys(rooms || {})) roomSet.add(k); };
+        if (payload) addRooms(payload.houseRooms);
+        for (const profile of state.cachedProfiles.values()) addRooms(profile.houseRooms);
+        const roomColumns = [
+            ...ROOM_ORDER.filter(r => roomSet.has(r)),
+            ...[...roomSet].filter(r => !ROOM_ORDER.includes(r)).sort(),
+        ];
+
+        // 神龛等级是公会全员共享的，每行填同一份值
+        const shrineColumns = [...state.guildShrines.keys()].sort();
+        const shrineCellValues = shrineColumns.map(h => state.guildShrines.get(h));
+
+        const headers = [
+            '角色名', '游戏模式',
+            ...SKILL_ORDER,
+            '总等级',
+            ...roomColumns.map(r => `房屋_${roomLabel(r)}`),
+            ...shrineColumns.map(h => `神龛_${h.replace(/^\/(?:guild_)?shrines?\//, '')}`),
+            '更新时间',
+        ];
+
+        const rows = [];
+
+        if (payload) {
+            rows.push([
+                payload.character.name,
+                payload.character.gameMode || '',
+                ...skillCells(payload.skills),
+                ...roomCells(payload.houseRooms, roomColumns),
+                ...shrineCellValues,
+                now,
+            ]);
+        }
+
+        for (const [profileName, profile] of state.cachedProfiles) {
+            if (payload && profileName === payload.character.name) continue;
+            rows.push([
+                profile.name,
+                profile.gameMode || '',
+                ...skillCells(profile.skills),
+                ...roomCells(profile.houseRooms, roomColumns),
+                ...shrineCellValues,
+                new Date(profile.capturedAt).toLocaleString('zh-CN'),
+            ]);
+        }
+
+        if (roomColumns.length === 0) {
+            console.warn('[MWI Export] 未捕获到任何房屋房间数据：自己的数据需刷新页面重新登录获取；成员数据取决于 profile 消息是否包含房屋字段（见控制台警告）');
+        }
+        if (shrineColumns.length === 0) {
+            console.warn('[MWI Export] 未捕获到神龛等级：请先打开公会面板（成员列表页），等游戏下发公会数据后再导出');
+        }
+
+        const filename = rows.length > 1
+            ? `MWI_公会_${rows.length}人_${dateStr}.csv`
+            : `MWI_${rows[0]?.[0] || 'data'}_${dateStr}.csv`;
+
+        downloadCSV(filename, headers, rows);
+        setStatus(`已导出 ${rows.length} 人`, 'good');
+    }
+
+    GM_registerMenuCommand('导出全部数据到 CSV', exportData);
+
+    // ── 自动遍历公会成员（免手动逐个点击）─────────────────────────
+
+    const AUTO_PROFILE_TIMEOUT_MS = 10000;
+    // 每一步操作之间统一的随机延迟区间（毫秒）。当前流程是：
+    // 输入指令 → 等 → 点击发送 → 等 profile_shared → 等 → 关闭资料页 → 等 → 下一个。
+    // 每个 "等" 都用 randInt(STEP_DELAY_MIN_MS, STEP_DELAY_MAX_MS)。
+    const STEP_DELAY_MIN_MS = 500;
+    const STEP_DELAY_MAX_MS = 1000;
+    const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+    const randInt = (min, max) => Math.floor(Math.random() * (max - min + 1)) + min;
+    const stepDelay = () => sleep(randInt(STEP_DELAY_MIN_MS, STEP_DELAY_MAX_MS));
+    let autoClickRunning = false;
+
+    function waitForProfileCaptured(prevSize) {
+        return new Promise((resolve) => {
+            const start = Date.now();
+            const check = setInterval(() => {
+                if (state.cachedProfiles.size > prevSize) {
+                    clearInterval(check);
+                    resolve(true);
+                } else if (Date.now() - start > AUTO_PROFILE_TIMEOUT_MS) {
+                    clearInterval(check);
+                    resolve(false);
+                }
+            }, 150);
+        });
+    }
+
+    function findChatInput() {
+        return document.querySelector('[class*="Chat_chatInputContainer"] input')
+            || document.querySelector('[class*="chatInputContainer"] input')
+            || document.querySelector('form input[type="text"]');
+    }
+
+    // MWI 的发送按钮是 <button class="Button_button__..."]>发送</button>，
+    // 既没有 type 也没有 aria-label，所以最稳的匹配是"文本是 发送/Send"。
+    function isSendButton(btn) {
+        if (!btn || btn.disabled) return false;
+        const text = (btn.textContent || '').trim();
+        return text === '发送' || text === '发 送' || /^send$/i.test(text);
+    }
+
+    function findChatSendButton(chatInput) {
+        // 1) 聊天输入框所在 form 里，按文本挑发送按钮
+        const form = chatInput?.closest('form');
+        if (form) {
+            for (const btn of form.querySelectorAll('button')) {
+                if (isSendButton(btn)) return btn;
+            }
+            // form 内确实存在但都不匹配"发送"文本，退回 submit 按钮
+            const submit = form.querySelector('button[type="submit"]:not([disabled])');
+            if (submit) return submit;
+        }
+        // 2) 聊天输入容器附近，按文本挑发送按钮
+        const containers = document.querySelectorAll(
+            '[class*="Chat_chatInputContainer"], [class*="chatInputContainer"], [class*="Chat_chat"], [class*="ChatPanel"]'
+        );
+        for (const container of containers) {
+            for (const btn of container.querySelectorAll('button')) {
+                if (isSendButton(btn)) return btn;
+            }
+        }
+        // 3) 全页面兜底：找所有文本为"发送"的按钮里，位置离聊天框最近的一颗
+        if (chatInput) {
+            const inputRect = chatInput.getBoundingClientRect();
+            const candidates = Array.from(document.querySelectorAll('button')).filter(isSendButton);
+            let best = null, bestDist = Infinity;
+            for (const btn of candidates) {
+                const r = btn.getBoundingClientRect();
+                const dx = r.left + r.width / 2 - (inputRect.left + inputRect.width / 2);
+                const dy = r.top + r.height / 2 - (inputRect.top + inputRect.height / 2);
+                const dist = dx * dx + dy * dy;
+                if (dist < bestDist) { bestDist = dist; best = btn; }
+            }
+            if (best) return best;
+        }
+        return null;
+    }
+
+    // 读取 React 挂在 DOM 上的合成事件 handler（React 15~19 都行）
+    function getReactHandler(el, name) {
+        if (!el) return null;
+        for (const key of Object.keys(el)) {
+            if (key.startsWith('__reactProps$') || key.startsWith('__reactEventHandlers$')) {
+                const props = el[key];
+                if (props && typeof props[name] === 'function') return props[name];
+            }
+        }
+        return null;
+    }
+
+    // 让 React 感知受控 input 的值变化。React 会用 `_valueTracker` 缓存上一次的
+    // value 做 diff，只有 tracker.currentValue !== input.value 时才会跑 onChange。
+    // 直接 nativeSetter + dispatch('input') 有时会被 tracker 判定"没变化"而吞掉，
+    // 所以这里在写完新值之后手动把 tracker 回滚到旧值，强制 React 认为值变了。
+    function setReactInputValue(input, value) {
+        const proto = window.HTMLInputElement.prototype;
+        const nativeSetter = Object.getOwnPropertyDescriptor(proto, 'value').set;
+        const oldValue = input.value;
+        nativeSetter.call(input, value);
+        if (input._valueTracker && oldValue !== value) {
+            input._valueTracker.setValue(oldValue);
+        }
+        input.dispatchEvent(new Event('input', { bubbles: true, cancelable: true }));
+        input.dispatchEvent(new Event('change', { bubbles: true, cancelable: true }));
+    }
+
+    // 直接调 chatInput 上 React fiber 挂着的 onChange/onInput handler。
+    // 用来兜底 execCommand/nativeSetter 都没让 React state 同步的情况：
+    // 只要能调到 onChange，React 里就会执行 setState(e.target.value)，
+    // 从此 send button 里读到的 state 就是我们写入的最新 text。
+    function syncReactInputState(input, value) {
+        const buildEvent = (type) => ({
+            type,
+            target: input,
+            currentTarget: input,
+            preventDefault: () => {},
+            stopPropagation: () => {},
+            isDefaultPrevented: () => false,
+            isPropagationStopped: () => false,
+            persist: () => {},
+            nativeEvent: type === 'input'
+                ? new InputEvent('input', { bubbles: true, cancelable: true, data: value, inputType: 'insertText' })
+                : new Event(type, { bubbles: true, cancelable: true }),
+        });
+        const onChange = getReactHandler(input, 'onChange');
+        if (typeof onChange === 'function') {
+            try { onChange(buildEvent('change')); } catch (err) {
+                console.warn('[MWI Export] fiber onChange 调用失败:', err);
+            }
+        }
+        const onInput = getReactHandler(input, 'onInput');
+        if (typeof onInput === 'function' && onInput !== onChange) {
+            try { onInput(buildEvent('input')); } catch (err) {
+                console.warn('[MWI Export] fiber onInput 调用失败:', err);
+            }
+        }
+    }
+
+    // 只把指令写进聊天框，不点发送。用来搭配随后的 stepDelay + submitChat。
+    // 优先走 execCommand('insertText')：它派发的是浏览器合成的可信 InputEvent，
+    // React 的受控 input 会走完整 onChange/setState 流程；nativeSetter+tracker
+    // hack 只是兜底，覆盖 execCommand 被浏览器移除后的场景。
+    // 最后再显式调一次 fiber onChange，保证 React state 一定跟 DOM 同步。
+    function typeChatCommand(text) {
+        const chatInput = findChatInput();
+        if (!chatInput) {
+            console.error('[MWI Export] 未找到聊天输入框');
+            return false;
+        }
+
+        try { chatInput.focus(); } catch (_) { /* noop */ }
+
+        let filled = false;
+        try {
+            // 先选中所有已有内容，让 insertText 走"替换"路径而不是"追加"
+            if (typeof chatInput.setSelectionRange === 'function') {
+                chatInput.setSelectionRange(0, chatInput.value.length);
+            } else if (typeof chatInput.select === 'function') {
+                chatInput.select();
+            }
+            if (document.execCommand && document.execCommand('insertText', false, text)) {
+                if (chatInput.value === text) filled = true;
+            }
+        } catch (err) {
+            console.warn('[MWI Export] execCommand insertText 失败，回退 nativeSetter:', err);
+        }
+        if (!filled) setReactInputValue(chatInput, text);
+
+        // 关键：强制让 React state 同步到 text，防止 send button 读到空 state 白点
+        syncReactInputState(chatInput, text);
+        return true;
+    }
+
+    // 点击"发送"按钮（找不到就走 form.requestSubmit()，再兜底合成 Enter 键）。
+    // 提交前会再校验一次 DOM value，若被外部逻辑清空则重新写入 lastText。
+    function submitChat(lastText) {
+        console.log('[MWI Export] >>> submitChat entry', lastText);
+        const chatInput = findChatInput();
+        if (!chatInput) {
+            console.error('[MWI Export] 未找到聊天输入框');
+            return false;
+        }
+        if (typeof lastText === 'string' && chatInput.value !== lastText) {
+            // 值被外部改掉了，重新走 execCommand 补一次（保持 React state 同步）
+            typeChatCommand(lastText);
+        }
+
+        let sendBtn = null;
+        try {
+            sendBtn = findChatSendButton(chatInput);
+        } catch (err) {
+            console.error('[MWI Export] findChatSendButton 抛异常:', err);
+        }
+        // 优先从 chatInput 找 form，其次从按钮找（防止两者不在同一 form 里）
+        const form = chatInput.closest('form') || sendBtn?.closest('form') || null;
+        // 探测按钮/表单/输入框上的框架挂点（React/Preact/Solid/Svelte/Vue）
+        const listSpecialKeys = (el) => el ? Object.keys(el).filter(k => k.startsWith('_') || k.startsWith('$')) : [];
+        console.log('[MWI Export] submitChat', {
+            domValue: chatInput.value,
+            expected: lastText,
+            hasBtn: !!sendBtn,
+            btnDisabled: sendBtn?.disabled,
+            btnText: (sendBtn?.textContent || '').trim(),
+            btnClass: sendBtn?.className,
+            btnType: sendBtn?.getAttribute('type'),
+            hasForm: !!form,
+            hasReactOnClick: !!getReactHandler(sendBtn, 'onClick'),
+            hasReactOnSubmit: !!getReactHandler(form, 'onSubmit'),
+            hasReactOnChange: !!getReactHandler(chatInput, 'onChange'),
+            btnKeys: listSpecialKeys(sendBtn),
+            formKeys: listSpecialKeys(form),
+            inputKeys: listSpecialKeys(chatInput),
+        });
+
+        // MWI 上三个 React handler 都是 false，意味着发送逻辑走的是原生
+        // addEventListener（可能挂在 form.submit / button.click / input.keydown 任一位置）。
+        // 索性把三条通道全部触发一次，成功一种即达成目的：
+        //   A) form.requestSubmit(sendBtn) 派发 trusted submit 事件
+        //   B) sendBtn.click() + pointer/mouse 序列 触发原生 click 监听
+        //   C) chatInput 上合成 Enter 键 触发键盘监听
+        let anyPathFired = false;
+
+        // A) form.requestSubmit —— trusted 事件，最规范的模拟点击 submit 按钮
+        if (form && typeof form.requestSubmit === 'function') {
+            try {
+                if (sendBtn && !sendBtn.disabled) form.requestSubmit(sendBtn);
+                else form.requestSubmit();
+                anyPathFired = true;
+                console.log('[MWI Export] submitChat A) requestSubmit 已派发');
+            } catch (err) {
+                console.warn('[MWI Export] form.requestSubmit 失败:', err);
+            }
+        }
+
+        // B) 直接点击发送按钮 + pointer/mouse 序列 + fiber onClick 兜底
+        if (sendBtn && !sendBtn.disabled) {
+            try {
+                const rect = sendBtn.getBoundingClientRect();
+                const evOpts = {
+                    bubbles: true, cancelable: true, view: window,
+                    clientX: rect.left + rect.width / 2,
+                    clientY: rect.top + rect.height / 2,
+                    button: 0,
+                };
+                try {
+                    sendBtn.dispatchEvent(new PointerEvent('pointerdown', evOpts));
+                    sendBtn.dispatchEvent(new MouseEvent('mousedown', evOpts));
+                    sendBtn.dispatchEvent(new PointerEvent('pointerup', evOpts));
+                    sendBtn.dispatchEvent(new MouseEvent('mouseup', evOpts));
+                } catch (_) { /* 老浏览器可能不支持 PointerEvent */ }
+                sendBtn.click();
+                const onClick = getReactHandler(sendBtn, 'onClick');
+                if (typeof onClick === 'function') {
+                    try {
+                        onClick({
+                            type: 'click', target: sendBtn, currentTarget: sendBtn,
+                            preventDefault: () => {}, stopPropagation: () => {},
+                            nativeEvent: new MouseEvent('click', evOpts),
+                        });
+                    } catch (err) {
+                        console.warn('[MWI Export] fiber onClick 调用失败:', err);
+                    }
+                }
+                anyPathFired = true;
+                console.log('[MWI Export] submitChat B) button 事件序列已派发');
+            } catch (err) {
+                console.warn('[MWI Export] 按钮点击失败:', err);
+            }
+        }
+
+        // C) 合成 Enter 键 —— 覆盖只监听 keydown 的实现
+        try {
+            const enterOpts = { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true, cancelable: true };
+            chatInput.focus();
+            chatInput.dispatchEvent(new KeyboardEvent('keydown', enterOpts));
+            chatInput.dispatchEvent(new KeyboardEvent('keypress', enterOpts));
+            chatInput.dispatchEvent(new KeyboardEvent('keyup', enterOpts));
+            anyPathFired = true;
+            console.log('[MWI Export] submitChat C) Enter 键已派发');
+        } catch (err) {
+            console.warn('[MWI Export] Enter 键派发失败:', err);
+        }
+
+        return anyPathFired;
+    }
+
+    // 关闭 /profile 命令弹出的角色资料对话框（找不到关闭按钮时兜底发 ESC）
+    function closeProfileDialog() {
+        const dialogs = document.querySelectorAll(
+            '[role="dialog"], [class*="Modal_modal" i], [class*="Modal_modalContainer" i], [class*="Dialog_" i]'
+        );
+        let clicked = false;
+        for (const dlg of dialogs) {
+            const style = window.getComputedStyle(dlg);
+            if (style.display === 'none' || style.visibility === 'hidden') continue;
+
+            let closeBtn = dlg.querySelector('[class*="closeIcon" i]')
+                || dlg.querySelector('[class*="closeButton" i]')
+                || dlg.querySelector('button[aria-label*="lose" i]')
+                || dlg.querySelector('button[aria-label*="关" i]');
+            if (!closeBtn) {
+                const closeSvg = dlg.querySelector('svg[class*="close" i]');
+                if (closeSvg) closeBtn = closeSvg.closest('button') || closeSvg.parentElement;
+            }
+            if (closeBtn) {
+                try {
+                    closeBtn.click();
+                    clicked = true;
+                } catch (err) {
+                    console.warn('[MWI Export] 关闭对话框失败:', err);
+                }
+            }
+        }
+        if (clicked) return true;
+
+        // 兜底：合成 ESC 键，让顶层 Modal 自行关闭
+        const escOpts = { key: 'Escape', code: 'Escape', keyCode: 27, which: 27, bubbles: true, cancelable: true };
+        const target = document.activeElement && document.activeElement !== document.body
+            ? document.activeElement
+            : document.body;
+        target.dispatchEvent(new KeyboardEvent('keydown', escOpts));
+        target.dispatchEvent(new KeyboardEvent('keyup', escOpts));
+        return false;
+    }
+
+    async function autoClickMembers(opts = {}) {
+        const { force = false } = opts;
+        if (autoClickRunning) {
+            console.warn('[MWI Export] 自动采集已在运行中');
+            return;
+        }
+
+        // 从公会成员表格提取成员名
+        const memberNames = [];
+        const rows = document.querySelectorAll('[class*="GuildPanel_membersTable"] tbody tr');
+        for (const row of rows) {
+            const nameTd = row.querySelector('[class*="name" i]') || row.querySelector('td');
+            if (!nameTd) continue;
+            const nameSpan = nameTd.querySelector('[data-name]');
+            let name = '';
+            if (nameSpan) {
+                name = nameSpan.getAttribute('data-name') || (nameSpan.textContent || '').trim();
+            } else {
+                const spans = nameTd.querySelectorAll('span');
+                for (const s of spans) {
+                    const t = (s.textContent || '').trim();
+                    if (t && t.length > 0 && t.length < 30) { name = t; break; }
+                }
+                if (!name) name = (nameTd.textContent || '').trim().split(/\s+/)[0] || '';
+            }
+            if (name) memberNames.push(name);
+        }
+
+        console.log(`[MWI Export] 提取到 ${memberNames.length} 个成员名:`, memberNames);
+        if (memberNames.length === 0) {
+            if (force) alert('[MWI Export] 未提取到成员名字。请确认已打开公会成员列表页面。');
+            else console.warn('[MWI Export] 未提取到成员名字，跳过本次自动采集');
+            return;
+        }
+
+        const chatInput = document.querySelector('[class*="Chat_chatInputContainer"] input')
+            || document.querySelector('[class*="chatInputContainer"] input')
+            || document.querySelector('form input[type="text"]');
+        if (!chatInput) {
+            if (force) alert('[MWI Export] 未找到聊天输入框。请确认聊天面板已打开。');
+            else console.warn('[MWI Export] 未找到聊天输入框，跳过本次自动采集');
+            return;
+        }
+
+        autoClickRunning = true;
+        const myName = state.character?.name || '';
+        let sent = 0;
+        let captured = 0;
+        const totalCount = memberNames.length;
+
+        // 走 WebSocket 直发 view_profile 指令，完全绕开 UI 的 isTrusted 校验。
+        const wsReady = state.mwiSocket?.readyState === 1;
+        if (!wsReady) {
+            const msg = '[MWI Export] 尚未连接到 MWI WebSocket，请等游戏加载完成再试。';
+            if (force) alert(msg); else console.warn(msg);
+            setStatus('等待游戏连接', 'error');
+            autoClickRunning = false;
+            return;
+        }
+
+        console.log('[MWI Export] 使用 WebSocket 直发 view_profile 模式');
+        setStatus(`采集中 0/${totalCount}`, 'idle');
+
+        for (const name of memberNames) {
+            if (myName && name === myName) continue;
+            if (state.cachedProfiles.has(name)) continue;
+
+            // 1) 通过 WebSocket 直发 view_profile 消息
+            const prevSize = state.cachedProfiles.size;
+            const ok = sendViewProfileByWebSocket(name);
+            if (!ok) {
+                console.error('[MWI Export] WebSocket 发送失败，中止');
+                break;
+            }
+            sent++;
+            setStatus(`采集中 ${sent}/${totalCount} · 已发送`, 'busy');
+            console.log(`[MWI Export] (${sent}/${totalCount}) view_profile ${name}`);
+
+            // 2) 等 profile_shared 到达
+            const success = await waitForProfileCaptured(prevSize);
+            if (success) {
+                captured++;
+                console.log(`[MWI Export]   ✓ ${name}`);
+            } else {
+                console.warn(`[MWI Export]   ✗ 超时: ${name}`);
+            }
+
+            // 3) 等 0.5-1s，让游戏弹出的资料对话框完成渲染
+            setStatus(`采集中 ${sent}/${totalCount} · 准备关闭`, 'busy');
+            await stepDelay();
+
+            // 4) 关闭资料对话框
+            closeProfileDialog();
+
+            // 5) 等 0.5-1s，再进入下一个成员
+            setStatus(`采集中 ${sent}/${totalCount} · 等下一个`, 'idle');
+            await stepDelay();
+        }
+
+        const total = state.cachedProfiles.size + (state.character ? 1 : 0);
+        setStatus(`已缓存 ${total} 人，点击导出`, 'good');
+        console.log(`[MWI Export] 完成！发送 ${sent}，成功 ${captured}，总计 ${total} 人`);
+        if (force) alert(`自动采集完成：成功 ${captured} 人，总计 ${total} 人可导出。`);
+        autoClickRunning = false;
+    }
+
+    GM_registerMenuCommand('自动采集公会成员数据', () => autoClickMembers({ force: true }));
+
+    // ── 检测公会成员页出现后自动触发采集，无需手动点按钮 ──────────
+    const autoTrigger = (() => {
+        let triggered = false;
+        let debounceTimer = null;
+        let observer = null;
+
+        function check() {
+            if (triggered || autoClickRunning) return;
+            const rows = document.querySelectorAll('[class*="GuildPanel_membersTable"] tbody tr');
+            if (rows.length === 0) return;
+            const chatInput = document.querySelector('[class*="Chat_chatInputContainer"] input')
+                || document.querySelector('[class*="chatInputContainer"] input')
+                || document.querySelector('form input[type="text"]');
+            if (!chatInput) return;
+            // 等待自己的角色数据先到位，避免把自己也当成员发一次 /profile
+            if (!state.character) return;
+
+            // 成员表格首次渲染时可能还在陆续追加行，等 DOM 稳定后再采集
+            clearTimeout(debounceTimer);
+            debounceTimer = setTimeout(() => {
+                if (triggered || autoClickRunning) return;
+                triggered = true;
+                const count = document.querySelectorAll('[class*="GuildPanel_membersTable"] tbody tr').length;
+                console.log(`[MWI Export] 检测到公会成员列表(${count}人)，自动开始采集`);
+                setStatus('自动采集准备中…', 'busy');
+                autoClickMembers().catch((err) => {
+                    console.error('[MWI Export] 自动采集失败:', err);
+                    triggered = false;
+                });
+            }, 1200);
+        }
+
+        function start() {
+            if (observer) return;
+            observer = new MutationObserver(check);
+            observer.observe(document.body, { childList: true, subtree: true });
+            check();
+        }
+
+        function reset() {
+            triggered = false;
+            clearTimeout(debounceTimer);
+        }
+
+        return { start, reset };
+    })();
+
+    hookWebSocketMessages();
+    hookWebSocketSend();
+
+    function boot() {
+        addStatusButton();
+        autoTrigger.start();
+    }
+
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', boot, { once: true });
+    } else {
+        boot();
+    }
+})();
