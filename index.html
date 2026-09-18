@@ -142,6 +142,17 @@ h2 { font-size:16px; margin:10px 0 8px; color:var(--text-muted); }
 .display-column { border:1px solid var(--border); border-radius:8px; padding:6px; background:var(--surface); }
 .display-column table.member-table { min-width:340px; }
 .display-prof-select { max-width:150px; padding:1px 2px; border:1px solid var(--border); border-radius:3px; font-size:12px; background:var(--input-bg); color:var(--text); }
+/* 职业框配色（按后缀）：奶=紫 / 盾=黄 / 弓=暗绿 / 弩=亮绿 / 枪=鲜红 / 锤=血红 / 水法=蓝 / 火法=暗紫（半透明底色，深浅主题通用） */
+.display-prof-select.prof-heal { background:rgba(142,68,173,.22); border-color:rgba(199, 88, 247, 0.65); }
+.display-prof-select.prof-shield { background:rgba(230,176,32,.28); border-color:rgb(119, 88, 1); }
+.display-prof-select.prof-bow { background:rgba(27,94,32,.30); border-color:rgba(39,128,46,.75); }
+.display-prof-select.prof-crossbow { background:rgba(64,220,96,.30); border-color:rgba(52,200,90,.80); }
+.display-prof-select.prof-spear { background:rgba(240,64,64,.28); border-color:rgb(250, 8, 8); }
+.display-prof-select.prof-hammer { background:rgba(153,0,20,.32); border-color:rgb(110, 0, 15); }
+/* 展开后的下拉列表保持朴素配色，职业颜色只体现在「结果」（收起时显示的当前值）上 */
+.display-prof-select option { background:var(--surface); color:var(--text); }
+.display-prof-select.prof-watermage { background:rgba(29,120,224,.28); border-color:rgb(29, 120, 224); }
+.display-prof-select.prof-firemage { background:rgba(72,18,120,.32); border-color:rgb(88, 26, 140); }
 /* 战斗列：图标撑满整个单元格（去掉单元格内边距，单元格尺寸由图标决定） */
 .display-column .battle-cell { white-space:nowrap; padding:0; line-height:0; }
 .display-column .battle-cell svg { display:block; }
@@ -902,7 +913,7 @@ const I18N = {
     battleTrialIconNames:['刺猬','虫群','变色龙','水母','獾'],
     battleProfessions:'出战职业', battleProfessionsTip:'点击展开多选下拉，可勾选多个出战职业（选项为《所有职业》导入的全部职业）',
     battleProfNone:'(未选择)',
-    professionCol:'职业', battleCol:'战斗', profEmptyOption:'(未选择)',
+    professionCol:'职业', battleCol:'战斗', lifeCol:'生活', profEmptyOption:'(未选择)',
     displayBattleEdit:'单独修改',
     displayBattleEditTip:'勾选后，展示区域成员「战斗」列的图标可点击：从五种战斗图标中单独指定该成员的战斗结果（下拉只显示图标，再次点击同一图标可恢复自动）。',
     displayBattleEditCellTip:'点击选择战斗图标（再次点击同一图标清空，点末尾 ↺ 恢复自动计算）',
@@ -1032,7 +1043,7 @@ const I18N = {
     buffGroupTitle:'Buffs & Constraints', buffGroupTip:'Click to collapse/expand: Global Buffs, Guild Buildings, Guild Shrines, Progress Constraint',
     clearBattleEdit:'Clear Manual', clearBattleEditTip:'Clear all manual overrides; battle results fall back to auto match by profession',
     signupBookmark:'Fetch Signups', signupBookmarkTip:'Drag me to the bookmarks bar; clicking it on Guild > Members > Contributions copies every signup to the clipboard, and this page imports it automatically when you switch back',
-    signupCompare:'Compare Signups', signupCompareTip:'Click once to be prompted to paste (Ctrl+V) the signup data captured by the Fetch Signups bookmark, then a Current column is added after Assign and Battle (red box = mismatch); click again to turn it off',
+    signupCompare:'Compare Signups', signupCompareTip:'Click once to be prompted to paste (Ctrl+V) the signup data captured by the Fetch Signups bookmark, then a Current column is added after Battle and Life (red box = mismatch); click again to turn it off',
     signupPastePrompt:'Press Ctrl+V on this page to paste the signup data: first click the Fetch Signups bookmark on Guild > Members > Contributions, then come back and press Ctrl+V.',
     signupCol:'Current', signupNone:'(none)',
     signupCompareOn:'Loaded {n} members’ signups; Current comparison columns added (red box = mismatch)',
@@ -3971,7 +3982,7 @@ window.addEventListener('scroll', function(ev) {
   if (dd && tgt && (tgt === dd || (tgt.nodeType === 1 && dd.contains(tgt)))) return;
   closeBattleDropdown();
 }, true);
-// 展示区域：按《分配结果》视图的顺序与前三列（序号/分配/角色名），把所有成员按 列数×每列行数 分列展示。
+// 展示区域：列顺序为 序号/角色名/职业/战斗/生活，把所有成员按 列数×每列行数 分列展示。
 // 行数之和不足以容纳全部成员时，剩余成员并入最后一列。
 function renderDisplayArea() {
   const area = document.getElementById('display-area');
@@ -4004,24 +4015,25 @@ function renderDisplayArea() {
       const assignContent = assign >= 0 ? svgIcon(SKILL_KEYS[state.trials[assign].skill], 22, 22) : '-';
       // 未手动选择过（或原选择已不在当前职业列表中）时，默认选中该成员职业列表的第一个值；手动选空则保留空。
       const prof = displayMemberProfession(p);
+      // 列顺序：序号 | 角色名 | 职业 | 战斗 | 生活（生活 = 生活试炼分配图标）
       return '<tr>'+
         '<td class="idx-cell">'+rowIdx+'</td>'+
-        '<td class="assign-cell '+assignClass+'">'+assignContent+'</td>'+
-        (cmp ? signupLifeCellHtml(p, assign) : '')+
         '<td class="name-cell">'+escHtml(p.name)+'</td>'+
         '<td class="prof-cell">'+displayProfessionSelectHtml(p, prof)+'</td>'+
         '<td class="battle-cell">'+displayBattleCellHtml(p, prof)+'</td>'+
         (cmp ? signupBattleCellHtml(p) : '')+
+        '<td class="assign-cell life-cell '+assignClass+'">'+assignContent+'</td>'+
+        (cmp ? signupLifeCellHtml(p, assign) : '')+
       '</tr>';
     }).join('');
     return '<div class="display-column">'+
       '<table class="member-table"><thead><tr>'+
         '<th class="idx-col">'+t('indexCol')+'</th>'+
-        '<th class="assign-col">'+t('assignCol')+'</th>'+
-        (cmp ? '<th class="signup-col">'+t('signupCol')+'</th>' : '')+
         '<th class="name-col">'+t('nameCol')+'</th>'+
         '<th class="prof-col">'+t('professionCol')+'</th>'+
         '<th class="battle-col">'+t('battleCol')+'</th>'+
+        (cmp ? '<th class="signup-col">'+t('signupCol')+'</th>' : '')+
+        '<th class="life-col">'+t('lifeCol')+'</th>'+
         (cmp ? '<th class="signup-col">'+t('signupCol')+'</th>' : '')+
       '</tr></thead><tbody>'+rowsHtml+'</tbody></table>'+
     '</div>';
@@ -4042,7 +4054,22 @@ function displayProfessionSelectHtml(p, selected) {
   const id = String(p.id).replace(/["'\\]/g, '');
   const opts = ['<option value=""'+(selected ? '' : ' selected')+'>'+escHtml(t('profEmptyOption'))+'</option>']
     .concat(list.map(v => '<option value="'+escHtml(v)+'"'+(v === selected ? ' selected' : '')+'>'+escHtml(v)+'</option>'));
-  return '<select class="display-prof-select" onchange="onDisplayProfessionChange(\''+id+'\',this.value)">'+opts.join('')+'</select>';
+  return '<select class="display-prof-select '+professionToneClass(selected)+'" onchange="onDisplayProfessionChange(\''+id+'\',this.value)">'+opts.join('')+'</select>';
+}
+// 职业框配色：按职业名后缀判断，与统计块的奶/盾/弓等口径一致。
+// 奶=紫 / 盾=黄 / 弓=暗绿 / 弩=亮绿 / 枪=鲜红 / 锤=血红 / 水法=蓝 / 火法=暗紫
+function professionToneClass(prof) {
+  const s = String(prof || '').trim();
+  if (!s) return '';
+  if (s.endsWith('奶')) return 'prof-heal';
+  if (s.endsWith('盾')) return 'prof-shield';
+  if (s.endsWith('弓')) return 'prof-bow';
+  if (s.endsWith('弩')) return 'prof-crossbow';
+  if (s.endsWith('枪')) return 'prof-spear';
+  if (s.endsWith('锤')) return 'prof-hammer';
+  if (s.endsWith('水法')) return 'prof-watermage';
+  if (s.endsWith('火法')) return 'prof-firemage';
+  return '';
 }
 function onDisplayProfessionChange(id, v) {
   state.displayProfessions[String(id)] = v || '';
