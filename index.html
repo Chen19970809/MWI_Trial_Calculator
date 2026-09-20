@@ -972,7 +972,7 @@ table.member-table tbody tr:hover td.sticky-l.name-cell { background-color:var(-
 <script>
 
 // 版本号：发版时改这里即可（显示在标题“MWI 试炼计算器”后面）。
-const APP_VERSION = '1.0.1';
+const APP_VERSION = '1.0.0';
 
 // === i18n ===
 const I18N = {
@@ -984,7 +984,7 @@ const I18N = {
     exportScriptTitle:'下载数据导出脚本（Tampermonkey），安装后可在游戏内一键导出角色数据',
     calculate:'计算最优分配', assignCol:'生活', nameCol:'角色名', maxMembers:'人数上限',
     displayAssign:'展示分配', displaySettings:'展示设置',
-    skillConfig:'技能配置', skillConfigTip:'点击下方图标，从全部技能图标中单选一个', skillConfigPick:'选择技能',
+    skillConfig:'技能配置', skillConfigTip:'点击下方图标，从全部技能图标中单选一个', skillConfigPick:'选择技能', skillConfigNoProf:'请先排刀',
     displayCols:'列数', displayColsTip:'展示区域分成的列数（1-9 列）。修改后每列行数会按当前成员数重新生成均衡默认值。',
     displayRows:'每列行数', displayRowsTip:'依次填写每一列的行数，以空格分隔（如 4 3 2 1 = 第1列4行、第2列3行、第3列2行、第4列1行）。行数之和不足时，剩余成员会并入最后一列。',
     docImportBtn:'文档', allProfessions:'所有职业',
@@ -1109,7 +1109,7 @@ const I18N = {
     displayAssign:'Display', displaySettings:'Display Settings',
     skillConfig:'Skill Config', skillConfigTip:'Click an icon to pick one (aura slot lists auras only, skill slots list non-auras)', skillConfigPick:'Pick a skill',
   skillConfigAura:'Aura', skillConfigSkill:'Skill',
-  skillConfigNoProf:'Tick professions for Battle Trial 1/2 above first; one config block is created per selected profession',
+  skillConfigNoProf:'Publish a plan first',
     displayCols:'Columns', displayColsTip:'Number of columns (1-9) in the display area. Changing this regenerates a balanced rows-per-column string based on current members.',
     displayRows:'Rows per Column', displayRowsTip:'Row count of each column in order, separated by spaces (e.g. 4 3 2 1 = 4 rows in col 1, 3 in col 2, 2 in col 3, 1 in col 4). Leftover members go to the last column.',
     docImportBtn:'Doc', allProfessions:'All Professions',
@@ -3771,10 +3771,17 @@ function syncMemberViewTabs() {
 // 展示设置 = 列数 + 每列行数（空格分隔，如 "4 3 2 1" = 第1列4行、第2列3行、第3列2行、第4列1行）。
 function toggleDisplayMode() {
   if (!isGuildLeader()) { alert(t('leaderOnly')); return; }
-  state.displayMode = !state.displayMode;
+  if (state.skillConfigMode) {
+    // 技能配置是展示分配的子模式：在技能配置里点《展示分配》= 退出子模式回到展示区域，
+    // 而不是把 displayMode 也一起关掉（否则会退回上一次的成员区视图）。
+    state.skillConfigMode = false;
+    try { localStorage.setItem('mwi_skill_config_mode', '0'); } catch(e) {}
+  } else {
+    state.displayMode = !state.displayMode;
+    try { localStorage.setItem('mwi_display_mode', state.displayMode ? '1' : '0'); } catch(e) {}
+  }
   // 退出展示分配时一并退出技能配置子模式。
   if (!state.displayMode) state.skillConfigMode = false;
-  try { localStorage.setItem('mwi_display_mode', state.displayMode ? '1' : '0'); } catch(e) {}
   renderDisplayMode();
   syncMemberViewTabs();
 }
@@ -3825,15 +3832,25 @@ function skillPlanAvailable() {
 //   有有效排刀时 = 本地出战职业 ∪ 服务器 plan.s 的职业（成员端本地为空 → 即服务器职业）；
 //   无排刀时 = 本地出战职业。顺序沿用《所有职业》下拉（state.professions）。
 function skillConfigProfessions() {
-  const order = state.professions || [];
-  const chosen = new Set();
-  [0, 1].forEach(function(i) {
-    (state.displayBattleTrialProfessions[i] || []).forEach(function(p) { chosen.add(p); });
-  });
-  if (skillPlanAvailable() && state.plan.s) {
-    Object.keys(state.plan.s).forEach(function(p) { chosen.add(p); });
+  // 1. 先判断排刀发布（不管是否过期）：有就统计并去重排刀里每个成员的职业
+  if (state.plan && state.plan.m) {
+    const set = new Set();
+    Object.keys(state.plan.m).forEach(function(name) {
+      const e = state.plan.m[name];
+      if (Array.isArray(e) && e[2]) set.add(e[2]);
+    });
+    if (set.size) return Array.from(set);
   }
-  return order.filter(function(p) { return chosen.has(p); });
+  // 2. 没有排刀（或排刀里无职业）→ 统计并去重展示分配结果中每个成员的职业
+  const set2 = new Set();
+  (state.members || []).forEach(function(p) {
+    if (!p) return;
+    const prof = displayMemberProfession(p);
+    if (prof) set2.add(prof);
+  });
+  if (set2.size) return Array.from(set2);
+  // 3. 两者都无数据 → 空列表，渲染时显示「请先排刀」
+  return [];
 }
 // 光环类图标：5 个 *_aura，加上疯狂 / 无敌 / 复活（与游戏内 AURA_MAP 口径一致）。
 function isAuraIcon(id) {

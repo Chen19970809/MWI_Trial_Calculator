@@ -1,0 +1,1267 @@
+// ==UserScript==
+// @name         KUNPO试炼专用
+// @namespace    https://www.milkywayidle.com/
+// @version      1.2.0
+// @description  上传等级、成就、房屋、迷宫配装、神龛到计算器
+// @author       MonsterFC
+// @license      MIT
+// @match        https://www.milkywayidle.com/*
+// @match        https://test.milkywayidle.com/*
+// @match        https://www.milkywayidlecn.com/*
+// @match        https://test.milkywayidlecn.com/*
+// @run-at       document-start
+// @grant        GM_registerMenuCommand
+// @grant        GM_xmlhttpRequest
+// @grant        GM.xmlHttpRequest
+// @connect      api.jsonbin.io
+// @connect      mwi-guild.43.167.210.211.sslip.io
+// ==/UserScript==
+
+(function () {
+    'use strict';
+
+    const SCRIPT_VERSION = '0.8.0-single';
+    const SKILL_LABELS = Object.freeze(['Milking','Foraging','Woodcutting','Cheesesmithing','Crafting','Tailoring','Cooking','Brewing','Alchemy','Enhancing']);
+    const SKILL_LABELS_CN = Object.freeze(['挤奶','采摘','伐木','奶酪锻造','制作','缝纫','烹饪','冲泡','炼金','强化']);
+
+    // ── 直送试炼计算器 ────────────────────────────────────────────────────
+    // 跳过 JSON 下载：把 members 数组 base64url 编码后作为 URL hash 拼到计算器页面，
+    // index.html 的 init() 末尾解析 #mwiImport=... 并走与"导入 JSON"相同的合并逻辑。
+    // 计算器地址默认 GitHub Pages，可通过菜单"设置试炼计算器页面地址"覆盖
+    // （浏览器禁止 https 页面 window.open file:// 本地文件，所以必须用 http(s) 地址）。
+    const CALC_URL_STORAGE_KEY = 'mwi_trial_calc_url';
+    const CALC_DEFAULT_URL = 'https://chen19970809.github.io/MWI_Trial_Calculator/?guild=KUNPO&bin=6a671633f5f4af5e29c6b88c&pwd=827280394';
+    const IMPORT_HASH_PARAM = 'mwiImport';
+    // URL hash 长度上限保护（编码后字符数），超过则退回 JSON 下载
+    const MAX_IMPORT_URL_PAYLOAD_LENGTH = 1800000;
+
+    const AURA_MAP = Object.freeze({
+        revive: '/abilities/revive',
+        insanity: '/abilities/insanity',
+        invincible: '/abilities/invincible',
+        speed: '/abilities/speed_aura',
+        guardian: '/abilities/guardian_aura',
+        physical: '/abilities/fierce_aura',
+        critical: '/abilities/critical_aura',
+        elemental: '/abilities/mystic_aura',
+    });
+
+    // ── 游戏内显示分工（参考试炼显示在游戏内脚本）──────────────────────
+    // 从 index.html 计算器共享空间（jsonbin）拉取并解密 plan，在游戏试炼卡片上
+    // 高亮当前角色的战斗试炼，并注入技能面板（光环 + 技能1~4）。
+    const BIN_BASE = 'https://api.jsonbin.io/v3/b';
+    const COMBAT_ABILITY_ICON_BASE = 'https://mwi-guild.43.167.210.211.sslip.io/dist/icons/abilities';
+    const TRIAL_CARD_SELECTOR = 'div[class*="trialTile"]';
+    const ASSIGNMENT_CACHE_MS = 5 * 60 * 1000;
+    const ASSIGNMENT_POLL_MS = 2 * 60 * 1000;
+    const BATTLE_TRIAL_SLUGS = Object.freeze(['hedgehog', 'swarm', 'chameleon', 'jellyfish', 'badger']);
+    // 技能 slug → 中文名（与 index.html 的 COMBAT_ABILITY_ICONS 一致）。
+    const ABILITY_NAME_ZH = Object.freeze({
+        insanity: '疯狂', invincible: '无敌', revive: '复活',
+        guardian_aura: '守护光环', speed_aura: '速度光环', fierce_aura: '物理光环',
+        critical_aura: '暴击光环', mystic_aura: '元素光环',
+        elemental_affinity: '元素增幅', precision: '精确', berserk: '狂暴', frenzy: '狂速',
+        pestilent_shot: '疫病射击', penetrating_shot: '贯穿射击', penetrating_strike: '贯心之刺',
+        puncture: '破甲之刺', maim: '血刃斩', crippling_slash: '致残斩', fracturing_impact: '碎裂冲击',
+        sweep: '重扫', stunning_blow: '重锤', quick_shot: '快速射击', steady_shot: '稳定射击',
+        rain_of_arrows: '箭雨', water_strike: '流水冲击', ice_spear: '冰枪术', frost_surge: '冰霜爆裂',
+        mana_spring: '法力喷泉', entangle: '缠绕', toxic_pollen: '剧毒粉尘', natures_veil: '自然菌幕',
+        life_drain: '生命吸取', fireball: '火球', flame_blast: '熔岩爆裂', firestorm: '火焰风暴',
+        smoke_burst: '烟爆灭影', rejuvenate: '群体治疗术', quick_aid: '快速治疗术',
+        taunt: '嘲讽', provoke: '挑衅', toughness: '坚韧', elusiveness: '闪避',
+        vampirism: '吸血', retribution: '惩戒', spike_shell: '尖刺防护',
+    });
+    const assignmentState = {
+        doc: null, fetchedAt: 0, inFlight: false,
+        timer: 0, pollTimer: null, observer: null, rendering: false,
+        lastCharacterName: '',
+    };
+
+    const state = {
+        character: null,
+        skills: new Map(),
+        abilities: new Map(),
+        dataReady: false,
+        uiRoot: null,
+        iconButton: null,
+        panelEl: null,
+        statusText: null,
+        seenEvents: new WeakSet(),
+        loadoutDataSeen: false,
+        loadoutCheckStartTime: 0,
+        statusPollInterval: null,
+    };
+
+    // ── 右下角 UI：可拖动 K 图标（收起态） + 点击在当前位置展开面板 ──────────
+    // 参考 TMD 公会试炼资料同步助手的 collapsed-frog 实现：pointer 拖拽 + 边界钳制 + 位置持久化。
+    const UI_COLLAPSED_KEY = 'kunpo_ui_collapsed';
+    const UI_POSITION_KEY = 'kunpo_ui_icon_pos';
+    const STATUS_KIND_COLORS = Object.freeze({
+        idle:  '#9db4d8',
+        good:  '#3ddc84',
+        busy:  '#ffd75e',
+        error: '#ff6b6b',
+    });
+
+    function setStatus(text, kind = 'idle') {
+        if (state.statusText) {
+            state.statusText.textContent = text;
+            state.statusText.style.color = STATUS_KIND_COLORS[kind] || STATUS_KIND_COLORS.idle;
+        }
+        if (state.iconButton) {
+            state.iconButton.title = `KUNPO 试炼专用：${text}\n拖动移动位置；点击展开面板`;
+        }
+    }
+
+    function readUiPosition() {
+        try {
+            const raw = JSON.parse(localStorage.getItem(UI_POSITION_KEY) || 'null');
+            if (raw && Number.isFinite(raw.x) && Number.isFinite(raw.y)) return raw;
+        } catch (_) { /* ignore */ }
+        return null;
+    }
+
+    function writeUiPosition(pos) {
+        try { localStorage.setItem(UI_POSITION_KEY, JSON.stringify(pos)); } catch (_) { /* ignore */ }
+    }
+
+    // 把坐标钳制在视口内（margin 边距），默认按 46px 图标尺寸。
+    function clampUiPosition(pos, width, height) {
+        const margin = 8;
+        const w = width || 46, h = height || 46;
+        const maxX = Math.max(margin, window.innerWidth - w - margin);
+        const maxY = Math.max(margin, window.innerHeight - h - margin);
+        return {
+            x: Math.round(Math.min(Math.max(Number(pos?.x) || margin, margin), maxX)),
+            y: Math.round(Math.min(Math.max(Number(pos?.y) || margin, margin), maxY)),
+        };
+    }
+
+    // 图标落位：优先已保存位置，否则右下角默认位。
+    function placeIcon(pos) {
+        if (!state.uiRoot) return null;
+        const fallback = { x: window.innerWidth - 60, y: window.innerHeight - 60 };
+        const p = clampUiPosition(pos || readUiPosition() || fallback);
+        state.uiRoot.style.left = `${p.x}px`;
+        state.uiRoot.style.top = `${p.y}px`;
+        state.uiRoot.style.right = 'auto';
+        state.uiRoot.style.bottom = 'auto';
+        return p;
+    }
+
+    function applyCollapsed(collapsed) {
+        const root = state.uiRoot;
+        if (!root) return;
+        root.dataset.collapsed = collapsed ? 'true' : 'false';
+        try { localStorage.setItem(UI_COLLAPSED_KEY, collapsed ? '1' : '0'); } catch (_) { /* ignore */ }
+        if (collapsed) {
+            state.iconButton.style.display = '';
+            state.panelEl.style.display = 'none';
+            placeIcon(readUiPosition());
+        } else {
+            state.iconButton.style.display = 'none';
+            state.panelEl.style.display = '';
+            // 在图标的当前位置展开面板（先显示再测量尺寸，再钳制进视口）。
+            const iconPos = readUiPosition()
+                || { x: parseFloat(root.style.left), y: parseFloat(root.style.top) };
+            const rect = state.panelEl.getBoundingClientRect();
+            const maxX = Math.max(8, window.innerWidth - rect.width - 8);
+            const maxY = Math.max(8, window.innerHeight - rect.height - 8);
+            root.style.left = `${Math.min(Math.max(iconPos.x, 8), maxX)}px`;
+            root.style.top = `${Math.min(Math.max(iconPos.y, 8), maxY)}px`;
+        }
+    }
+
+    function mountExportUi() {
+        if (state.uiRoot || !document.body) return;
+
+        const root = document.createElement('aside');
+        root.id = 'kunpo-export-ui';
+        Object.assign(root.style, {
+            position: 'fixed',
+            left: '12px',
+            top: '12px',
+            right: 'auto',
+            bottom: 'auto',
+            zIndex: '2147483647',
+        });
+
+        // ── 收起态：蓝色大写 K 圆形图标（可拖动） ──
+        const icon = document.createElement('button');
+        icon.type = 'button';
+        icon.textContent = 'K';
+        Object.assign(icon.style, {
+            width: '46px',
+            height: '46px',
+            padding: '0',
+            borderRadius: '50%',
+            border: '2px solid rgba(255,255,255,.55)',
+            background: 'linear-gradient(145deg,#2f7bff,#0a4fd6)',
+            color: '#fff',
+            font: '700 24px/42px system-ui, -apple-system, "Segoe UI", sans-serif',
+            textAlign: 'center',
+            cursor: 'grab',
+            boxShadow: '0 4px 14px rgba(10,79,214,.5)',
+            touchAction: 'none',
+            userSelect: 'none',
+            webkitUserSelect: 'none',
+            display: 'none',
+        });
+
+        // ── 展开态：面板 ──
+        const panel = document.createElement('div');
+        Object.assign(panel.style, {
+            display: 'none',
+            position: 'relative',
+            width: 'min(300px, calc(100vw - 24px))',
+            boxSizing: 'border-box',
+            padding: '12px',
+            borderRadius: '10px',
+            border: '1px solid #6f9bd8',
+            background: 'linear-gradient(145deg,#152447,#1d3566)',
+            color: '#eef3ff',
+            boxShadow: '0 10px 28px rgba(3,10,26,.55)',
+            font: '12.5px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif',
+        });
+
+        const heading = document.createElement('strong');
+        heading.textContent = 'KUNPO 试炼专用';
+        heading.style.cssText = 'display:block;font-size:14px;margin:0 0 6px 0';
+
+        const collapseBtn = document.createElement('button');
+        collapseBtn.type = 'button';
+        collapseBtn.textContent = '−';
+        collapseBtn.title = '收起为 K 图标';
+        Object.assign(collapseBtn.style, {
+            position: 'absolute',
+            top: '7px',
+            right: '7px',
+            minWidth: '24px',
+            height: '24px',
+            border: '0',
+            borderRadius: '7px',
+            background: '#344879',
+            color: '#fff',
+            cursor: 'pointer',
+            font: '700 16px/1 system-ui, sans-serif',
+        });
+
+        const intro = document.createElement('p');
+        intro.textContent = '上传等级、成就、房屋、迷宫配装、神龛到试炼计算器。';
+        intro.style.cssText = 'margin:0 0 8px 0;color:#c3d2f2';
+
+        const status = document.createElement('p');
+        status.textContent = '等待人物数据';
+        status.style.cssText = 'margin:0 0 9px 0;min-height:1.3em;color:#9db4d8;word-break:break-all';
+
+        const actions = document.createElement('div');
+        actions.style.cssText = 'display:flex;gap:6px;flex-wrap:wrap';
+        const sendBtn = document.createElement('button');
+        sendBtn.type = 'button';
+        sendBtn.textContent = '发送到计算器';
+        sendBtn.title = '直接发送到试炼计算器（跳过 JSON 下载）';
+        Object.assign(sendBtn.style, {
+            border: '0',
+            borderRadius: '7px',
+            padding: '6px 9px',
+            background: '#0a84ff',
+            color: '#fff',
+            cursor: 'pointer',
+            font: '600 12px/1 system-ui, sans-serif',
+        });
+        sendBtn.addEventListener('click', () => sendToCalculator());
+        const jsonBtn = document.createElement('button');
+        jsonBtn.type = 'button';
+        jsonBtn.textContent = '下载 JSON 备份';
+        jsonBtn.title = '导出当前角色全部迷宫配装到 JSON 文件';
+        Object.assign(jsonBtn.style, {
+            border: '0',
+            borderRadius: '7px',
+            padding: '6px 9px',
+            background: '#344879',
+            color: '#fff',
+            cursor: 'pointer',
+            font: '600 12px/1 system-ui, sans-serif',
+        });
+        jsonBtn.addEventListener('click', () => exportJsonData());
+        const assignBtn = document.createElement('button');
+        assignBtn.type = 'button';
+        assignBtn.textContent = '显示分工';
+        assignBtn.title = '从共享空间拉取最新排刀，在试炼卡片上高亮你的战斗分工并显示技能面板';
+        Object.assign(assignBtn.style, {
+            border: '0',
+            borderRadius: '7px',
+            padding: '6px 9px',
+            background: '#0a84ff',
+            color: '#fff',
+            cursor: 'pointer',
+            font: '600 12px/1 system-ui, sans-serif',
+        });
+        assignBtn.addEventListener('click', () => { void refreshAssignment({ force: true }); });
+        actions.append(sendBtn, jsonBtn, assignBtn);
+
+        panel.append(collapseBtn, heading, intro, status, actions);
+        root.append(icon, panel);
+        document.body.appendChild(root);
+        state.uiRoot = root;
+        state.iconButton = icon;
+        state.panelEl = panel;
+        state.statusText = status;
+
+        // ── K 图标拖动（pointer capture + 位移阈值，拖动后不触发点击） ──
+        let dragState = null;
+        let suppressClick = false;
+        icon.addEventListener('pointerdown', (ev) => {
+            ev.preventDefault();
+            icon.setPointerCapture?.(ev.pointerId);
+            const rect = root.getBoundingClientRect();
+            dragState = {
+                pointerId: ev.pointerId,
+                startClientX: ev.clientX,
+                startClientY: ev.clientY,
+                baseX: rect.left,
+                baseY: rect.top,
+                moved: false,
+            };
+            icon.style.cursor = 'grabbing';
+        });
+        icon.addEventListener('pointermove', (ev) => {
+            if (!dragState || ev.pointerId !== dragState.pointerId) return;
+            const deltaX = ev.clientX - dragState.startClientX;
+            const deltaY = ev.clientY - dragState.startClientY;
+            if (!dragState.moved && Math.hypot(deltaX, deltaY) < 4) return;
+            dragState.moved = true;
+            const p = clampUiPosition({ x: dragState.baseX + deltaX, y: dragState.baseY + deltaY });
+            root.style.left = `${p.x}px`;
+            root.style.top = `${p.y}px`;
+        });
+        const finishDrag = (ev) => {
+            if (!dragState || ev.pointerId !== dragState.pointerId) return;
+            if (dragState.moved) {
+                writeUiPosition({ x: parseFloat(root.style.left), y: parseFloat(root.style.top) });
+                suppressClick = true;
+            }
+            icon.releasePointerCapture?.(ev.pointerId);
+            icon.style.cursor = 'grab';
+            dragState = null;
+        };
+        icon.addEventListener('pointerup', finishDrag);
+        icon.addEventListener('pointercancel', finishDrag);
+        // 点击（未拖动）→ 在图标当前位置展开面板
+        icon.addEventListener('click', () => {
+            if (suppressClick) { suppressClick = false; return; }
+            applyCollapsed(false);
+        });
+        collapseBtn.addEventListener('click', () => applyCollapsed(true));
+
+        // 视口尺寸变化时保持可见：收起态重新钳制图标；展开态重新钳制面板。
+        window.addEventListener('resize', () => {
+            if (!state.uiRoot) return;
+            if (state.uiRoot.dataset.collapsed === 'true') {
+                placeIcon(readUiPosition());
+            } else {
+                const rect = state.panelEl.getBoundingClientRect();
+                const p = clampUiPosition(
+                    { x: parseFloat(state.uiRoot.style.left), y: parseFloat(state.uiRoot.style.top) },
+                    rect.width,
+                    rect.height,
+                );
+                state.uiRoot.style.left = `${p.x}px`;
+                state.uiRoot.style.top = `${p.y}px`;
+            }
+        });
+
+        // 默认收起为 K 图标；记住用户上次的展开/收起选择。
+        applyCollapsed(localStorage.getItem(UI_COLLAPSED_KEY) !== '0');
+        setStatus('等待人物数据');
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // ▼ 基础 WebSocket 消息读取（skills / abilities / character 名字）
+    //   刻意不再收集 items —— 身上当前装备完全忽略，配装从 gameState 现场读。
+    // ═══════════════════════════════════════════════════════════════════════
+
+    function mergeSkills(skills, replace = false) {
+        if (!Array.isArray(skills)) return;
+        if (replace) state.skills.clear();
+        for (const skill of skills) {
+            if (!skill?.skillHrid) continue;
+            state.skills.set(skill.skillHrid, {
+                level: Number(skill.level || 0),
+                experience: Number(skill.experience || 0),
+            });
+        }
+    }
+
+    function mergeAbilities(abilities, replace = false) {
+        if (!Array.isArray(abilities)) return;
+        if (replace) state.abilities.clear();
+        for (const ability of abilities) {
+            if (!ability?.abilityHrid) continue;
+            const old = state.abilities.get(ability.abilityHrid) || {};
+            state.abilities.set(ability.abilityHrid, { ...old, ...ability });
+        }
+    }
+
+    function handleGameMessage(message) {
+        let obj;
+        try {
+            obj = typeof message === 'string' ? JSON.parse(message) : message;
+        } catch {
+            return;
+        }
+        if (!obj?.type) return;
+
+        let changed = false;
+        if (obj.type === 'init_character_data') {
+            if (!obj.character?.id) return;
+            state.character = {
+                id: String(obj.character.id),
+                name: String(obj.character.name || ''),
+                gameMode: String(obj.character.gameMode || ''),
+            };
+            mergeSkills(obj.characterSkills, true);
+            mergeAbilities(obj.characterAbilities, true);
+            changed = true;
+        } else if (obj.type === 'skills_updated') {
+            mergeSkills(obj.endCharacterSkills || obj.characterSkills);
+            changed = true;
+        } else if (obj.type === 'abilities_updated') {
+            mergeAbilities(obj.endCharacterAbilities || obj.characterAbilities);
+            changed = true;
+        } else if (obj.type === 'action_completed') {
+            if (obj.endCharacterSkills) mergeSkills(obj.endCharacterSkills);
+            if (obj.endCharacterAbilities) mergeAbilities(obj.endCharacterAbilities);
+            changed = Boolean(obj.endCharacterSkills || obj.endCharacterAbilities);
+        }
+
+        if (changed && state.character) {
+            state.dataReady = true;
+            state.loadoutDataSeen = false;
+            state.loadoutCheckStartTime = Date.now();
+            if (!state.statusPollInterval) {
+                state.statusPollInterval = setInterval(refreshLoadoutStatus, 1000);
+            }
+            refreshLoadoutStatus();
+        }
+    }
+
+    function hookWebSocketMessages() {
+        const descriptor = Object.getOwnPropertyDescriptor(MessageEvent.prototype, 'data');
+        if (!descriptor?.get) {
+            console.error('[MWI Export Single] MessageEvent.data getter is unavailable.');
+            return;
+        }
+        const previousGetter = descriptor.get;
+        descriptor.get = function () {
+            const message = previousGetter.call(this);
+            try {
+                const socket = this.currentTarget;
+                if (!(socket instanceof WebSocket)) return message;
+                const url = String(socket.url || '');
+                if (!/api(?:-test)?\.milkywayidle(?:cn)?\.com\/ws/.test(url)) return message;
+                if (state.seenEvents.has(this)) return message;
+                state.seenEvents.add(this);
+                handleGameMessage(message);
+            } catch (error) {
+                console.error('[MWI Export Single] WebSocket processing failed:', error);
+            }
+            return message;
+        };
+        Object.defineProperty(MessageEvent.prototype, 'data', descriptor);
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // ▼ GameState / Loadout 直读
+    //   参考自 MWI Trial Core (0.1.0) SECTION 2 & 3；为不引入外部依赖而内联。
+    //   MWI 里每个迷宫房间可以另存一套装备，规则：
+    //     settingKey = "labyrinthLoadout" + PascalCase(skillId 或 monsterTail)
+    //     loadoutId  = gameState.characterSetting[settingKey]
+    //     loadout    = gameState.characterLoadoutDict[loadoutId]
+    //     loadout.wearableMap[slot] 是 "..::..::/items/xxx::<enh>" 字符串
+    // ═══════════════════════════════════════════════════════════════════════
+
+    function isLikelyGameState(s) {
+        return Boolean(
+            s && typeof s === 'object' && (
+                Object.prototype.hasOwnProperty.call(s, 'characterLabyrinth') ||
+                Object.prototype.hasOwnProperty.call(s, 'combatUnit') ||
+                Object.prototype.hasOwnProperty.call(s, 'gameConn')
+            )
+        );
+    }
+    function findGameStateFromFiber(rootFiber) {
+        if (!rootFiber || typeof rootFiber !== 'object') return null;
+        const queue = [rootFiber];
+        const visited = new Set();
+        let steps = 0;
+        while (queue.length > 0 && steps < 20000) {
+            const fiber = queue.shift();
+            if (!fiber || typeof fiber !== 'object' || visited.has(fiber)) continue;
+            visited.add(fiber);
+            steps += 1;
+            const s = fiber.stateNode && fiber.stateNode.state;
+            if (isLikelyGameState(s)) return s;
+            if (fiber.child) queue.push(fiber.child);
+            if (fiber.sibling) queue.push(fiber.sibling);
+        }
+        return null;
+    }
+    function getGameState() {
+        try {
+            const gamePage = document.querySelector('[class^="GamePage"]');
+            if (gamePage) {
+                const reactKey = Object.keys(gamePage).find(k => k.startsWith('__reactFiber$'));
+                if (reactKey) {
+                    const fiberNode = gamePage[reactKey];
+                    const direct = fiberNode && fiberNode.return && fiberNode.return.stateNode && fiberNode.return.stateNode.state;
+                    if (isLikelyGameState(direct)) return direct;
+                }
+            }
+            const rootElement = document.getElementById('root');
+            let rootContainer = (rootElement && rootElement._reactRootContainer) || null;
+            if (!rootContainer) {
+                const fallbackRoot = Array.from(document.querySelectorAll('div')).find(el =>
+                    Object.prototype.hasOwnProperty.call(el, '_reactRootContainer'));
+                rootContainer = (fallbackRoot && fallbackRoot._reactRootContainer) || null;
+            }
+            return findGameStateFromFiber((rootContainer && rootContainer.current) || null);
+        } catch (_) { return null; }
+    }
+
+    function containerGet(container, key) {
+        if (!container || key == null) return undefined;
+        if (container instanceof Map) return container.get(key);
+        return container[key];
+    }
+
+    function getLoadoutById(dict, loadoutId) {
+        if (!dict) return null;
+        let direct = containerGet(dict, loadoutId);
+        if (!direct) direct = containerGet(dict, String(loadoutId));
+        if (direct) return direct;
+        const values = dict instanceof Map ? [...dict.values()] : Object.values(dict);
+        for (const v of values) if (v && Number(v.id) === Number(loadoutId)) return v;
+        return null;
+    }
+
+    function parseWearableRef(rawValue) {
+        if (!rawValue) return null;
+        if (typeof rawValue === 'string') {
+            const parts = rawValue.split('::');
+            if (parts.length < 4) return null;
+            const itemHrid = parts[2] || '';
+            const enh = Number(parts[3]) || 0;
+            return itemHrid ? { itemHrid, enhancementLevel: enh } : null;
+        }
+        if (typeof rawValue === 'object') {
+            const itemHrid = String(rawValue.itemHrid || rawValue.hrid || '');
+            if (!itemHrid) return null;
+            return { itemHrid, enhancementLevel: Number(rawValue.enhancementLevel || 0) };
+        }
+        return null;
+    }
+
+    function extractLoadoutWearableItemMap(loadout, maxByItem) {
+        const raw = loadout && loadout.wearableMap;
+        if (!raw) return {};
+        const entries = raw instanceof Map ? [...raw.entries()] : Object.entries(raw);
+        const enhancer = (maxByItem instanceof Map) ? maxByItem : null;
+        const out = {};
+        for (const [slotKey, rawRef] of entries) {
+            const parsed = parseWearableRef(rawRef);
+            if (!parsed) continue;
+            // 与迷宫计算器 resolveWearableEnhancement 默认分支（useExactEnhancement 未设时）一致：
+            // 以 characterItemMap 中该 itemHrid 的实际最高强化为准，
+            // 不直接信任 MWI 在配装中"设置装备"时写入的 parts[3]。
+            // 这样玩家"下掉 +3 配置 +0"或"先强化成 +5 又拆掉"时，
+            // 导出仍能反映该 itemHrid 在库存中的真实最高强化。
+            const fromMap = enhancer ? enhancer.get(parsed.itemHrid) : undefined;
+            const enhFromMap = Number.isFinite(fromMap)
+                ? Math.max(0, Math.floor(Number(fromMap)))
+                : null;
+            const parsedEnh = Math.max(0, Math.floor(Number(parsed.enhancementLevel || 0)));
+            const enhancementLevel = enhFromMap != null ? enhFromMap : parsedEnh;
+            // 用 profile_shared 里 wearableItemMap 一致的字段名，方便下游解析
+            out[String(slotKey)] = {
+                itemHrid: parsed.itemHrid,
+                enhancementLevel,
+            };
+        }
+        return out;
+    }
+
+    // 与迷宫计算器 buildMaxEnhancementByItem 行为一致：扫一遍 characterItemMap，
+    // 把每个 itemHrid 在玩家身上出现的最高强化收集成 Map<itemHrid, enhancementLevel>。
+    // 用于覆盖 loadout 字符串中 parts[3]（MWI 设置配装时填入的最高强化，可能滞后于库存变化）。
+    function buildMaxEnhancementByItem(gs) {
+        const out = new Map();
+        const map = gs && gs.characterItemMap;
+        if (!map) return out;
+        const values = map instanceof Map ? [...map.values()] : Object.values(map);
+        for (const item of values) {
+            if (!item || !item.itemHrid) continue;
+            if (Number(item.count || 0) <= 0) continue;
+            const enh = Math.max(0, Math.floor(Number(item.enhancementLevel || 0)));
+            if (!Number.isFinite(enh)) continue;
+            const existing = out.get(item.itemHrid);
+            if (!Number.isFinite(existing) || enh > existing) {
+                out.set(item.itemHrid, enh);
+            }
+        }
+        return out;
+    }
+
+    // 通用容器 entries 迭代，兼容 Map / 普通对象
+    function containerEntries(container) {
+        if (!container) return [];
+        if (container instanceof Map) return [...container.entries()];
+        if (typeof container === 'object') return Object.entries(container);
+        return [];
+    }
+
+    // 房屋房间等级：gameState.characterHouseRoomDict[roomHrid] = { level, ... }
+    // 只输出 dict 里实际存在的房间（表明玩家至少建造/升级过一次）；
+    // level 归一化为 >=0 的整数，与迷宫计算器 buildHouseRoomLevelMap 一致。
+    function collectHouseRoomLevels() {
+        const gs = getGameState();
+        if (!gs) return {};
+        const out = {};
+        for (const [rawHrid, room] of containerEntries(gs.characterHouseRoomDict)) {
+            const hrid = String(rawHrid || '');
+            if (!hrid) continue;
+            const lv = Math.max(0, Math.floor(Number(room?.level) || 0));
+            out[hrid] = lv;
+        }
+        return out;
+    }
+
+    // 成就完成情况：gameState.characterAchievementMap[achievementHrid] 有两种形态
+    //   * 简单标志：true
+    //   * 详情对象：{ isCompleted: true, completedTime?: <ISO 或 ts> }
+    // 遵循迷宫计算器 buildAchievementCompletionMap 的做法：只导出 completed 项，
+    // value 统一成 true，减少 JSON 体积；未完成的成就直接省略。
+    function collectAchievementCompletion() {
+        const gs = getGameState();
+        if (!gs) return {};
+        const out = {};
+        for (const [rawHrid, info] of containerEntries(gs.characterAchievementMap)) {
+            const hrid = String(rawHrid || '');
+            if (!hrid) continue;
+            const completed = info === true || (info && info.isCompleted === true);
+            if (completed) out[hrid] = true;
+        }
+        return out;
+    }
+
+    // 从 characterSetting 里扫全部 labyrinthLoadout* 键，把每一份被迷宫使用的
+    // loadout 都拿出来。相同 loadoutId 可能被多个 settingKey 引用（比如两间
+    // 房都指向同一套配装），合并归档到 usedBy[]，避免重复导出装备明细。
+    function collectLabyrinthLoadouts() {
+        const gs = getGameState();
+        if (!gs) return [];
+        const settings = gs.characterSetting;
+        const dict = gs.characterLoadoutDict;
+        if (!settings || !dict) return [];
+        const settingEntries = settings instanceof Map
+            ? [...settings.entries()]
+            : Object.entries(settings);
+
+        // 一次性构建 itemHrid → 库存最高强化；
+        // 用于覆盖配装字符串里 MWI 自动填入的 parts[3]，
+        // 让导出数据反映玩家实际可用的最高强化（例如把 +3 下掉换 +0 后仍显示 +3）。
+        const maxByItem = buildMaxEnhancementByItem(gs);
+
+        // loadoutId -> 聚合条目
+        const byId = new Map();
+        for (const [rawKey, rawId] of settingEntries) {
+            const settingKey = String(rawKey || '');
+            if (!/^labyrinthLoadout/.test(settingKey)) continue;
+            const loadoutId = Number(rawId);
+            if (!Number.isFinite(loadoutId) || loadoutId <= 0) continue;
+            const loadout = getLoadoutById(dict, loadoutId);
+            if (!loadout) continue;
+            const settingSuffix = settingKey.replace(/^labyrinthLoadout/, '');
+
+            let entry = byId.get(loadoutId);
+            if (!entry) {
+                entry = {
+                    loadoutId,
+                    loadout: {
+                        id: Number(loadout.id) || loadoutId,
+                        name: loadout.name != null ? String(loadout.name) : '',
+                        actionTypeHrid: loadout.actionTypeHrid ? String(loadout.actionTypeHrid) : '',
+                        wearableItemMap: extractLoadoutWearableItemMap(loadout, maxByItem),
+                    },
+                    usedBy: [],
+                };
+                byId.set(loadoutId, entry);
+            }
+            entry.usedBy.push({ settingKey, settingSuffix });
+        }
+
+        // 稳定输出顺序：按 loadoutId 升序
+        return [...byId.values()].sort((a, b) => a.loadoutId - b.loadoutId);
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // ▼ Payload / Export
+    // ═══════════════════════════════════════════════════════════════════════
+
+    function buildPayload() {
+        if (!state.character) return null;
+
+        const skills = {};
+        for (const [hrid, value] of state.skills.entries()) {
+            skills[hrid.replace('/skills/', '')] = Number(value.level || 0);
+        }
+
+        const abilities = {};
+        for (const [hrid, ability] of state.abilities.entries()) {
+            abilities[hrid.replace('/abilities/', '')] = {
+                level: Number(ability.level || 0),
+                slotNumber: Number(ability.slotNumber || 0),
+            };
+        }
+
+        const auras = {};
+        for (const [label, hrid] of Object.entries(AURA_MAP)) {
+            auras[label] = Number(state.abilities.get(hrid)?.level || 0);
+        }
+
+        const labyrinthLoadouts = collectLabyrinthLoadouts();
+        const houseRoomLevels = collectHouseRoomLevels();
+        const achievements = collectAchievementCompletion();
+
+        return {
+            schemaVersion: 3,
+            scriptVersion: SCRIPT_VERSION,
+            character: { ...state.character },
+            skills,
+            abilities,
+            auras,
+            labyrinthLoadouts,
+            houseRoomLevels,
+            achievements,
+            capturedAt: new Date().toISOString(),
+            source: location.hostname,
+        };
+    }
+
+    function downloadJSON(filename, data) {
+        const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json;charset=utf-8' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        setTimeout(() => { document.body.removeChild(a); URL.revokeObjectURL(url); }, 200);
+    }
+
+    // 输出格式：仍是数组（一个成员一项），字段命名与公会版对齐；
+    // 但用 labyrinthLoadouts 取代 wearableItemMap —— 后者是"身上当前装备"，
+    // 需求明确要求忽略；前者才是迷宫真正会用的所有配装。
+    // 与 buildMembersPayloadForBridge 共用同一份 profile 构造（JSON 下载 / 直送计算器只是出口不同）。
+    function exportJsonData() {
+        refreshLoadoutStatus();
+        const members = buildMembersPayloadForBridge();
+        if (!members) {
+            setStatus('尚未读取人物', 'error');
+            alert('请先进入游戏，等待人物数据加载完成后再导出。');
+            return;
+        }
+        const payload = buildPayload();
+        const loadouts = Array.isArray(payload.labyrinthLoadouts) ? payload.labyrinthLoadouts : [];
+        const houseCount = Object.keys(payload.houseRoomLevels || {}).length;
+        const achievementCount = Object.keys(payload.achievements || {}).length;
+        const safeName = (payload.character.name || 'self').replace(/[\\/:*?"<>|]/g, '_');
+        const dateStr = new Date().toISOString().slice(0, 10);
+        const filename = `MWI_迷宫配装_${safeName}_${dateStr}.json`;
+        downloadJSON(filename, members);
+        setStatus(`已导出 ${safeName}（${loadouts.length} 套配装 / ${houseCount} 房间 / ${achievementCount} 成就）`, 'good');
+    }
+
+    // ── 直送试炼计算器 ────────────────────────────────────────────────────
+    // 与迷宫胜率计算器的 simulator bridge 同款思路：
+    //   members JSON → base64url 编码 → 拼成 计算器URL#mwiImport=<encoded> → window.open。
+    // index.html 端在 init() 里解析 hash、走与"导入 JSON"相同的合并逻辑，并清掉 hash。
+    // base64url：把 base64 的 +/ 换成 -_、去掉结尾 =，保证放进 URL 无需再转义。
+    function encodeImportPayload(members) {
+        const json = JSON.stringify(members);
+        const bytes = new TextEncoder().encode(json);
+        let binary = '';
+        const CHUNK = 0x8000;
+        for (let i = 0; i < bytes.length; i += CHUNK) {
+            binary += String.fromCharCode.apply(null, bytes.subarray(i, i + CHUNK));
+        }
+        return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+    }
+
+    function getCalculatorUrl() {
+        try {
+            const saved = localStorage.getItem(CALC_URL_STORAGE_KEY);
+            if (saved && /^https?:\/\//.test(saved)) return saved;
+        } catch (_) { /* ignore */ }
+        return CALC_DEFAULT_URL;
+    }
+
+    function setCalculatorUrl() {
+        const current = getCalculatorUrl();
+        const input = prompt(
+            '试炼计算器页面地址（http(s)://，留空恢复默认 GitHub Pages 地址）：',
+            current
+        );
+        if (input === null) return;
+        const trimmed = String(input).trim();
+        try {
+            if (!trimmed) {
+                localStorage.removeItem(CALC_URL_STORAGE_KEY);
+                setStatus('已恢复默认计算器地址', 'good');
+                return;
+            }
+            if (!/^https?:\/\//.test(trimmed)) {
+                setStatus('地址必须是 http(s):// 开头', 'error');
+                return;
+            }
+            localStorage.setItem(CALC_URL_STORAGE_KEY, trimmed);
+            setStatus('计算器地址已保存', 'good');
+        } catch (_) {
+            setStatus('保存失败', 'error');
+        }
+    }
+
+    // 检查 SKILL_LABELS 中的每个技能是否都已配置了迷宫配装
+    function findMissingSkillLoadouts(labyrinthLoadouts) {
+        if (!Array.isArray(labyrinthLoadouts) || labyrinthLoadouts.length === 0) {
+            return [...SKILL_LABELS_CN];
+        }
+        const usedSuffixes = new Set();
+        for (const entry of labyrinthLoadouts) {
+            if (!entry || !Array.isArray(entry.usedBy)) continue;
+            for (const u of entry.usedBy) {
+                if (u && u.settingSuffix) usedSuffixes.add(String(u.settingSuffix));
+            }
+        }
+        const missing = [];
+        for (let i = 0; i < SKILL_LABELS.length; i++) {
+            if (!usedSuffixes.has(SKILL_LABELS[i])) missing.push(SKILL_LABELS_CN[i]);
+        }
+        return missing;
+    }
+
+    function formatMissingStatus(missing) {
+        if (!missing || missing.length === 0) return '';
+        if (missing.length === 1) return missing[0] + '配装为空';
+        if (missing.length <= 4) return missing.join('、') + '配装为空';
+        return missing.slice(0, 4).join('、') + '等' + missing.length + '项配装为空';
+    }
+
+    function hasEntries(value) {
+        if (!value) return false;
+        if (value instanceof Map) return value.size > 0;
+        if (typeof value === 'object') return Object.keys(value).length > 0;
+        return false;
+    }
+
+    // 检查当前 labyrinthLoadouts 并把缺失情况反映到右下角状态按钮
+    function refreshLoadoutStatus() {
+        if (!state.dataReady || !state.character) {
+            setStatus('等待人物数据', 'idle');
+            return [];
+        }
+        // React 游戏状态尚未挂载完成时，不要误报所有配装为空
+        const gs = getGameState();
+        if (gs == null) {
+            setStatus('等待游戏状态', 'idle');
+            return [];
+        }
+        const loadouts = collectLabyrinthLoadouts();
+        if (loadouts.length > 0) {
+            state.loadoutDataSeen = true;
+        }
+        const allMissing = loadouts.length === 0;
+        const withinGrace = !state.loadoutDataSeen && (Date.now() - state.loadoutCheckStartTime < 8000);
+        if (allMissing && withinGrace) {
+            setStatus('等待配装数据', 'idle');
+            return SKILL_LABELS_CN.slice();
+        }
+        const missing = findMissingSkillLoadouts(loadouts);
+        if (missing.length > 0) {
+            setStatus(formatMissingStatus(missing), 'error');
+        } else {
+            setStatus(`${state.character.name} 数据就绪，点击导出`, 'good');
+        }
+        return missing;
+    }
+
+    function buildMembersPayloadForBridge() {
+        const payload = buildPayload();
+        if (!payload) return null;
+        const loadouts = Array.isArray(payload.labyrinthLoadouts) ? payload.labyrinthLoadouts : [];
+        if (loadouts.length === 0) {
+            console.warn('[MWI Export Single] 未在 characterSetting 里读到任何 labyrinthLoadout*，请确认已在迷宫界面为至少一间房配好过装备。');
+        }
+        return [{
+            sharableCharacter: {
+                name: payload.character.name,
+                gameMode: payload.character.gameMode,
+            },
+            characterSkills: Object.entries(payload.skills).map(([k, v]) => ({
+                skillHrid: '/skills/' + k,
+                level: v,
+            })),
+            // 刻意不导出 wearableItemMap（当前身上装备）
+            labyrinthLoadouts: loadouts,
+            houseRoomLevels: payload.houseRoomLevels || {},
+            achievements: payload.achievements || {},
+            _source: 'self',
+            _capturedAt: payload.capturedAt,
+        }];
+    }
+
+    function sendToCalculator() {
+        const missing = refreshLoadoutStatus();
+        const members = buildMembersPayloadForBridge();
+        if (!members) {
+            setStatus('尚未读取人物', 'error');
+            alert('请先进入游戏，等待人物数据加载完成后再导出。');
+            return;
+        }
+        let encoded;
+        try {
+            encoded = encodeImportPayload(members);
+        } catch (error) {
+            console.error('[MWI Export Single] 编码失败，退回 JSON 下载：', error);
+            exportJsonData();
+            return;
+        }
+        if (encoded.length > MAX_IMPORT_URL_PAYLOAD_LENGTH) {
+            console.warn(`[MWI Export Single] 编码后 ${encoded.length} 字符超过 URL 上限，退回 JSON 下载。`);
+            exportJsonData();
+            return;
+        }
+        const base = getCalculatorUrl();
+        const sep = base.includes('#') ? '&' : '#';
+        const url = base + sep + IMPORT_HASH_PARAM + '=' + encoded;
+        window.open(url, '_blank', 'noopener,noreferrer');
+        setStatus('已发送到试炼计算器', 'good');
+    }
+
+    GM_registerMenuCommand('设置试炼计算器页面地址（必须！！！）', setCalculatorUrl);
+    GM_registerMenuCommand('显示分工（读取共享空间排刀）', () => { void refreshAssignment({ force: true }); });
+    //GM_registerMenuCommand('发送到试炼计算器', sendToCalculator);
+    //GM_registerMenuCommand('导出当前角色全部迷宫配装到 JSON', exportJsonData);
+
+    hookWebSocketMessages();
+
+    function cleanupStatusPolling() {
+        if (state.statusPollInterval) {
+            clearInterval(state.statusPollInterval);
+            state.statusPollInterval = null;
+        }
+        clearTimeout(assignmentState.timer);
+        if (assignmentState.pollTimer) { clearInterval(assignmentState.pollTimer); assignmentState.pollTimer = null; }
+        if (assignmentState.observer) { assignmentState.observer.disconnect(); assignmentState.observer = null; }
+    }
+
+    // ── 分工：加密/解密（与 index.html 完全一致）──────────────────────
+    async function deriveKey(password, salt) {
+        const enc = new TextEncoder();
+        const keyMaterial = await crypto.subtle.importKey('raw', enc.encode(password), 'PBKDF2', false, ['deriveKey']);
+        return crypto.subtle.deriveKey({ name: 'PBKDF2', salt: enc.encode(salt), iterations: 100000, hash: 'SHA-256' }, keyMaterial, { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
+    }
+    function bytesToBase64(bytes) {
+        let bin = '';
+        const chunk = 0x8000;
+        for (let i = 0; i < bytes.length; i += chunk) bin += String.fromCharCode.apply(null, bytes.subarray(i, i + chunk));
+        return btoa(bin);
+    }
+    function base64ToBytes(b64) {
+        const bin = atob(b64);
+        const bytes = new Uint8Array(bin.length);
+        for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+        return bytes;
+    }
+    async function decryptBytes(b64, key) {
+        const combined = base64ToBytes(b64);
+        const iv = combined.slice(0, 12);
+        const ct = combined.slice(12);
+        return new Uint8Array(await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, ct));
+    }
+    async function gunzipBytes(bytes) {
+        if (typeof DecompressionStream === 'undefined') return bytes;
+        const ds = new DecompressionStream('gzip');
+        const writer = ds.writable.getWriter();
+        writer.write(bytes); writer.close();
+        const ab = await new Response(ds.readable).arrayBuffer();
+        return new Uint8Array(ab);
+    }
+    async function decryptRecord(rec, key) {
+        const bytes = await decryptBytes(rec.d, key);
+        const gz = await gunzipBytes(bytes);
+        return new TextDecoder().decode(gz);
+    }
+    // 跨域 GET：优先 GM_xmlhttpRequest，回退 fetch。
+    function httpGet(url) {
+        return new Promise((resolve) => {
+            const gm = typeof GM_xmlhttpRequest !== 'undefined' ? GM_xmlhttpRequest : (typeof GM !== 'undefined' && GM.xmlHttpRequest ? GM.xmlHttpRequest : null);
+            if (gm) {
+                gm({
+                    method: 'GET',
+                    url,
+                    timeout: 15000,
+                    onload: (r) => resolve({ status: r.status, responseText: r.responseText }),
+                    onerror: () => resolve({ status: 0, responseText: '' }),
+                    ontimeout: () => resolve({ status: 0, responseText: '' }),
+                });
+            } else {
+                fetch(url).then(r => r.text().then(t => resolve({ status: r.status, responseText: t })))
+                    .catch(() => resolve({ status: 0, responseText: '' }));
+            }
+        });
+    }
+    // 从计算器地址解析 guild/bin/pwd（与 index.html 共享空间一致）。
+    function assignmentConfig() {
+        let url;
+        try { url = new URL(getCalculatorUrl()); } catch { return null; }
+        const guild = url.searchParams.get('guild') || 'KUNPO';
+        const binId = url.searchParams.get('bin');
+        const pwd = url.searchParams.get('pwd');
+        if (!binId || !pwd) return null;
+        return { guild, binId, password: pwd };
+    }
+    async function fetchPlan() {
+        const cfg = assignmentConfig();
+        if (!cfg) throw new Error('计算器地址缺少 bin/pwd');
+        const key = await deriveKey(cfg.password, cfg.guild);
+        const resp = await httpGet(`${BIN_BASE}/${cfg.binId}/latest`);
+        if (resp.status !== 200 || !resp.responseText) throw new Error(`HTTP ${resp.status}`);
+        let json;
+        try { json = JSON.parse(resp.responseText); } catch { throw new Error('解析失败'); }
+        if (!json || !json.record || !json.record.d) throw new Error('云端无数据');
+        const dec = await decryptRecord(json.record, key);
+        return JSON.parse(dec);
+    }
+    function memberEntry() {
+        const plan = assignmentState.doc;
+        const name = String((state.character && state.character.name) || '').trim();
+        if (!plan || !plan.m || !name) return null;
+        return { name, entry: plan.m[name] || null };
+    }
+    function maskToSlugs(mask) {
+        const m = Number(mask) || 0;
+        const out = [];
+        for (let i = 0; i < BATTLE_TRIAL_SLUGS.length; i++) if (m & (1 << i)) out.push(BATTLE_TRIAL_SLUGS[i]);
+        return out;
+    }
+    function combatAbilityIconUrl(slug) { return `${COMBAT_ABILITY_ICON_BASE}/${slug}.png`; }
+    function combatAbilityName(slug) { return ABILITY_NAME_ZH[slug] || slug; }
+    // 卡片是否对应某试炼图标（游戏 SVG use 的 href/xlink:href 含 #trial_<slug>）。
+    function cardMatchesSlug(card, slug) {
+        if (!card) return false;
+        const uses = card.querySelectorAll('use');
+        for (const u of uses) {
+            const href = u.getAttribute('href') || u.getAttribute('xlink:href') || u.getAttributeNS('http://www.w3.org/1999/xlink', 'href') || '';
+            if (href.indexOf('trial_' + slug) >= 0) return true;
+        }
+        return false;
+    }
+    function injectAssignmentStyle() {
+        if (document.getElementById('kunpo-assignment-style')) return;
+        const style = document.createElement('style');
+        style.id = 'kunpo-assignment-style';
+        style.textContent =
+            '[data-kunpo-assignment="combat"]{position:relative;z-index:2;outline:3px solid #ffd60a!important;outline-offset:-3px;box-shadow:0 0 0 2px #ffd60a,0 0 22px #ffd60a88!important}' +
+            '.kunpo-assignment-badge{position:absolute;z-index:4;right:6px;top:6px;padding:3px 7px;border-radius:999px;background:#0a84ff;color:#fff;font:700 11px/1.2 system-ui,sans-serif;box-shadow:0 2px 8px #0008;pointer-events:none;white-space:nowrap}' +
+            '.kunpo-skill-panel{width:100%;box-sizing:border-box;margin:14px 0 4px;padding:12px 14px;border:1px solid #ff5a6499;border-left:4px solid #ff453a;border-radius:10px;background:linear-gradient(105deg,#25181dd9,#171a24e8);color:#f5f7ff;box-shadow:0 8px 20px #0005;font:600 12px/1.3 system-ui,sans-serif}' +
+            '.kunpo-skill-panel-heading{display:flex;align-items:baseline;justify-content:space-between;gap:10px;margin-bottom:9px}' +
+            '.kunpo-skill-panel-heading strong{color:#ff737b;font-size:16px}' +
+            '.kunpo-skill-panel-heading span{color:#c9cedd;font-size:11px}' +
+            '.kunpo-skill-grid{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:7px}' +
+            '.kunpo-skill-chip{display:flex;min-width:0;flex-direction:column;align-items:center;gap:2px;padding:7px 3px;border:1px solid #59647d;border-radius:7px;background:#252b3a;color:#f5f7ff;text-align:center}' +
+            '.kunpo-skill-icon{width:34px;height:34px;object-fit:contain;display:block;flex:0 0 34px}' +
+            '.kunpo-skill-chip small{color:#c9d4ff;font-size:10px}' +
+            '.kunpo-skill-chip[data-slot="aura"]{border:2px solid #30d158;background:#16331f;box-shadow:0 0 9px #30d15899}' +
+            '@media(max-width:760px){.kunpo-skill-grid{gap:3px}.kunpo-skill-chip{padding:5px 2px;font-size:10px}.kunpo-skill-icon{width:28px;height:28px;flex-basis:28px}}';
+        document.head.appendChild(style);
+    }
+    function clearAssignmentUi() {
+        document.querySelectorAll('[data-kunpo-assignment="combat"]').forEach(n => delete n.dataset.kunpoAssignment);
+        document.querySelectorAll('.kunpo-assignment-badge,.kunpo-skill-panel').forEach(n => n.remove());
+    }
+    function buildSkillChip(slug, slot, label) {
+        const chip = document.createElement('span');
+        chip.className = 'kunpo-skill-chip';
+        if (slot === 'aura') chip.dataset.slot = 'aura';
+        const icon = document.createElement('img');
+        icon.className = 'kunpo-skill-icon';
+        icon.src = combatAbilityIconUrl(slug);
+        icon.alt = combatAbilityName(slug);
+        icon.loading = 'eager';
+        icon.decoding = 'async';
+        icon.addEventListener('error', () => { icon.hidden = true; });
+        chip.appendChild(icon);
+        const lbl = document.createElement('span');
+        lbl.textContent = label + '·' + combatAbilityName(slug);
+        chip.appendChild(lbl);
+        const lv = document.createElement('small');
+        lv.textContent = '';
+        chip.appendChild(lv);
+        return chip;
+    }
+    function renderSkillPanel(anchorCard, prof, skills) {
+        const anchor = anchorCard && anchorCard.parentElement;
+        const host = anchor && anchor.parentElement;
+        if (!host || !anchor) return false;
+        const panel = document.createElement('section');
+        panel.className = 'kunpo-skill-panel';
+        panel.setAttribute('aria-label', '本周战斗技能');
+        const heading = document.createElement('div');
+        heading.className = 'kunpo-skill-panel-heading';
+        const title = document.createElement('strong');
+        title.textContent = '本周战斗技能';
+        const sub = document.createElement('span');
+        sub.textContent = prof ? ('职业：' + prof + ' · 按从左到右顺序携带') : '按从左到右顺序携带';
+        heading.append(title, sub);
+        const grid = document.createElement('div');
+        grid.className = 'kunpo-skill-grid';
+        if (skills.a) grid.appendChild(buildSkillChip(skills.a, 'aura', '光环'));
+        ['s1', 's2', 's3', 's4'].forEach(function (k) {
+            if (skills[k]) grid.appendChild(buildSkillChip(skills[k], k, k.toUpperCase().replace('S', '技能')));
+        });
+        panel.append(heading, grid);
+        host.insertAdjacentElement('afterend', panel);
+        return true;
+    }
+    function renderAssignmentUi() {
+        if (!document.body) return;
+        assignmentState.rendering = true;
+        try {
+            injectAssignmentStyle();
+            clearAssignmentUi();
+            const me = memberEntry();
+            const cards = [...document.querySelectorAll(TRIAL_CARD_SELECTOR)];
+            if (!me || !me.entry) {
+                if (cards.length) showAssignmentToast('本周分工里没有找到你的战斗试炼');
+                return;
+            }
+            const [lifeIdx, battleMask, prof] = me.entry;
+            const slugs = maskToSlugs(battleMask);
+            let firstCard = null;
+            cards.forEach(function (card) {
+                const hit = slugs.some(function (s) { return cardMatchesSlug(card, s); });
+                if (!hit) return;
+                    card.dataset.kunpoAssignment = 'combat';
+                card.querySelectorAll('.kunpo-assignment-badge').forEach(n => n.remove());
+                const badge = document.createElement('span');
+                badge.className = 'kunpo-assignment-badge';
+                badge.textContent = '你的分工';
+                card.appendChild(badge);
+                if (!firstCard) firstCard = card;
+            });
+            // 技能面板
+            const skills = (assignmentState.doc && assignmentState.doc.s && prof) ? assignmentState.doc.s[prof] : null;
+            if (firstCard && skills && (skills.a || skills.s1 || skills.s2 || skills.s3 || skills.s4)) {
+                renderSkillPanel(firstCard, prof, skills);
+            }
+            const lifeName = (Number.isInteger(lifeIdx) && lifeIdx >= 0) ? ('生活试炼 #' + (lifeIdx + 1)) : '生活未分配';
+            showAssignmentToast('已高亮分工：' + (slugs.length ? slugs.join('、') : '无战斗') + ' / ' + lifeName);
+        } finally {
+            assignmentState.rendering = false;
+        }
+    }
+    function assignmentFresh() {
+        if (!assignmentState.fetchedAt) return false;
+        const ttl = assignmentState.doc ? ASSIGNMENT_CACHE_MS : ASSIGNMENT_POLL_MS;
+        return Date.now() - assignmentState.fetchedAt < ttl;
+    }
+    async function refreshAssignment({ force = false } = {}) {
+        const name = String((state.character && state.character.name) || '').trim();
+        if (!name) { showAssignmentToast('等待读取游戏角色名'); return; }
+        if (!force && assignmentFresh()) {
+            if (assignmentState.doc && document.querySelector(TRIAL_CARD_SELECTOR)) renderAssignmentUi();
+            return;
+        }
+        if (assignmentState.inFlight) return;
+        assignmentState.inFlight = true;
+        assignmentState.lastCharacterName = name;
+        try {
+            const plan = await fetchPlan();
+            // 过期判断（与 index.html 一致）
+            const dl = plan && plan.t ? Date.parse(plan.t) : NaN;
+            if (!Number.isFinite(dl) || Date.now() > dl) {
+                assignmentState.doc = null;
+                assignmentState.fetchedAt = Date.now();
+                clearAssignmentUi();
+                showAssignmentToast('排刀未发布');
+                return;
+            }
+            assignmentState.doc = plan;
+            assignmentState.fetchedAt = Date.now();
+            renderAssignmentUi();
+        } catch (e) {
+            assignmentState.doc = null;
+            assignmentState.fetchedAt = Date.now();
+            clearAssignmentUi();
+            showAssignmentToast('读取分工失败：' + (e && e.message ? e.message : e));
+        } finally {
+            assignmentState.inFlight = false;
+        }
+    }
+    function scheduleAssignmentRefresh(delay) {
+        clearTimeout(assignmentState.timer);
+        assignmentState.timer = setTimeout(() => { void refreshAssignment(); }, delay || 0);
+    }
+    function installAssignmentObserver() {
+        if (assignmentState.observer || !document.body) return;
+        assignmentState.observer = new MutationObserver(function () {
+            if (assignmentState.rendering) return;
+            if (!assignmentState.doc) return;
+            if (!document.querySelector(TRIAL_CARD_SELECTOR)) return;
+            clearTimeout(assignmentState.timer);
+            assignmentState.timer = setTimeout(renderAssignmentUi, 250);
+        });
+        assignmentState.observer.observe(document.body, { childList: true, subtree: true });
+    }
+    function initAssignment() {
+        installAssignmentObserver();
+        // 角色名变化或定时轮询。
+        assignmentState.pollTimer = setInterval(function () {
+            const name = String((state.character && state.character.name) || '').trim();
+            if (name && name !== assignmentState.lastCharacterName) { scheduleAssignmentRefresh(0); return; }
+            if (name && !assignmentFresh()) scheduleAssignmentRefresh(0);
+        }, 5000);
+        // 启动后稍候尝试一次。
+        scheduleAssignmentRefresh(3000);
+    }
+    // 轻量 toast：不依赖面板，3 秒自动消失。
+    let assignmentToastTimer = null;
+    function showAssignmentToast(text) {
+        let el = document.getElementById('kunpo-assignment-toast');
+        if (!el) {
+            el = document.createElement('div');
+            el.id = 'kunpo-assignment-toast';
+            el.style.cssText = 'position:fixed;left:50%;bottom:64px;transform:translateX(-50%);z-index:2147483647;padding:8px 14px;border-radius:8px;background:rgba(20,26,44,.95);color:#eef3ff;border:1px solid #6f9bd8;font:600 12px/1.4 system-ui,sans-serif;box-shadow:0 6px 18px rgba(0,0,0,.4);pointer-events:none;max-width:90vw;white-space:pre-wrap;text-align:center';
+            document.body.appendChild(el);
+        }
+        el.textContent = text;
+        clearTimeout(assignmentToastTimer);
+        assignmentToastTimer = setTimeout(() => { if (el) el.remove(); }, 3500);
+    }
+
+    function boot() {
+        mountExportUi();
+        initAssignment();
+    }
+
+    if (window.__mwiSingleCleanup) window.__mwiSingleCleanup();
+    window.__mwiSingleCleanup = cleanupStatusPolling;
+    window.addEventListener('beforeunload', cleanupStatusPolling);
+
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', boot, { once: true });
+    } else {
+        boot();
+    }
+})();
