@@ -969,7 +969,7 @@ table.member-table tbody tr:hover td.sticky-l.name-cell { background-color:var(-
 <script>
 
 // 版本号：发版时改这里即可（显示在标题“MWI 试炼计算器”后面）。
-const APP_VERSION = '1.0.1';
+const APP_VERSION = '1.0.0';
 
 // === i18n ===
 const I18N = {
@@ -3811,12 +3811,26 @@ function toggleSkillConfigMode() {
   syncMemberViewTabs();
 }
 // 当前排刀出战的职业：战斗试炼1/2 勾选的出战职业合集，顺序沿用《所有职业》下拉（state.professions）的顺序。
+// 有效排刀（未过期）：用于技能配置继承服务器旧数据。
+function skillPlanAvailable() {
+  const p = state.plan;
+  if (!p || !p.t) return false;
+  const dl = Date.parse(p.t);
+  return Number.isFinite(dl) && Date.now() <= dl;
+}
+// 技能配置显示的职业集合：
+//   有有效排刀时 = 本地出战职业 ∪ 服务器 plan.s 的职业（成员端本地为空 → 即服务器职业）；
+//   无排刀时 = 本地出战职业。顺序沿用《所有职业》下拉（state.professions）。
 function skillConfigProfessions() {
+  const order = state.professions || [];
   const chosen = new Set();
   [0, 1].forEach(function(i) {
     (state.displayBattleTrialProfessions[i] || []).forEach(function(p) { chosen.add(p); });
   });
-  return (state.professions || []).filter(function(p) { return chosen.has(p); });
+  if (skillPlanAvailable() && state.plan.s) {
+    Object.keys(state.plan.s).forEach(function(p) { chosen.add(p); });
+  }
+  return order.filter(function(p) { return chosen.has(p); });
 }
 // 光环类图标：5 个 *_aura，加上疯狂 / 无敌 / 复活（与游戏内 AURA_MAP 口径一致）。
 function isAuraIcon(id) {
@@ -3830,10 +3844,23 @@ function skillAbilityList(field) {
 function skillAbilityById(id) {
   return COMBAT_ABILITY_ICONS.find(function(ab) { return ab.id === id; }) || null;
 }
+// 把服务器 plan.s[prof] 的 slug 还原为 ability_<slug>。
+function skillConfigFromServer(prof) {
+  if (!skillPlanAvailable() || !state.plan.s || !state.plan.s[prof]) return null;
+  const s = state.plan.s[prof];
+  const wrap = function(v) { return v ? 'ability_' + v : null; };
+  return { aura: wrap(s.a), s1: wrap(s.s1), s2: wrap(s.s2), s3: wrap(s.s3), s4: wrap(s.s4) };
+}
+// 取某职业当前生效的技能配置：本地优先，本地为空的位置继承服务器旧数据。
 function skillConfigOf(prof) {
   if (!state.skillConfigByProf) state.skillConfigByProf = {};
-  const cfg = state.skillConfigByProf[prof];
-  return cfg && typeof cfg === 'object' ? cfg : { aura: null, s1: null, s2: null, s3: null, s4: null };
+  const local = state.skillConfigByProf[prof] || {};
+  const srv = skillConfigFromServer(prof) || {};
+  const out = { aura: null, s1: null, s2: null, s3: null, s4: null };
+  ['aura', 's1', 's2', 's3', 's4'].forEach(function(k) {
+    out[k] = local[k] || srv[k] || null;
+  });
+  return out;
 }
 // 单个格子：未选 → 虚线空框；已选 → 图标 + ▾，点击展开（光环只列光环、技能只列非光环）。
 function skillCellHtml(blockIdx, field, label, value) {
