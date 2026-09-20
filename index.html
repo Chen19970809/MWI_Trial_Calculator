@@ -103,6 +103,8 @@ h2 { font-size:16px; margin:10px 0 8px; color:var(--text-muted); }
 #display-cols-input { width:56px; text-align:center; }
 #display-rows-input { width:160px; text-align:center; }
 #display-profession-select { max-width:160px; padding:2px 4px; border:1px solid var(--border); border-radius:3px; font-size:12px; background:var(--input-bg); color:var(--text); }
+#display-plan-deadline-input { padding:2px 4px; border:1px solid var(--border); border-radius:3px; font-size:12px; background:var(--input-bg); color:var(--text); }
+#plan-status { cursor:default; color:var(--text-muted); }
 /* 展示设置第二行：战斗试炼图标单选下拉（仅图标区域可点击） */
 .battle-trial-options { display:flex; gap:14px; align-items:center; flex-wrap:wrap; width:100%; }
 .battle-trial-item { display:flex; align-items:center; gap:6px; flex:1 1 auto; min-width:0; }
@@ -860,6 +862,12 @@ table.member-table tbody tr:hover td.sticky-l.name-cell { background-color:var(-
     <button class="btn btn-sm" id="btn-clear-battle-edit" onclick="clearDisplayBattleOverrides()" title="">清除单独修改</button>
     <a class="btn btn-sm" id="btn-signup-bookmark" draggable="true" onclick="return false" title="" href="javascript:(function(){try{var t=document.querySelector('table[class*=&quot;membersTable&quot;]')||document.querySelector('table[class*=&quot;member&quot;]');if(!t){alert('未找到成员表，请先打开 公会 > 成员 > 贡献');return;}var out=[];Array.prototype.forEach.call(t.rows,function(tr){var n=tr.querySelector('[data-name]');if(!n)return;var trials=[],skills=[];Array.prototype.forEach.call(tr.querySelectorAll('span[class*=&quot;signupIcon&quot;]'),function(sp){var u=sp.querySelector('use');var href=u?(u.getAttribute('href')||u.getAttribute('xlink:href')||''):'';var id=href.split('#')[1]||'';if(!id)return;if(id.indexOf('trial_')===0)trials.push(id.slice(6));else skills.push(id);});var tt=tr.querySelector('[class*=&quot;trialTiers&quot;]');out.push({name:n.getAttribute('data-name'),trials:trials,skills:skills,tier:tt?(tt.textContent||'').trim():''});});if(!out.length){alert('表格里没有成员行');return;}var text='MWI_SIGNUPS_V1'+JSON.stringify({v:1,capturedAt:Date.now(),members:out});try{navigator.clipboard.writeText(text).catch(function(){});}catch(e){}alert('已抓取 '+out.length+' 位成员报名状态。回到 MWI 计算器页面会自动导入（或点“导入报名”）。');}catch(e){alert('抓取失败：'+e.message);}})()">抓取报名状态</a>
     <button class="btn btn-sm" id="btn-signup-compare" onclick="toggleSignupCompare()" title="">对比报名状态</button>
+    <label class="global-buff-item" id="ds-item-plan-deadline" title="">
+      <span class="global-buff-label" id="ds-lbl-plan-deadline">截止时间</span>
+      <input type="datetime-local" id="display-plan-deadline-input">
+    </label>
+    <button class="btn btn-sm btn-primary" id="btn-publish-plan" onclick="publishDisplayPlan()">发布试炼</button>
+    <span class="global-buff-label" id="plan-status" style="cursor:default"></span>
   </div>
   <!-- 第二行：战斗试炼1（图标单选下拉 + 出战职业多选下拉） -->
   <div class="display-settings-bar" id="display-settings-row2">
@@ -894,7 +902,7 @@ table.member-table tbody tr:hover td.sticky-l.name-cell { background-color:var(-
 <script>
 
 // 版本号：发版时改这里即可（显示在标题“MWI 试炼计算器”后面）。
-const APP_VERSION = '1.0.0';
+const APP_VERSION = '1.0.1';
 
 // === i18n ===
 const I18N = {
@@ -923,6 +931,9 @@ const I18N = {
     battleStatTotal:'人数', battleStatHeal:'奶', battleStatFork:'绿叉', battleStatShield:'盾', battleStatBow:'弓',
     buffGroupTitle:'加成与约束', buffGroupTip:'点击折叠/展开：全局加成、公会建筑、公会神龛、进度约束',
     clearBattleEdit:'清除单独修改', clearBattleEditTip:'清除所有成员的单独指定，战斗结果恢复按「职业是否属于出战职业」自动计算',
+    publishPlanBtn:'发布试炼', planDeadline:'截止时间', planDeadlineTip:'把每个人的生活分配、战斗分配、职业选择连同截止时间一起上传。截止前其他人点「获取」会读取该排刀；超过截止时间后不再读取并提示「排刀未发布」。',
+    planNeedDeadline:'请先选择截止时间', planDeadlinePassed:'截止时间已过，请重新选择', planPublished:'排刀已发布并上传（截止 {t}）',
+    planNotPublished:'排刀未发布', planActive:'排刀生效中，截止 {t}', planExpired:'排刀已过期',
     signupBookmark:'抓取报名状态', signupBookmarkTip:'把我拖到浏览器书签栏；之后在「公会 > 成员 > 贡献」页面点这个书签，会把全员报名状态复制到剪贴板，切回本页即自动导入',
     signupCompare:'对比报名状态', signupCompareTip:'点一次：提示按 Ctrl+V 粘贴《抓取报名状态》书签抓到的报名数据，并在展示区「分配」「战斗」后各加一列《当前》（红框=与当前结果不一致）；再点一次关闭',
     signupPastePrompt:'请在本页按 Ctrl+V 粘贴报名数据：先在「公会 > 成员 > 贡献」页点击《抓取报名状态》书签，再回到本页按 Ctrl+V。',
@@ -1042,6 +1053,9 @@ const I18N = {
     battleStatTotal:'Members', battleStatHeal:'Heal', battleStatFork:'Blooming Trident', battleStatShield:'Shield', battleStatBow:'Bow',
     buffGroupTitle:'Buffs & Constraints', buffGroupTip:'Click to collapse/expand: Global Buffs, Guild Buildings, Guild Shrines, Progress Constraint',
     clearBattleEdit:'Clear Manual', clearBattleEditTip:'Clear all manual overrides; battle results fall back to auto match by profession',
+    publishPlanBtn:'Publish Trial', planDeadline:'Deadline', planDeadlineTip:'Upload everyone\'s life assignment, battle assignment and profession with a deadline. Others can pull the plan before the deadline; after it expires it is no longer applied and "plan not published" is shown.',
+    planNeedDeadline:'Please pick a deadline first', planDeadlinePassed:'The deadline has already passed, pick a new one', planPublished:'Plan published and uploaded (deadline {t})',
+    planNotPublished:'Plan not published', planActive:'Plan active, deadline {t}', planExpired:'Plan expired',
     signupBookmark:'Fetch Signups', signupBookmarkTip:'Drag me to the bookmarks bar; clicking it on Guild > Members > Contributions copies every signup to the clipboard, and this page imports it automatically when you switch back',
     signupCompare:'Compare Signups', signupCompareTip:'Click once to be prompted to paste (Ctrl+V) the signup data captured by the Fetch Signups bookmark, then a Current column is added after Battle and Life (red box = mismatch); click again to turn it off',
     signupPastePrompt:'Press Ctrl+V on this page to paste the signup data: first click the Fetch Signups bookmark on Guild > Members > Contributions, then come back and press Ctrl+V.',
@@ -2079,6 +2093,9 @@ let state = {
   signupByName: {},
   // 上一次《平均分配》实际分配到的人（memberId → true），用于重新分配/撤销时恢复自动计算。仅本地保存。
   displayEvenSplitAssigned: {},
+  // 《发布试炼》生成的排刀快照：{ _ts, t: 截止时间ISO, m: { "角色名": [生活试炼idx(-1=未分配), 战斗图标位掩码, "职业"] } }。
+  // 顶层独立结构（不进成员 item），随 saveData 本地保存、随 uploadToServer 整体上传；截止前拉取方生效，过期即丢弃。
+  plan: null,
   // 《单独修改》：为单个成员手动指定的战斗图标（memberId → BATTLE_TRIAL_ICONS 下标）。仅本地保存。
   displayBattleOverrides: {},
   // 是否开启《单独修改》（可点击成员战斗列图标修改战斗结果）。仅本地保存。
@@ -3711,23 +3728,113 @@ function renderDisplaySettings() {
   if (rowsInput && document.activeElement !== rowsInput) rowsInput.value = state.displayRows;
   const battleEditInput = document.getElementById('display-battle-edit-input');
   if (battleEditInput) battleEditInput.checked = !!state.displayBattleEdit;
+  // 截止时间默认填本周日 23:59（仅首次为空时）。
+  const planInput = document.getElementById('display-plan-deadline-input');
+  if (planInput && !planInput.value) {
+    const d = new Date();
+    d.setDate(d.getDate() + ((7 - d.getDay()) % 7));
+    const p = n => String(n).padStart(2, '0');
+    planInput.value = d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate()) + 'T23:59';
+  }
+  updatePlanStatusText();
   renderProfessionSelect();
   renderBattleTrialOptions();
   renderDisplayArea();
 }
-// 某成员最终归属的战斗图标下标集合：有《单独修改》/《平均分配》指定时取指定值，否则按职业是否属于各试炼的出战职业。
+// 某成员最终归属的战斗图标下标集合：已发布且未过期的排刀（plan）优先；否则走《单独修改》/《平均分配》/按职业自动匹配。
 function displayMemberBattleIcons(p) {
+  const pp = displayPlanFor(p);
+  if (pp) return battleIconsFromMask(pp[1]);
+  return memberBattleIconsRaw(p);
+}
+// 未发布排刀时的原始计算（发布快照也用它，避免旧排刀自引用）。
+function memberBattleIconsRaw(p) {
   const ov = state.displayBattleOverrides[String(p.id)];
   if (ov !== undefined && ov !== null) {
     // 单独指定：正常图标 → [图标]；手动清空 → 无任何图标
     return (Number.isInteger(ov) && ov >= 0 && ov < BATTLE_TRIAL_ICONS.length) ? [ov] : [];
   }
-  const prof = displayMemberProfession(p);
+  const prof = displayMemberProfessionRaw(p);
   const icons = [];
   for (let j = 0; j < 2; j++) {
     if ((state.displayBattleTrialProfessions[j] || []).indexOf(prof) >= 0) icons.push(state.displayBattleTrialIcons[j] || 0);
   }
   return icons;
+}
+// ══ 排刀发布（plan）══════════════════════════════════════════════════
+// 结构选择：顶层独立字段（不塞进每个成员 item）。原因：
+//   1) 成员 merge 按 name/_ts/本人覆盖，塞进 item 会被个人端上传冲掉会长的排刀；
+//   2) plan 是会长一次性发布的只读快照，整体替换、按截止时间整体失效，顶层最干净；
+//   3) 数据量最小：{ _ts, t, m:{ "名字":[生活试炼idx(-1=未分配), 战斗位掩码, "职业"] } }，每人 ~15 字节。
+// 战斗位掩码：bit i = BATTLE_TRIAL_ICONS[i]（1=刺猬 2=虫群 4=变色龙 8=水母 16=獾）。
+function displayPlanActive() {
+  // 会长端是排刀的来源：始终按本地编辑实时显示，避免发布后被快照锁死；仅个人端读取生效的排刀。
+  if (isGuildLeader()) return false;
+  const plan = state.plan;
+  if (!plan || !plan.t || !plan.m) return false;
+  const dl = Date.parse(plan.t);
+  return Number.isFinite(dl) && Date.now() <= dl;
+}
+function displayPlanFor(p) {
+  if (!displayPlanActive()) return null;
+  const entry = (state.plan.m || {})[String((p && p.name) || '').trim()];
+  return (Array.isArray(entry) && entry.length >= 3) ? entry : null;
+}
+function battleIconsFromMask(mask) {
+  const out = [];
+  const m = Number(mask) || 0;
+  for (let i = 0; i < BATTLE_TRIAL_ICONS.length; i++) if (m & (1 << i)) out.push(i);
+  return out;
+}
+function formatPlanDeadline(iso) {
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return String(iso);
+  const p = n => String(n).padStart(2, '0');
+  return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate()) + ' ' + p(d.getHours()) + ':' + p(d.getMinutes());
+}
+// 快照每个人：生活分配（试炼下标）、战斗分配（图标位掩码）、职业选择。
+function buildDisplayPlan(deadlineIso) {
+  const m = {};
+  (state.members || []).forEach(p => {
+    if (!p || !p.name) return;
+    const assign = state.assignment ? state.assignment[p.id] : -1;
+    const life = (Number.isInteger(assign) && assign >= 0) ? assign : -1;
+    let mask = 0;
+    memberBattleIconsRaw(p).forEach(idx => { if (idx >= 0 && idx < BATTLE_TRIAL_ICONS.length) mask |= (1 << idx); });
+    m[String(p.name).trim()] = [life, mask, displayMemberProfessionRaw(p) || ''];
+  });
+  return { _ts: Date.now(), t: deadlineIso, m: m };
+}
+// 《发布试炼》按钮：构建 plan → 本地保存 → 走统一的上传通道（含大小确认弹窗）。
+async function publishDisplayPlan() {
+  if (!isGuildLeader()) { alert(t('leaderOnly')); return; }
+  if (!state.isShared || !state.binId || !state.encKey) { alert(t('notShared')); return; }
+  const input = document.getElementById('display-plan-deadline-input');
+  const raw = input ? String(input.value || '').trim() : '';
+  const dl = new Date(raw);
+  if (!raw || isNaN(dl.getTime())) { alert(t('planNeedDeadline')); return; }
+  if (Date.now() >= dl.getTime()) { alert(t('planDeadlinePassed')); return; }
+  state.plan = buildDisplayPlan(dl.toISOString());
+  saveData();
+  renderDisplaySettings();
+  renderBattleTrialOptions(); // 统计块切换为排刀数据
+  renderDisplayArea();
+  const ok = await uploadToServer();
+  if (ok) alert(t('planPublished').replace('{t}', formatPlanDeadline(state.plan.t)));
+}
+// 展示设置行的排刀状态文字。
+function updatePlanStatusText() {
+  const el = document.getElementById('plan-status');
+  if (!el) return;
+  const plan = state.plan;
+  if (plan && plan.t) {
+    const dl = Date.parse(plan.t);
+    el.textContent = (Number.isFinite(dl) && Date.now() <= dl)
+      ? t('planActive').replace('{t}', formatPlanDeadline(plan.t))
+      : t('planExpired');
+  } else {
+    el.textContent = '';
+  }
 }
 // 战斗试炼 i 的统计：分配总人数（图标命中该试炼的人数），以及其中职业含「奶」「盾」「弓」的人（记数量与名单）。
 function battleTrialStats(i) {
@@ -4010,7 +4117,9 @@ function renderDisplayArea() {
   }
   area.innerHTML = slices.map(list => {
     const rowsHtml = list.map(({ p, rowIdx }) => {
-      const assign = state.assignment ? state.assignment[p.id] : -1;
+      // 生活列：已发布且未过期的排刀优先；否则用本地计算的最优分配。
+      const pp = displayPlanFor(p);
+      const assign = pp ? ((Number.isInteger(pp[0]) && pp[0] >= 0) ? pp[0] : -1) : (state.assignment ? state.assignment[p.id] : -1);
       const assignClass = assign >= 0 ? 'assign-T'+(assign+1) : 'assign-none';
       const assignContent = assign >= 0 ? svgIcon(SKILL_KEYS[state.trials[assign].skill], 22, 22) : '-';
       // 未手动选择过（或原选择已不在当前职业列表中）时，默认选中该成员职业列表的第一个值；手动选空则保留空。
@@ -4041,7 +4150,13 @@ function renderDisplayArea() {
   positionBattleDropdown();
 }
 // 成员当前生效的职业：未手动选择过（或原选择已不在当前职业列表中）时取职业列表第一个（原始顺序）；手动选空则为空。
+// 成员当前生效的职业：排刀（plan）优先；否则未手动选择时取职业列表第一个，手动选空则为空。
 function displayMemberProfession(p) {
+  const pp = displayPlanFor(p);
+  if (pp) return String(pp[2] || '');
+  return displayMemberProfessionRaw(p);
+}
+function displayMemberProfessionRaw(p) {
   const storedProf = state.displayProfessions[String(p.id)];
   const profList = (state.professionsByName && state.professionsByName[p.name]) || [];
   if (storedProf === undefined) return profList.length ? profList[0] : '';
@@ -4054,6 +4169,10 @@ function displayProfessionSelectHtml(p, selected) {
   const id = String(p.id).replace(/["'\\]/g, '');
   const opts = ['<option value=""'+(selected ? '' : ' selected')+'>'+escHtml(t('profEmptyOption'))+'</option>']
     .concat(list.map(v => '<option value="'+escHtml(v)+'"'+(v === selected ? ' selected' : '')+'>'+escHtml(v)+'</option>'));
+  // 排刀带来的职业可能不在本地导入列表里（拉取方没导入 xlsx）：补一个选项保证能显示。
+  if (selected && list.indexOf(selected) < 0) {
+    opts.push('<option value="'+escHtml(selected)+'" selected>'+escHtml(selected)+'</option>');
+  }
   return '<select class="display-prof-select '+professionToneClass(selected)+'" onchange="onDisplayProfessionChange(\''+id+'\',this.value)">'+opts.join('')+'</select>';
 }
 // 职业框配色：按职业名后缀判断，与统计块的奶/盾/弓等口径一致。
@@ -4624,6 +4743,15 @@ function updateStaticText() {
   if (signupCompareBtn) {
     signupCompareBtn.textContent = t('signupCompare');
     signupCompareBtn.title = t('signupCompareTip');
+  }
+  const planDeadlineLabel = document.getElementById('ds-lbl-plan-deadline');
+  if (planDeadlineLabel) planDeadlineLabel.textContent = t('planDeadline');
+  const planDeadlineItem = document.getElementById('ds-item-plan-deadline');
+  if (planDeadlineItem) planDeadlineItem.title = t('planDeadlineTip');
+  const publishBtn = document.getElementById('btn-publish-plan');
+  if (publishBtn) {
+    publishBtn.textContent = t('publishPlanBtn');
+    publishBtn.title = t('planDeadlineTip');
   }
   renderBattleTrialOptions();
   const docImportBtn = document.getElementById('btn-doc-import');
@@ -5744,7 +5872,7 @@ function tryImportFromHash() {
 function getStorageKey() { return 'mwi_trial_'+(state.guild||'default'); }
 // 只负责本地持久化。云端同步不再自动触发，由用户点顶栏"上传"按钮 → uploadToServer() 统一提交。
 function saveData() {
-  const data = JSON.stringify({ guild:state.guild, members:state.members, trials:state.trials });
+  const data = JSON.stringify({ guild:state.guild, members:state.members, trials:state.trials, plan:(state.plan || null) });
   try { localStorage.setItem(getStorageKey(), data); } catch(e) {}
   markDirty();
 }
@@ -5792,9 +5920,10 @@ async function uploadToServer() {
   isUploading = true;
   const btn = document.getElementById('btn-upload');
   if (btn) { btn.disabled = true; btn.classList.add('busy'); }
+  let uploadOk = false;
   let mergeFail = null; // 记录拉取远端合并这一步的失败信息，便于排查 401/403。
   try {
-    const localData = { guild:state.guild, members:(state.members||[]).map(slimMemberForUpload), trials:state.trials };
+    const localData = { guild:state.guild, members:(state.members||[]).map(slimMemberForUpload), trials:state.trials, plan:(state.plan || null) };
     const mk = localStorage.getItem('mwi_master_key') || '';
     // Fetch latest 做 merge（会长端下 mergeState 会强推本地，其他人走 name+_ts 合并）
     let merged = localData;
@@ -5841,9 +5970,12 @@ async function uploadToServer() {
       try { renderTableHeader(); renderMemberTable(); renderSummary(); } catch(e) {}
     }
     clearDirty();
+    // 同步合并结果里的排刀（个人端可能从远端带回了更新的 plan）。
+    state.plan = merged.plan || null;
     const badge = document.getElementById('pull-status');
     if (badge) { badge.textContent = t('uploadOk'); badge.className = 'pull-status ok'; clearTimeout(window.__mwiPullFlashTimer); window.__mwiPullFlashTimer = setTimeout(updatePullStatus, 1800); }
     showUploadSuccessModal(t('uploadOk'));
+    uploadOk = true;
   } catch(e) {
     if (!(e && e.__uploadCancelled)) {
       console.error('Upload failed:', e);
@@ -5858,6 +5990,7 @@ async function uploadToServer() {
   }
   isUploading = false;
   if (btn) { btn.disabled = false; btn.classList.remove('busy'); }
+  return uploadOk;
 }
 // 兼容旧调用点（现在没人调）
 function saveToBin() {}
@@ -5956,7 +6089,8 @@ function mergeState(local, remote) {
     return {
       guild: local.guild || remote.guild,
       members: (local.members || []).slice(),
-      trials: (local.trials || []).slice()
+      trials: (local.trials || []).slice(),
+      plan: local.plan || null
     };
   }
   const selfName = ((state.selfName || '') + '').trim();
@@ -6013,7 +6147,10 @@ function mergeState(local, remote) {
     if (r && r._ts && (!trial._ts || r._ts > trial._ts)) return r;
     return trial;
   });
-  return { guild: local.guild || remote.guild, members: mergedMembers, trials: mergedTrials };
+  // 排刀（plan）：会长一次性发布的只读快照，个人端不产生 plan → 远端优先（_ts 新者胜）。
+  const rp = remote.plan, lp = local.plan;
+  const mergedPlan = (rp && (!lp || Number(rp._ts || 0) >= Number(lp._ts || 0))) ? rp : (lp || null);
+  return { guild: local.guild || remote.guild, members: mergedMembers, trials: mergedTrials, plan: mergedPlan };
 }
 async function loadFromBin() {
   try {
@@ -6045,7 +6182,7 @@ async function loadFromBin() {
 }
 async function createBin(guild, password, masterKey) {
   const encKey = await deriveKey(password, guild);
-  const data = JSON.stringify({ guild, members:(state.members||[]).map(slimMemberForUpload), trials:state.trials });
+  const data = JSON.stringify({ guild, members:(state.members||[]).map(slimMemberForUpload), trials:state.trials, plan:(state.plan || null) });
   const rec = await encryptRecord(data, encKey);
   const resp = await fetch(BIN_BASE, {
     method:'POST',
@@ -6236,10 +6373,17 @@ async function pullFromServer() {
   } else {
     clearDirty();
   }
+  // 排刀（plan）：超过截止时间 → 丢弃，不读取分配结果并提醒「排刀未发布」。
+  let planExpired = false;
+  if (state.plan && state.plan.t) {
+    const dl = Date.parse(state.plan.t);
+    if (!Number.isFinite(dl) || Date.now() > dl) { state.plan = null; planExpired = true; }
+  }
   renderAll();
   if (state.members.length > 0) calculate();
   const badge = document.getElementById('pull-status');
   if (badge) { badge.textContent = t('pullSuccess'); badge.className = 'pull-status ok'; setTimeout(updatePullStatus, 1600); }
+  if (planExpired) alert(t('planNotPublished'));
 }
 async function refreshFromServer() { return pullFromServer(); }
 
