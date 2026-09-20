@@ -106,16 +106,19 @@ h2 { font-size:16px; margin:10px 0 8px; color:var(--text-muted); }
 #display-plan-deadline-input { padding:2px 4px; border:1px solid var(--border); border-radius:3px; font-size:12px; background:var(--input-bg); color:var(--text); }
 #plan-status { cursor:default; color:var(--text-muted); }
 /* 技能配置 */
-#skill-config-area { display:flex; align-items:flex-start; flex-wrap:wrap; padding:12px; background:var(--surface); border:1px solid var(--border); border-radius:8px; }
-.skill-config-grid { display:flex; flex-direction:column; gap:10px; width:100%; }
-.skill-config-block { display:flex; flex-direction:column; gap:6px; padding:8px 10px; border:1px solid var(--border); border-radius:8px; background:var(--conn-bg); }
-.skill-config-prof { font-size:13px; font-weight:600; color:var(--text); }
-.skill-config-cells { display:flex; align-items:flex-end; gap:14px; flex-wrap:wrap; }
-.skill-cell { display:flex; flex-direction:column; align-items:center; gap:3px; }
-.skill-cell-label { font-size:10px; color:var(--text-faint); white-space:nowrap; }
-.skill-cell-empty { display:flex; align-items:center; justify-content:center; width:30px; height:30px; border:1px dashed var(--border); border-radius:6px; color:var(--text-faint); font-size:16px; }
+/* 技能配置区：高度受限时内部纵向滚动，不会超出可视区域 */
+#skill-config-area { flex:1 1 auto; min-height:0; max-height:100%; display:flex; align-items:flex-start; align-content:flex-start; flex-wrap:wrap; padding:10px; background:var(--surface); border:1px solid var(--border); border-radius:8px; overflow:auto; overscroll-behavior:contain; }
+/* 一行两块；窄屏自动退回一块一行 */
+.skill-config-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px; width:100%; align-content:start; }
+@media (max-width:720px){ .skill-config-grid { grid-template-columns:minmax(0,1fr); } }
+.skill-config-block { display:flex; align-items:center; gap:8px; min-width:0; padding:5px 7px; border:1px solid var(--border); border-radius:6px; background:var(--conn-bg); }
+.skill-config-prof { flex:0 0 auto; max-width:76px; font-size:12px; font-weight:600; line-height:1.2; color:var(--text); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.skill-config-cells { flex:1 1 auto; min-width:0; display:flex; align-items:flex-end; gap:8px; flex-wrap:wrap; }
+.skill-cell { display:flex; flex-direction:column; align-items:center; gap:2px; }
+.skill-cell-label { font-size:9px; color:var(--text-faint); white-space:nowrap; }
+.skill-cell-empty { display:flex; align-items:center; justify-content:center; width:24px; height:24px; border:1px dashed var(--border); border-radius:5px; color:var(--text-faint); font-size:14px; }
 .skill-config-label { font-size:13px; color:var(--text-muted); }
-.skill-config-picker { position:relative; display:inline-flex; align-items:center; gap:2px; padding:4px 6px; border:1px solid var(--border); border-radius:8px; background:var(--input-bg); cursor:pointer; }
+.skill-config-picker { position:relative; display:inline-flex; align-items:center; gap:1px; padding:2px 3px; border:1px solid var(--border); border-radius:6px; background:var(--input-bg); cursor:pointer; }
 .skill-config-picker:hover { border-color:var(--accent); }
 .skill-config-picker svg { display:block; }
 .skill-config-caret { font-size:10px; color:var(--text-faint); }
@@ -969,7 +972,7 @@ table.member-table tbody tr:hover td.sticky-l.name-cell { background-color:var(-
 <script>
 
 // 版本号：发版时改这里即可（显示在标题“MWI 试炼计算器”后面）。
-const APP_VERSION = '1.0.0';
+const APP_VERSION = '1.0.1';
 
 // === i18n ===
 const I18N = {
@@ -3871,12 +3874,12 @@ function skillCellHtml(blockIdx, field, label, value) {
   const options = list.map(function(x) {
     const active = x.id === value;
     return '<span class="skill-config-option'+(active ? ' active' : '')+'" title="'+escHtml(x.name)+'" onclick="selectSkillIcon(\''+key+'\',\''+x.id+'\',event)">'+
-      svgIcon(x.id, 26, 26)+
+      svgIcon(x.id, 24, 24)+
       '<span class="skill-config-option-name">'+escHtml(x.name)+'</span>'+
     '</span>';
   }).join('');
   const body = ab
-    ? svgIcon(ab.id, 30, 30)
+    ? svgIcon(ab.id, 26, 26)
     : '<span class="skill-cell-empty">+</span>';
   return '<span class="skill-cell">'+
     '<span class="skill-cell-label">'+escHtml(label)+'</span>'+
@@ -3905,7 +3908,7 @@ function renderSkillConfigArea() {
       skillCellHtml(i, 's4', t('skillConfigSkill') + '4', cfg.s4),
     ].join('');
     return '<div class="skill-config-block">'+
-      '<div class="skill-config-prof">'+escHtml(prof)+'</div>'+
+      '<div class="skill-config-prof" title="'+escHtml(prof)+'">'+escHtml(prof)+'</div>'+
       '<div class="skill-config-cells">'+cells+'</div>'+
     '</div>';
   }).join('');
@@ -6464,6 +6467,9 @@ async function loadFromBin() {
       const dec = await decryptRecord(json.record, state.encKey);
       const data = JSON.parse(dec);
       Object.assign(state, data);
+      // plan：远端 bin 权威。bin 里没有 plan 字段时置 null（会长未发布），
+      // 避免 Object.assign 不覆盖 undefined、让本地旧过期 plan 残留而误触发「排刀未发布」。
+      state.plan = (data && Object.prototype.hasOwnProperty.call(data, 'plan')) ? (data.plan || null) : null;
       // 防御性：如果服务端存的是旧数据（未按 id 排好或有缺 id），这里补齐 id 并按 id 排序。
       if (Array.isArray(state.members)) {
         let maxId = -1;
