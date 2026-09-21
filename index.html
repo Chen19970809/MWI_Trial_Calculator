@@ -103,7 +103,16 @@ h2 { font-size:16px; margin:10px 0 8px; color:var(--text-muted); }
 #display-cols-input { width:56px; text-align:center; }
 #display-rows-input { width:160px; text-align:center; }
 #display-profession-select { max-width:160px; padding:2px 4px; border:1px solid var(--border); border-radius:3px; font-size:12px; background:var(--input-bg); color:var(--text); }
-#display-plan-deadline-input { padding:2px 4px; border:1px solid var(--border); border-radius:3px; font-size:12px; background:var(--input-bg); color:var(--text); }
+/* 截止时间：加宽以完整显示日期时间；双击展开自定义下拉，选项单击即生效（无需确定按钮） */
+#display-plan-deadline-input { min-width:150px; padding:2px 4px; border:1px solid var(--border); border-radius:3px; font-size:12px; background:var(--input-bg); color:var(--text); cursor:pointer; user-select:none; }
+.plan-deadline-picker { position:relative; display:inline-flex; align-items:center; }
+.plan-deadline-dropdown { position:fixed; z-index:60; display:flex; flex-direction:column; gap:6px; padding:8px; background:var(--surface); border:1px solid var(--border); border-radius:6px; box-shadow:0 4px 12px rgba(0,0,0,.18); }
+.plan-deadline-row { display:flex; gap:4px; align-items:center; flex-wrap:wrap; }
+.plan-deadline-label { font-size:11px; color:var(--text-faint); flex:0 0 auto; }
+.plan-deadline-opt { padding:2px 6px; border:1px solid var(--border); border-radius:4px; background:var(--input-bg); font-size:11px; color:var(--text); cursor:pointer; white-space:nowrap; }
+.plan-deadline-opt:hover { border-color:var(--accent); }
+.plan-deadline-display { display:inline-flex; align-items:center; min-width:150px; padding:3px 6px; border:1px solid var(--border); border-radius:3px; font-size:12px; background:var(--input-bg); color:var(--text); cursor:pointer; user-select:none; white-space:nowrap; }
+.plan-deadline-display:hover { border-color:var(--accent); }
 #plan-status { cursor:default; color:var(--text-muted); }
 /* 技能配置 */
 /* 技能配置区：高度受限时内部纵向滚动，不会超出可视区域 */
@@ -932,7 +941,11 @@ table.member-table tbody tr:hover td.sticky-l.name-cell { background-color:var(-
     <button class="btn btn-sm" id="btn-signup-compare" onclick="toggleSignupCompare()" title="">对比报名状态</button>
     <label class="global-buff-item" id="ds-item-plan-deadline" title="">
       <span class="global-buff-label" id="ds-lbl-plan-deadline">截止时间</span>
-      <input type="datetime-local" id="display-plan-deadline-input">
+      <span class="plan-deadline-picker" id="plan-deadline-picker">
+        <input type="datetime-local" id="display-plan-deadline-input" style="display:none">
+        <span class="plan-deadline-display" id="plan-deadline-display" title=""></span>
+        <span class="plan-deadline-dropdown" id="plan-deadline-dropdown" style="display:none"></span>
+      </span>
     </label>
     <button class="btn btn-sm btn-primary" id="btn-publish-plan" onclick="publishDisplayPlan()">发布试炼</button>
     <span class="global-buff-label" id="plan-status" style="cursor:default"></span>
@@ -1005,6 +1018,7 @@ const I18N = {
     publishPlanBtn:'发布试炼', planDeadline:'截止时间', planDeadlineTip:'把每个人的生活分配、战斗分配、职业选择连同截止时间一起上传。截止前其他人点「获取」会读取该排刀；超过截止时间后不再读取并提示「排刀未发布」。',
     planNeedDeadline:'请先选择截止时间', planDeadlinePassed:'截止时间已过，请重新选择', planPublished:'排刀已发布并上传（截止 {t}）',
     planNotPublished:'排刀未发布', planActive:'排刀生效中，截止 {t}', planExpired:'排刀已过期',
+    planDeadlineDay:'日期', planDeadlineTime:'时间', planDeadlineNextFriday:'下周五', planDeadlineDblclick:'单击可选择截止时间（快捷选项单击即生效）',
     signupBookmark:'抓取报名状态', signupBookmarkTip:'把我拖到浏览器书签栏；之后在「公会 > 成员 > 贡献」页面点这个书签，会把全员报名状态复制到剪贴板，切回本页即自动导入',
     signupCompare:'对比报名状态', signupCompareTip:'点一次：提示按 Ctrl+V 粘贴《抓取报名状态》书签抓到的报名数据，并在展示区「分配」「战斗」后各加一列《当前》（红框=与当前结果不一致）；再点一次关闭',
     signupPastePrompt:'请在本页按 Ctrl+V 粘贴报名数据：先在「公会 > 成员 > 贡献」页点击《抓取报名状态》书签，再回到本页按 Ctrl+V。',
@@ -1130,6 +1144,7 @@ const I18N = {
     publishPlanBtn:'Publish Trial', planDeadline:'Deadline', planDeadlineTip:'Upload everyone\'s life assignment, battle assignment and profession with a deadline. Others can pull the plan before the deadline; after it expires it is no longer applied and "plan not published" is shown.',
     planNeedDeadline:'Please pick a deadline first', planDeadlinePassed:'The deadline has already passed, pick a new one', planPublished:'Plan published and uploaded (deadline {t})',
     planNotPublished:'Plan not published', planActive:'Plan active, deadline {t}', planExpired:'Plan expired',
+    planDeadlineDay:'Day', planDeadlineTime:'Time', planDeadlineNextFriday:'Next Friday', planDeadlineDblclick:'Click to pick the deadline (quick options apply on single click)',
     signupBookmark:'Fetch Signups', signupBookmarkTip:'Drag me to the bookmarks bar; clicking it on Guild > Members > Contributions copies every signup to the clipboard, and this page imports it automatically when you switch back',
     signupCompare:'Compare Signups', signupCompareTip:'Click once to be prompted to paste (Ctrl+V) the signup data captured by the Fetch Signups bookmark, then a Current column is added after Battle and Life (red box = mismatch); click again to turn it off',
     signupPastePrompt:'Press Ctrl+V on this page to paste the signup data: first click the Fetch Signups bookmark on Guild > Members > Contributions, then come back and press Ctrl+V.',
@@ -2193,7 +2208,7 @@ let state = {
   signupByName: {},
   // 上一次《平均分配》实际分配到的人（memberId → true），用于重新分配/撤销时恢复自动计算。仅本地保存。
   displayEvenSplitAssigned: {},
-  // 《发布试炼》生成的排刀快照：{ _ts, t: 截止时间ISO, m: { "角色名": [生活试炼idx(-1=未分配), 战斗图标位掩码, "职业"] } }。
+  // 《发布试炼》生成的排刀快照：{ _ts, t: 截止时间ISO, m: { "角色名": [生活试炼idx(-1=未分配), 战斗图标位掩码, "职业"] }, k: [试炼idx→技能idx] }。
   // 顶层独立结构（不进成员 item），随 saveData 本地保存、随 uploadToServer 整体上传；截止前拉取方生效，过期即丢弃。
   plan: null,
   // 《单独修改》：为单个成员手动指定的战斗图标（memberId → BATTLE_TRIAL_ICONS 下标）。仅本地保存。
@@ -4022,14 +4037,17 @@ function renderDisplaySettings() {
   if (rowsInput && document.activeElement !== rowsInput) rowsInput.value = state.displayRows;
   const battleEditInput = document.getElementById('display-battle-edit-input');
   if (battleEditInput) battleEditInput.checked = !!state.displayBattleEdit;
-  // 截止时间默认填本周日 23:59（仅首次为空时）。
+  // 截止时间默认填下周五 08:00（仅首次为空时）。
   const planInput = document.getElementById('display-plan-deadline-input');
   if (planInput && !planInput.value) {
     const d = new Date();
-    d.setDate(d.getDate() + ((7 - d.getDay()) % 7));
+    d.setDate(d.getDate() + ((5 - d.getDay() + 7) % 7));
+    d.setHours(8, 0, 0, 0);
+    if (d.getTime() <= Date.now()) d.setDate(d.getDate() + 7);
     const p = n => String(n).padStart(2, '0');
-    planInput.value = d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate()) + 'T23:59';
+    planInput.value = d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate()) + 'T' + p(d.getHours()) + ':' + p(d.getMinutes());
   }
+  updatePlanDeadlineDisplay();
   updatePlanStatusText();
   renderProfessionSelect();
   renderBattleTrialOptions();
@@ -4059,7 +4077,8 @@ function memberBattleIconsRaw(p) {
 // 结构选择：顶层独立字段（不塞进每个成员 item）。原因：
 //   1) 成员 merge 按 name/_ts/本人覆盖，塞进 item 会被个人端上传冲掉会长的排刀；
 //   2) plan 是会长一次性发布的只读快照，整体替换、按截止时间整体失效，顶层最干净；
-//   3) 数据量最小：{ _ts, t, m:{ "名字":[生活试炼idx(-1=未分配), 战斗位掩码, "职业"] } }，每人 ~15 字节。
+//   3) 数据量最小：{ _ts, t, m:{ "名字":[生活试炼idx(-1=未分配), 战斗位掩码, "职业"] }, k:[试炼0..n 的技能idx] }，每人 ~15 字节。
+//      k 让外部脚本（游戏内显示分工）能把「生活试炼idx」直接翻成中文技能名（如 强化），而不是 #N。
 // 战斗位掩码：bit i = BATTLE_TRIAL_ICONS[i]（1=刺猬 2=虫群 4=变色龙 8=水母 16=獾）。
 function displayPlanActive() {
   // 会长端是排刀的来源：始终按本地编辑实时显示，避免发布后被快照锁死；仅个人端读取生效的排刀。
@@ -4112,8 +4131,112 @@ function buildDisplayPlan(deadlineIso) {
       s4: slug(cfg.s4),
     };
   });
-  return { _ts: Date.now(), t: deadlineIso, m: m, s: s };
+  // k：试炼下标 → 技能下标（SKILL_KEYS 的顺序），供外部脚本把生活试炼 idx 翻成技能名。
+  const k = (state.trials || []).map(function(cfg) { return Number(cfg && cfg.skill) || 0; });
+  return { _ts: Date.now(), t: deadlineIso, m: m, s: s, k: k };
 }
+// ══ 截止时间：双击输入框展开自定义下拉，选项单击即生效（无需确定按钮）════
+let openPlanDeadlineDropdown = false;
+function deadlineInput() { return document.getElementById('display-plan-deadline-input'); }
+function planDeadlineValue() { const i = deadlineInput(); return i ? String(i.value || '').trim() : ''; }
+function setPlanDeadlineValue(v) {
+  const i = deadlineInput();
+  if (i) i.value = v || '';
+  updatePlanDeadlineDisplay();
+}
+// 显示区用普通文本渲染完整时间，避免 datetime-local 控件分段显示导致只显示到 yyyy/mm。
+function updatePlanDeadlineDisplay() {
+  const el = document.getElementById('plan-deadline-display');
+  if (!el) return;
+  const v = planDeadlineValue();
+  el.textContent = v ? formatPlanDeadline(v) : '';
+}
+function fmtDeadlineInput(d) {
+  const p = n => String(n).padStart(2, '0');
+  return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate()) + 'T' + p(d.getHours()) + ':' + p(d.getMinutes());
+}
+function parseDeadlineInput(v) { const d = new Date(String(v || '')); return isNaN(d.getTime()) ? null : d; }
+function renderPlanDeadlineDropdown() {
+  const dd = document.getElementById('plan-deadline-dropdown');
+  if (!dd) return;
+  if (!openPlanDeadlineDropdown) { dd.style.display = 'none'; dd.innerHTML = ''; return; }
+  const dayLabels = [t('planDeadlineNextFriday')];
+  const dayHtml = dayLabels.map((lb, idx) => '<span class="plan-deadline-opt" onclick="pickPlanDeadlineDay(' + idx + ',event)">' + escHtml(lb) + '</span>').join('');
+  const timePresets = ['08:00'];
+  const timeHtml = timePresets.map(tp => '<span class="plan-deadline-opt" onclick="pickPlanDeadlineTime(\'' + tp + '\',event)">' + tp + '</span>').join('');
+  dd.innerHTML =
+    '<span class="plan-deadline-row"><span class="plan-deadline-label">' + escHtml(t('planDeadlineDay')) + '</span>' + dayHtml + '</span>' +
+    '<span class="plan-deadline-row"><span class="plan-deadline-label">' + escHtml(t('planDeadlineTime')) + '</span>' + timeHtml + '</span>';
+  dd.style.display = '';
+  positionPlanDeadlineDropdown();
+}
+function positionPlanDeadlineDropdown() {
+  const picker = document.getElementById('plan-deadline-picker');
+  const dd = document.getElementById('plan-deadline-dropdown');
+  if (!picker || !dd) return;
+  const r = picker.getBoundingClientRect();
+  const w = dd.offsetWidth || 260, h = dd.offsetHeight || 120;
+  dd.style.left = Math.max(4, Math.min(r.left, window.innerWidth - w - 4)) + 'px';
+  dd.style.top = ((r.bottom + h > window.innerHeight - 4) ? Math.max(4, r.top - h - 2) : r.bottom + 2) + 'px';
+}
+function togglePlanDeadlineDropdown(ev) {
+  if (ev) ev.stopPropagation();
+  openPlanDeadlineDropdown = !openPlanDeadlineDropdown;
+  renderPlanDeadlineDropdown();
+}
+function closePlanDeadlineDropdown() {
+  if (!openPlanDeadlineDropdown) return;
+  openPlanDeadlineDropdown = false;
+  renderPlanDeadlineDropdown();
+}
+// 快捷日期：设为下一个周五 08:00（已过则顺延一周）
+function pickPlanDeadlineDay(idx, ev) {
+  if (ev) ev.stopPropagation();
+  const presets = [{ nextFriday: true }];
+  const cfg = presets[idx];
+  if (!cfg) return;
+  // 下周五 08:00：下一个周五，时间固定 08:00；若该时刻已过则顺延一周。
+  const d = new Date();
+  d.setDate(d.getDate() + ((5 - d.getDay() + 7) % 7));
+  d.setHours(8, 0, 0, 0);
+  if (d.getTime() <= Date.now()) d.setDate(d.getDate() + 7);
+  setPlanDeadlineValue(fmtDeadlineInput(d));
+  renderPlanDeadlineDropdown();
+}
+// 快捷时间：只改时分、保留日期
+function pickPlanDeadlineTime(hhmm, ev) {
+  if (ev) ev.stopPropagation();
+  const cur = parseDeadlineInput(planDeadlineValue()) || new Date();
+  const parts = String(hhmm).split(':');
+  const d = new Date(cur.getTime());
+  d.setHours(Number(parts[0]) || 0, Number(parts[1]) || 0, 0, 0);
+  setPlanDeadlineValue(fmtDeadlineInput(d));
+  renderPlanDeadlineDropdown();
+}
+// 单击截止时间输入框 → 展开/收起下拉
+document.addEventListener('click', function(ev) {
+  const el = document.getElementById('plan-deadline-display');
+  if (el && ev.target === el) togglePlanDeadlineDropdown(ev);
+});
+// 点击下拉以外区域 → 关闭（下拉自身与输入框内点击不关闭）
+document.addEventListener('click', function(ev) {
+  if (!openPlanDeadlineDropdown) return;
+  const dd = document.getElementById('plan-deadline-dropdown');
+  const picker = document.getElementById('plan-deadline-picker');
+  const tgt = ev.target;
+  if (dd && tgt && (tgt === dd || (tgt.nodeType === 1 && dd.contains(tgt)))) return;
+  if (picker && tgt && (tgt === picker || (tgt.nodeType === 1 && picker.contains(tgt)))) return;
+  closePlanDeadlineDropdown();
+});
+window.addEventListener('resize', closePlanDeadlineDropdown);
+window.addEventListener('scroll', function(ev) {
+  if (!openPlanDeadlineDropdown) return;
+  const dd = document.getElementById('plan-deadline-dropdown');
+  const tgt = ev.target;
+  if (dd && tgt && (tgt === dd || (tgt.nodeType === 1 && dd.contains(tgt)))) return;
+  closePlanDeadlineDropdown();
+}, true);
+
 // 《发布试炼》按钮：构建 plan → 本地保存 → 走统一的上传通道（含大小确认弹窗）。
 async function publishDisplayPlan() {
   if (!isGuildLeader()) { alert(t('leaderOnly')); return; }
@@ -5060,6 +5183,8 @@ function updateStaticText() {
   if (planDeadlineLabel) planDeadlineLabel.textContent = t('planDeadline');
   const planDeadlineItem = document.getElementById('ds-item-plan-deadline');
   if (planDeadlineItem) planDeadlineItem.title = t('planDeadlineTip');
+  const planDeadlineDisplay = document.getElementById('plan-deadline-display');
+  if (planDeadlineDisplay) planDeadlineDisplay.title = t('planDeadlineDblclick');
   const publishBtn = document.getElementById('btn-publish-plan');
   if (publishBtn) {
     publishBtn.textContent = t('publishPlanBtn');
