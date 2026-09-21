@@ -117,6 +117,17 @@ h2 { font-size:16px; margin:10px 0 8px; color:var(--text-muted); }
 /* 技能配置 */
 /* 技能配置区：高度受限时内部纵向滚动，不会超出可视区域 */
 #skill-config-area { flex:1 1 auto; min-height:0; max-height:100%; display:flex; align-items:flex-start; align-content:flex-start; flex-wrap:wrap; padding:10px; background:var(--surface); border:1px solid var(--border); border-radius:8px; overflow:auto; overscroll-behavior:contain; }
+/* 光环设置模式：战斗试炼1/2 两个配置块 */
+#aura-config-area { flex:1 1 auto; min-height:0; max-height:100%; display:flex; align-items:flex-start; align-content:flex-start; flex-wrap:wrap; gap:12px; padding:10px; background:var(--surface); border:1px solid var(--border); border-radius:8px; overflow:auto; overscroll-behavior:contain; }
+.aura-config-block { border:1px solid var(--border); border-radius:8px; padding:8px 10px; background:var(--surface); }
+.aura-config-title { font-size:13px; font-weight:600; margin-bottom:6px; }
+.aura-config-table { border-collapse:collapse; }
+.aura-config-table th, .aura-config-table td { border:1px solid var(--border); padding:4px 10px; text-align:center; font-size:12px; }
+.aura-config-table th { background:var(--table-header); color:var(--text-muted); font-weight:600; white-space:nowrap; }
+.aura-config-table .aura-battle-cell svg { width:40px; height:40px; vertical-align:middle; }
+.aura-idx-input { width:64px; text-align:center; padding:2px 4px; border:1px solid var(--border); border-radius:3px; background:var(--input-bg); color:var(--text); font-size:12px; }
+.aura-idx-input:focus { outline:none; border-color:var(--accent); }
+.aura-name-cell { min-width:72px; height:28px; color:var(--text); white-space:nowrap; }
 /* 一行两块；窄屏自动退回一块一行 */
 .skill-config-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px; width:100%; align-content:start; }
 @media (max-width:720px){ .skill-config-grid { grid-template-columns:minmax(0,1fr); } }
@@ -967,7 +978,7 @@ table.member-table tbody tr:hover td.sticky-l.name-cell { background-color:var(-
 </div><!-- /#top-config -->
 
 <div class="member-section">
-  <h2 id="h2-member"><button class="btn btn-sm view-tab" id="btn-view-assignment" onclick="setMemberView('assignment')">分配结果</button><button class="btn btn-sm view-tab" id="btn-view-score" onclick="setMemberView('score')">分数估算</button><button class="btn btn-sm view-tab" id="btn-view-members" onclick="setMemberView('members')">成员数据</button><button class="btn btn-sm" id="btn-add-member" onclick="addMember()">+ 添加成员</button><button class="btn btn-sm view-tab" id="btn-view-display" onclick="toggleDisplayMode()">展示分配</button><button class="btn btn-sm view-tab" id="btn-view-skill" onclick="toggleSkillConfigMode()">技能配置</button></h2>
+  <h2 id="h2-member"><button class="btn btn-sm view-tab" id="btn-view-assignment" onclick="setMemberView('assignment')">分配结果</button><button class="btn btn-sm view-tab" id="btn-view-score" onclick="setMemberView('score')">分数估算</button><button class="btn btn-sm view-tab" id="btn-view-members" onclick="setMemberView('members')">成员数据</button><button class="btn btn-sm" id="btn-add-member" onclick="addMember()">+ 添加成员</button><button class="btn btn-sm view-tab" id="btn-view-display" onclick="toggleDisplayMode()">展示分配</button><button class="btn btn-sm view-tab" id="btn-view-skill" onclick="toggleSkillConfigMode()">技能配置</button><button class="btn btn-sm view-tab" id="btn-view-aura" onclick="toggleAuraConfigMode()">光环设置</button></h2>
   <div class="table-wrap" id="member-table-wrap">
     <table class="member-table">
       <thead id="member-thead"></thead>
@@ -978,6 +989,8 @@ table.member-table tbody tr:hover td.sticky-l.name-cell { background-color:var(-
   <div id="display-area" style="display:none"></div>
   <!-- 技能配置模式：上方仍是展示设置，下方显示一个技能图标，点击可从全部技能图标中单选 -->
   <div id="skill-config-area" style="display:none"></div>
+  <!-- 光环设置模式：上方仍是展示设置，下方显示战斗试炼1/2 两个光环配置块 -->
+  <div id="aura-config-area" style="display:none"></div>
 </div>
 
 <div class="summary-bar" id="summary-bar"></div>
@@ -998,6 +1011,7 @@ const I18N = {
     calculate:'计算最优分配', assignCol:'生活', nameCol:'角色名', maxMembers:'人数上限',
     displayAssign:'展示分配', displaySettings:'展示设置',
     skillConfig:'技能配置', skillConfigTip:'点击下方图标，从全部技能图标中单选一个', skillConfigPick:'选择技能', skillConfigNoProf:'请先排刀',
+    auraConfig:'光环设置',
     displayCols:'列数', displayColsTip:'展示区域分成的列数（1-9 列）。修改后每列行数会按当前成员数重新生成均衡默认值。',
     displayRows:'每列行数', displayRowsTip:'依次填写每一列的行数，以空格分隔（如 4 3 2 1 = 第1列4行、第2列3行、第3列2行、第4列1行）。行数之和不足时，剩余成员会并入最后一列。',
     docImportBtn:'文档', allProfessions:'所有职业',
@@ -1122,6 +1136,7 @@ const I18N = {
     calculate:'Calculate', assignCol:'Skilling', nameCol:'Name', maxMembers:'Max',
     displayAssign:'Display', displaySettings:'Display Settings',
     skillConfig:'Skill Config', skillConfigTip:'Click an icon to pick one (aura slot lists auras only, skill slots list non-auras)', skillConfigPick:'Pick a skill',
+    auraConfig:'Aura Config',
   skillConfigAura:'Aura', skillConfigSkill:'Skill',
   skillConfigNoProf:'Publish a plan first',
     displayCols:'Columns', displayColsTip:'Number of columns (1-9) in the display area. Changing this regenerates a balanced rows-per-column string based on current members.',
@@ -2191,6 +2206,9 @@ let state = {
   // 《技能配置》模式开关 + 每个出战职业的技能配置（职业名 → { aura, s1..s4 }，值为 COMBAT_ABILITY_ICONS 的 id）。仅本地保存。
   skillConfigMode: false,
   skillConfigByProf: {},
+  // 《光环设置》模式开关 + 战斗试炼1/2 每列光环的序号（[块][列] → COMBAT_ABILITY_ICONS 索引或 null）。仅本地保存。
+  auraConfigMode: false,
+  auraConfigValues: [[null, null, null, null, null], [null, null, null, null, null]],
   // 展示设置第二行：战斗试炼1/2 各自勾选的出战职业（值为《所有职业》列表中的字符串）。仅本地保存。
   displayBattleTrialProfessions: [[], []],
   // 职业列表：从《文档》按钮导入的 xlsx 中读取并去重的所有「职业_」列值（会话级，不持久化）。
@@ -3748,7 +3766,9 @@ function setMemberView(view) {
   if (state.displayMode) {
     state.displayMode = false;
     state.skillConfigMode = false;
+    state.auraConfigMode = false;
     try { localStorage.setItem('mwi_display_mode', '0'); } catch(e) {}
+    try { localStorage.setItem('mwi_aura_config_mode', '0'); } catch(e) {}
     renderDisplayMode();
   }
   state.memberView = (view === 'members') ? 'members' : (view === 'score' ? 'score' : 'assignment');
@@ -3764,21 +3784,25 @@ function syncMemberViewTabs() {
   const add = document.getElementById('btn-add-member');
   const d = document.getElementById('btn-view-display');
   const k = document.getElementById('btn-view-skill');
+  const au = document.getElementById('btn-view-aura');
   const leader = isGuildLeader();
-  // 非会长端：不显示《成员数据》/《+ 添加成员》/《展示分配》/《技能配置》。
+  // 非会长端：不显示《成员数据》/《+ 添加成员》/《展示分配》/《技能配置》/《光环设置》。
   // 只改内存 state 不写 localStorage：若之后拿到 Master Key 成为会长，原来的视图偏好还在。
   if (!leader && state.memberView === 'members') state.memberView = 'assignment';
   if (!leader && state.displayMode) state.displayMode = false;
   if (!leader && state.skillConfigMode) state.skillConfigMode = false;
+  if (!leader && state.auraConfigMode) state.auraConfigMode = false;
   if (m) m.style.display = leader ? '' : 'none';
   if (add) add.style.display = leader ? '' : 'none';
   if (d) d.style.display = leader ? '' : 'none';
   if (k) k.style.display = leader ? '' : 'none';
+  if (au) au.style.display = leader ? '' : 'none';
   if (a) a.classList.toggle('active', state.memberView === 'assignment' && !state.displayMode);
   if (s) s.classList.toggle('active', state.memberView === 'score' && !state.displayMode);
   if (m) m.classList.toggle('active', state.memberView === 'members' && !state.displayMode);
-  if (d) d.classList.toggle('active', !!state.displayMode && !state.skillConfigMode);
+  if (d) d.classList.toggle('active', !!state.displayMode && !state.skillConfigMode && !state.auraConfigMode);
   if (k) k.classList.toggle('active', !!state.skillConfigMode);
+  if (au) au.classList.toggle('active', !!state.auraConfigMode);
 }
 
 // === 展示分配模式（仅会长端）===
@@ -3786,37 +3810,43 @@ function syncMemberViewTabs() {
 // 展示设置 = 列数 + 每列行数（空格分隔，如 "4 3 2 1" = 第1列4行、第2列3行、第3列2行、第4列1行）。
 function toggleDisplayMode() {
   if (!isGuildLeader()) { alert(t('leaderOnly')); return; }
-  if (state.skillConfigMode) {
-    // 技能配置是展示分配的子模式：在技能配置里点《展示分配》= 退出子模式回到展示区域，
+  if (state.skillConfigMode || state.auraConfigMode) {
+    // 技能配置/光环设置是展示分配的子模式：在子模式里点《展示分配》= 退出子模式回到展示区域，
     // 而不是把 displayMode 也一起关掉（否则会退回上一次的成员区视图）。
     state.skillConfigMode = false;
+    state.auraConfigMode = false;
     try { localStorage.setItem('mwi_skill_config_mode', '0'); } catch(e) {}
+    try { localStorage.setItem('mwi_aura_config_mode', '0'); } catch(e) {}
   } else {
     state.displayMode = !state.displayMode;
     try { localStorage.setItem('mwi_display_mode', state.displayMode ? '1' : '0'); } catch(e) {}
   }
-  // 退出展示分配时一并退出技能配置子模式。
-  if (!state.displayMode) state.skillConfigMode = false;
+  // 退出展示分配时一并退出技能配置/光环设置子模式。
+  if (!state.displayMode) { state.skillConfigMode = false; state.auraConfigMode = false; }
   renderDisplayMode();
   syncMemberViewTabs();
 }
-// 根据 displayMode 切换：试炼配置区 ↔ 展示设置区；成员表 ↔ 展示区域/技能配置区。
+// 根据 displayMode 切换：试炼配置区 ↔ 展示设置区；成员表 ↔ 展示区域/技能配置区/光环设置区。
 function renderDisplayMode() {
   const leader = isGuildLeader();
   const on = state.displayMode && leader;
   const skill = on && state.skillConfigMode;
+  const aura = on && state.auraConfigMode && !skill;
   const trialSection = document.getElementById('trial-config-section');
   const settingsSection = document.getElementById('display-settings-section');
   const tableWrap = document.getElementById('member-table-wrap');
   const displayArea = document.getElementById('display-area');
   const skillArea = document.getElementById('skill-config-area');
+  const auraArea = document.getElementById('aura-config-area');
   if (trialSection) trialSection.style.display = on ? 'none' : '';
   if (settingsSection) settingsSection.style.display = on ? '' : 'none';
   if (tableWrap) tableWrap.style.display = on ? 'none' : '';
-  if (displayArea) displayArea.style.display = skill ? 'none' : (on ? 'flex' : 'none');
+  if (displayArea) displayArea.style.display = (skill || aura) ? 'none' : (on ? 'flex' : 'none');
   if (skillArea) skillArea.style.display = skill ? 'flex' : 'none';
+  if (auraArea) auraArea.style.display = aura ? 'flex' : 'none';
   if (on) renderDisplaySettings();
   if (skill) renderSkillConfigArea();
+  if (aura) renderAuraConfigArea();
 }
 // ══ 技能配置模式（展示分配的子模式）══
 // 上方仍是展示设置；下方为每个「当前排刀出战职业」生成一个块，块内 6 列：
@@ -3827,9 +3857,11 @@ function toggleSkillConfigMode() {
   if (!isGuildLeader()) { alert(t('leaderOnly')); return; }
   state.skillConfigMode = !state.skillConfigMode;
   if (state.skillConfigMode) {
-    // 进入技能配置时确保同时进入展示分配（上方仍是展示设置）。
+    // 进入技能配置时确保同时进入展示分配（上方仍是展示设置），并退出光环设置（互斥）。
     state.displayMode = true;
+    state.auraConfigMode = false;
     try { localStorage.setItem('mwi_display_mode', '1'); } catch(e) {}
+    try { localStorage.setItem('mwi_aura_config_mode', '0'); } catch(e) {}
   }
   try { localStorage.setItem('mwi_skill_config_mode', state.skillConfigMode ? '1' : '0'); } catch(e) {}
   renderDisplayMode();
@@ -3962,6 +3994,92 @@ function toggleSkillDropdown(key, ev) {
   if (ev) ev.stopPropagation();
   openSkillDropdown = (openSkillDropdown === key) ? null : key;
   renderSkillConfigArea();
+}
+
+// ══ 光环设置模式（展示分配的子模式，与技能配置互斥）══
+// 上方仍是展示设置；下方为战斗试炼1/2 各生成一个块，块内表格 3 行 × 6 列：
+//   第1行（列头）：战斗 | 速度光环 | 暴击光环 | 守护光环 | 物理光环 | 元素光环
+//   第2行：战斗列显示该试炼当前选择的战斗 ICON；光环列为序号输入框（int，对应成员表中的成员序号）
+//   第3行：输入有效序号后显示成员表中该序号玩家的 name（即该光环由谁携带）
+const AURA_CONFIG_COLS = [
+  { icon: 'ability_speed_aura' },    // 速度光环
+  { icon: 'ability_critical_aura' }, // 暴击光环
+  { icon: 'ability_guardian_aura' }, // 守护光环
+  { icon: 'ability_fierce_aura' },   // 物理光环
+  { icon: 'ability_mystic_aura' },   // 元素光环
+];
+function auraColLabel(col) {
+  const ab = skillAbilityById(col.icon);
+  return ab ? ab.name : col.icon;
+}
+// 序号 → 成员表中的玩家（序号即成员下标，0 开始；越界/为空返回 null）。
+function auraMemberByIndex(n) {
+  if (typeof n !== 'number' || !Number.isFinite(n)) return null;
+  const list = state.members || [];
+  if (n < 0 || n >= list.length || !list[n]) return null;
+  return list[n];
+}
+function toggleAuraConfigMode() {
+  if (!isGuildLeader()) { alert(t('leaderOnly')); return; }
+  state.auraConfigMode = !state.auraConfigMode;
+  if (state.auraConfigMode) {
+    // 进入光环设置时确保同时进入展示分配（上方仍是展示设置），并退出技能配置（互斥）。
+    state.displayMode = true;
+    state.skillConfigMode = false;
+    try { localStorage.setItem('mwi_display_mode', '1'); } catch(e) {}
+    try { localStorage.setItem('mwi_skill_config_mode', '0'); } catch(e) {}
+  }
+  try { localStorage.setItem('mwi_aura_config_mode', state.auraConfigMode ? '1' : '0'); } catch(e) {}
+  renderDisplayMode();
+  syncMemberViewTabs();
+}
+function renderAuraConfigArea() {
+  const area = document.getElementById('aura-config-area');
+  if (!area) return;
+  const names = battleTrialIconNames();
+  let html = '';
+  for (let b = 0; b < 2; b++) {
+    const iconIdx = state.displayBattleTrialIcons[b] || 0;
+    const iconId = BATTLE_TRIAL_ICONS[iconIdx] || BATTLE_TRIAL_ICONS[0];
+    const vals = state.auraConfigValues[b] || [];
+    const headCells = '<th>'+escHtml(t('battleCol'))+'</th>'+
+      AURA_CONFIG_COLS.map(function(col) { return '<th>'+escHtml(auraColLabel(col))+'</th>'; }).join('');
+    const inputCells = '<td class="aura-battle-cell" title="'+escHtml(names[iconIdx])+'">'+svgIcon(iconId, 40, 40)+'</td>'+
+      AURA_CONFIG_COLS.map(function(col, ci) {
+        const v = vals[ci];
+        return '<td><input class="aura-idx-input" type="number" min="0" max="'+Math.max(0, (state.members||[]).length-1)+'" step="1"'+
+          ' value="'+(v === null || v === undefined ? '' : v)+'"'+
+          ' oninput="onAuraInput('+b+','+ci+',this.value)"></td>';
+      }).join('');
+    const nameCells = '<td></td>'+
+      AURA_CONFIG_COLS.map(function(col, ci) {
+        const v = vals[ci];
+        const p = auraMemberByIndex(v);
+        return '<td class="aura-name-cell" id="aura-name-'+b+'-'+ci+'">'+(p ? escHtml(p.name) : '')+'</td>';
+      }).join('');
+    html += '<div class="aura-config-block">'+
+      '<div class="aura-config-title">'+escHtml(t('battleTrial'))+' '+(b+1)+'</div>'+
+      '<table class="aura-config-table">'+
+        '<thead><tr>'+headCells+'</tr></thead>'+
+        '<tbody><tr>'+inputCells+'</tr><tr>'+nameCells+'</tr></tbody>'+
+      '</table>'+
+    '</div>';
+  }
+  area.innerHTML = html;
+}
+// 输入序号 → 存储并更新第三行对应单元格的玩家 name（不整体重渲染，保持输入焦点）。
+function onAuraInput(b, ci, raw) {
+  if (!state.auraConfigValues[b]) state.auraConfigValues[b] = [null, null, null, null, null];
+  const s = String(raw == null ? '' : raw).trim();
+  const n = s === '' ? null : Math.floor(Number(s));
+  const valid = n !== null && Number.isFinite(n) && !!auraMemberByIndex(n);
+  state.auraConfigValues[b][ci] = valid ? n : null;
+  try { localStorage.setItem('mwi_aura_config_values', JSON.stringify(state.auraConfigValues)); } catch(e) {}
+  const cell = document.getElementById('aura-name-' + b + '-' + ci);
+  if (cell) {
+    const p = valid ? auraMemberByIndex(n) : null;
+    cell.textContent = p ? p.name : '';
+  }
 }
 function selectSkillIcon(key, iconId, ev) {
   if (ev) ev.stopPropagation();
@@ -4133,7 +4251,17 @@ function buildDisplayPlan(deadlineIso) {
   });
   // k：试炼下标 → 技能下标（SKILL_KEYS 的顺序），供外部脚本把生活试炼 idx 翻成技能名。
   const k = (state.trials || []).map(function(cfg) { return Number(cfg && cfg.skill) || 0; });
-  return { _ts: Date.now(), t: deadlineIso, m: m, s: s, k: k };
+  // au：光环设置（name → 光环 slug，如 speed_aura）。战斗试炼1/2 各光环列的成员序号 → 玩家 name。
+  // 同一玩家出现在多个光环列时，后面的块/列覆盖前面的。
+  const au = {};
+  for (let b = 0; b < 2; b++) {
+    const vals = state.auraConfigValues[b] || [];
+    AURA_CONFIG_COLS.forEach(function(col, ci) {
+      const p = auraMemberByIndex(vals[ci]);
+      if (p && p.name) au[String(p.name).trim()] = String(col.icon).replace(/^ability_/, '');
+    });
+  }
+  return { _ts: Date.now(), t: deadlineIso, m: m, s: s, k: k, au: au };
 }
 // ══ 截止时间：双击输入框展开自定义下拉，选项单击即生效（无需确定按钮）════
 let openPlanDeadlineDropdown = false;
@@ -5722,6 +5850,14 @@ function loadPrefs() {
     if (displayMode === '1') state.displayMode = true;
     const skillConfigMode = localStorage.getItem('mwi_skill_config_mode');
     if (skillConfigMode === '1') state.skillConfigMode = true;
+    const auraConfigMode = localStorage.getItem('mwi_aura_config_mode');
+    if (auraConfigMode === '1') state.auraConfigMode = true;
+    try {
+      const auraVals = JSON.parse(localStorage.getItem('mwi_aura_config_values') || 'null');
+      if (Array.isArray(auraVals) && auraVals.length === 2 && Array.isArray(auraVals[0]) && Array.isArray(auraVals[1])) {
+        state.auraConfigValues = auraVals;
+      }
+    } catch(e) {}
     try {
       const byProf = JSON.parse(localStorage.getItem('mwi_skill_config_by_prof') || 'null');
       if (byProf && typeof byProf === 'object' && !Array.isArray(byProf)) state.skillConfigByProf = byProf;

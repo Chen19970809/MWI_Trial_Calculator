@@ -89,7 +89,8 @@
     let originalMessageDataGetter = null;
     let uiResizeHandler = null;
     // 试炼结束后整体静默的开关（见文末「试炼结束检测」一节）。
-    const trialEndState = { ended: false, reason: '', watchTimer: 0, silenced: false, evidenceLogged: false };
+    // holdSilenceOff：用户在设置里点过「取消静默」→ 本会话内自动结束判定不再触发静默（「打开静默」可解除）。
+    const trialEndState = { ended: false, reason: '', watchTimer: 0, silenced: false, evidenceLogged: false, holdSilenceOff: false };
 
     const state = {
         character: null,
@@ -166,7 +167,9 @@
     function applyCollapsed(collapsed) {
         const root = state.uiRoot;
         if (!root) return;
-        if (!collapsed && trialEndState.silenced) return;   // 静默后保持收起，只保留 K 图标
+        // 静默后仍允许点击 K 图标展开面板（面板内各操作按钮已有各自的静默保护）；
+        // 仅当静默时勾选了「隐藏 K 图标」（DOM 已移除、panelEl 已置空）才不再展开。
+        if (!collapsed && trialEndState.silenced && !state.panelEl) return;
         root.dataset.collapsed = collapsed ? 'true' : 'false';
         try { localStorage.setItem(UI_COLLAPSED_KEY, collapsed ? '1' : '0'); } catch (_) { /* ignore */ }
         if (collapsed) {
@@ -1457,7 +1460,13 @@
                 }
             });
             // 技能面板
-            const skills = (assignmentState.doc && assignmentState.doc.s && prof) ? assignmentState.doc.s[prof] : null;
+            let skills = (assignmentState.doc && assignmentState.doc.s && prof) ? assignmentState.doc.s[prof] : null;
+            // 光环设置：检测到当前 name 有单独的光环设置 → 光环技能固定为光环设置中的光环（覆盖职业技能配置）
+            const myAura = (assignmentState.doc && assignmentState.doc.au) ? assignmentState.doc.au[me.name] : null;
+            if (myAura) {
+                skills = Object.assign({}, skills || {});
+                skills.a = myAura;
+            }
             if (firstCard && skills && (skills.a || skills.s1 || skills.s2 || skills.s3 || skills.s4)) {
                 renderSkillPanel(firstCard, prof, skills);
             }
@@ -1793,23 +1802,46 @@
         countRow.appendChild(document.createTextNode('操作计数（监听本页鼠标点击并本地累计，显示在状态行下方）'));
         form.appendChild(countRow);
         const btns = document.createElement('div');
-        btns.style.cssText = 'display:flex;gap:6px;margin-top:8px';
+        btns.style.cssText = 'display:flex;gap:6px;margin-top:8px;flex-wrap:wrap';
         const save = document.createElement('button');
         save.type = 'button'; save.textContent = '保存';
         const cancel = document.createElement('button');
         cancel.type = 'button'; cancel.textContent = '取消';
-        [save, cancel].forEach(function (b) {
+        // 「取消静默」：仅脚本处于试炼结束静默状态时显示
+        const resume = document.createElement('button');
+        resume.type = 'button'; resume.textContent = '取消静默';
+        resume.id = 'kunpo-resume-btn';
+        resume.title = '试炼已结束判定后脚本整体静默；点击恢复脚本全部功能（等同控制台 __KUNPO.resume()）';
+        resume.style.display = 'none';
+        [save, cancel, resume].forEach(function (b) {
             Object.assign(b.style, {
                 border: '0', borderRadius: '6px', padding: '5px 9px', background: '#0a84ff',
                 color: '#fff', cursor: 'pointer', font: '600 12px/1 system-ui, sans-serif',
             });
         });
         cancel.style.background = '#344879';
+        resume.style.background = '#1f9d55';
+        resume.addEventListener('click', function () {
+            if (trialEndState.silenced) {
+                // 取消静默：恢复全部功能，且本会话内不再被自动结束判定重新静默
+                resumeFromSilence();
+                trialEndState.holdSilenceOff = true;
+                showAssignmentToast('已取消静默，脚本功能已恢复（本次会话不再自动静默）');
+            } else if (trialEndState.holdSilenceOff) {
+                // 打开静默：解除「不再自动静默」标记并立即重新静默
+                trialEndState.holdSilenceOff = false;
+                silenceAll('手动打开静默');
+            } else {
+                return;
+            }
+            form.style.display = 'none';
+            updateResumeButton();
+        });
         save.addEventListener('click', function () {
             saveGuildSettings(nameInput.value, idInput.value, urlInput.value, mkInput.value, hideInput.checked, countInput.checked);
         });
         cancel.addEventListener('click', function () { form.style.display = 'none'; });
-        btns.append(save, cancel);
+        btns.append(save, cancel, resume);
         form.appendChild(btns);
         state.settingsInputs = { name: nameInput, id: idInput, url: urlInput, mk: mkInput, hide: hideInput, count: countInput };
         return form;
@@ -1825,6 +1857,23 @@
         window.open(url, '_blank', 'noopener,noreferrer');
         setStatus('已打开计算器', 'good');
     }
+    // 「取消静默 / 打开静默」按钮的显隐与文案随状态切换：
+    //   静默中 →「取消静默」；手动取消过（holdSilenceOff）→「打开静默」；其余 → 隐藏
+    function updateResumeButton() {
+        const btn = document.getElementById('kunpo-resume-btn');
+        if (!btn) return;
+        if (trialEndState.silenced) {
+            btn.style.display = '';
+            btn.textContent = '取消静默';
+            btn.title = '试炼已结束判定后脚本整体静默；点击恢复脚本全部功能（本次会话内不再自动静默）';
+        } else if (trialEndState.holdSilenceOff) {
+            btn.style.display = '';
+            btn.textContent = '打开静默';
+            btn.title = '已手动取消静默；点击重新进入静默，自动结束判定同时恢复生效';
+        } else {
+            btn.style.display = 'none';
+        }
+    }
     function toggleSettingsForm() {
         const form = state.settingsForm;
         if (!form) return;
@@ -1839,6 +1888,8 @@
         if (ins.count) ins.count.checked = clickCountEnabled();
         const owner = document.getElementById('kunpo-settings-owner');
         if (owner) owner.textContent = '配置归属角色：' + (currentCharacterName() || '（未读取到角色名，将按全局保存）');
+        // 「取消静默 / 打开静默」按钮按当前状态切换显隐与文案
+        updateResumeButton();
         form.style.display = '';
     }
     function saveGuildSettings(name, idRaw, url, mkRaw, hideRaw, countRaw) {
@@ -1989,7 +2040,7 @@
         } catch (_) { return null; }
     }
     function checkTrialEnd() {
-        if (trialEndState.silenced) return;
+        if (trialEndState.silenced || trialEndState.holdSilenceOff) return;   // 手动取消过静默 → 本会话不再自动静默
         let result = { ended: false, reason: '' };
         try {
             let override = null;
@@ -2085,7 +2136,7 @@
                 if (state.panelEl) state.panelEl.style.display = 'none';
                 if (state.iconButton) {
                     state.iconButton.style.display = '';
-                    state.iconButton.title = '试炼已完成，脚本已静默';
+                    state.iconButton.title = '试炼已完成，脚本已静默\n拖动移动位置；点击展开面板';
                 }
                 if (state.statusText) state.statusText.textContent = '试炼已完成，脚本已静默';
             }
@@ -2106,6 +2157,28 @@
         assignmentState.fetchedAt = 0;
         assignmentState.cardsPresent = false;
         lastAnnouncedText = '';
+        // 图标保留场景下 boot()→mountExportUi() 会因已挂载而跳过，这里手动还原静默时改掉的 UI 状态
+        if (state.iconButton) state.iconButton.title = 'KUNPO 试炼专用：等待人物数据\n拖动移动位置；点击展开面板';
+        if (state.statusText) state.statusText.textContent = '等待人物数据';
+        if (state.uiRoot && !uiResizeHandler) {
+            uiResizeHandler = () => {
+                if (!state.uiRoot) return;
+                if (state.uiRoot.dataset.collapsed === 'true') {
+                    placeIcon(readUiPosition());
+                } else {
+                    const rect = state.panelEl.getBoundingClientRect();
+                    const p = clampUiPosition(
+                        { x: parseFloat(state.uiRoot.style.left), y: parseFloat(state.uiRoot.style.top) },
+                        rect.width,
+                        rect.height,
+                    );
+                    state.uiRoot.style.left = `${p.x}px`;
+                    state.uiRoot.style.top = `${p.y}px`;
+                }
+            };
+            window.addEventListener('resize', uiResizeHandler);
+        }
+        setClickCounter(clickCountEnabled());   // 静默时被关掉的点击计数监听按设置恢复
         hookWebSocketMessages();
         boot();
     }
