@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         KUNPO试炼专用
 // @namespace    https://www.milkywayidle.com/
-// @version      1.2.1
+// @version      1.0.0
 // @description  上传等级、成就、房屋、迷宫配装、神龛到计算器
 // @author       MonsterFC
 // @license      MIT
@@ -13,17 +13,19 @@
 // @grant        GM_registerMenuCommand
 // @grant        GM_xmlhttpRequest
 // @grant        GM.xmlHttpRequest
-// @downloadURL  https://raw.githubusercontent.com/Chen19970809/MWI_Trial_Calculator/refs/heads/main/KUNPO%E8%AF%95%E7%82%BC%E4%B8%93%E7%94%A8.txt
-// @updateURL    https://raw.githubusercontent.com/Chen19970809/MWI_Trial_Calculator/refs/heads/main/KUNPO%E8%AF%95%E7%82%BC%E4%B8%93%E7%94%A8.txt
+// @downloadURL  https://raw.githubusercontent.com/Chen19970809/MWI_Trial_Calculator/refs/heads/main/KUNPO%E8%AF%95%E7%82%BC%E4%B8%93%E7%94%A8.user.js
+// @updateURL    https://raw.githubusercontent.com/Chen19970809/MWI_Trial_Calculator/refs/heads/main/KUNPO%E8%AF%95%E7%82%BC%E4%B8%93%E7%94%A8.user.js
 // @connect      api.jsonbin.io
 // @connect      mwi-guild.43.167.210.211.sslip.io
+// @connect      raw.githubusercontent.com
+// @connect      cdn.jsdelivr.net
 
 // ==/UserScript==
 
 (function () {
     'use strict';
 
-    const SCRIPT_VERSION = '0.8.1-single';
+    const SCRIPT_VERSION = '1.0.0';
     const SKILL_LABELS = Object.freeze(['Milking','Foraging','Woodcutting','Cheesesmithing','Crafting','Tailoring','Cooking','Brewing','Alchemy','Enhancing']);
     const SKILL_LABELS_CN = Object.freeze(['挤奶','采摘','伐木','奶酪锻造','制作','缝纫','烹饪','冲泡','炼金','强化']);
     // 与 index.html 的 SKILL_KEYS 一致；生活试炼卡片图标的 use href 末段即此 slug。
@@ -1146,6 +1148,7 @@
 
     GM_registerMenuCommand('设置试炼计算器页面地址（必须！！！）', setCalculatorUrl);
     GM_registerMenuCommand('显示排刀（读取共享空间排刀）', () => { void refreshAssignment({ force: true }); });
+    GM_registerMenuCommand('检查脚本更新', () => { void checkForUpdate({ force: true }); });
     //GM_registerMenuCommand('发送到试炼计算器', sendToCalculator);
     //GM_registerMenuCommand('导出当前角色全部迷宫配装到 JSON', exportJsonData);
 
@@ -2113,7 +2116,7 @@
         try { return localStorage.getItem(K_HIDE_ICON) === '1'; } catch (_) { return false; }
     }
     function removeInjectedDom() {
-        ['#kunpo-export-ui', '#kunpo-assignment-style', '#kunpo-assignment-toast'].forEach(function (sel) {
+        ['#kunpo-export-ui', '#kunpo-assignment-style', '#kunpo-assignment-toast', '#kunpo-update-banner'].forEach(function (sel) {
             const node = document.querySelector(sel);
             if (node && node.parentNode) node.parentNode.removeChild(node);
         });
@@ -2399,9 +2402,101 @@
         showSignupModal(res.lines || []);
     }
 
+    // ═══════════════════════════════════════════════════════════════════════
+    // ══ 版本检查：拉取远程脚本头部的 @version，落后时页面内横幅提醒 ═════════
+    // 脚本管理器（Tampermonkey 等）的自动更新是静默后台完成的，用户可能长期
+    // 停留在旧版；这里主动对比远程版本并弹出可点击横幅，引导用户前往更新。
+    // 主源 raw.githubusercontent.com 失败时回退 jsDelivr 镜像（部分地区直连
+    // GitHub raw 不稳定）。自动检查每天最多一次；用户关闭横幅后，同一版本
+    // 不再重复打扰，直到更新的版本发布。
+    // ═══════════════════════════════════════════════════════════════════════
+    const UPDATE_CHECK_KEY = 'kunpo_update_last_check';
+    const UPDATE_DISMISS_KEY = 'kunpo_update_dismissed';
+    const UPDATE_CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000;
+    const UPDATE_PRIMARY_URL = 'https://raw.githubusercontent.com/Chen19970809/MWI_Trial_Calculator/refs/heads/main/KUNPO%E8%AF%95%E7%82%BC%E4%B8%93%E7%94%A8.user.js';
+    const UPDATE_FALLBACK_URL = 'https://cdn.jsdelivr.net/gh/Chen19970809/MWI_Trial_Calculator@main/KUNPO%E8%AF%95%E7%82%BC%E4%B8%93%E7%94%A8.user.js';
+    // 语义化版本比较：'1.2.10' > '1.2.9'，缺段按 0 补齐，忽略非数字后缀。
+    function compareVersions(a, b) {
+        const pa = String(a).split('.').map(s => parseInt(s, 10) || 0);
+        const pb = String(b).split('.').map(s => parseInt(s, 10) || 0);
+        const len = Math.max(pa.length, pb.length);
+        for (let i = 0; i < len; i++) {
+            const d = (pa[i] || 0) - (pb[i] || 0);
+            if (d !== 0) return d > 0 ? 1 : -1;
+        }
+        return 0;
+    }
+    // 只解析 ==UserScript== 元数据块里的 @version，避免误匹配正文。
+    function remoteVersionFromMeta(text) {
+        const head = String(text || '').split('// ==/UserScript==')[0] || '';
+        const m = head.match(/@version\s+([^\s\r\n]+)/);
+        return m ? m[1] : null;
+    }
+    function showUpdateBanner(remoteVersion, installUrl) {
+        if (document.getElementById('kunpo-update-banner')) return;
+        const el = document.createElement('div');
+        el.id = 'kunpo-update-banner';
+        el.style.cssText = 'position:fixed;top:12px;right:12px;z-index:2147483647;display:flex;align-items:center;gap:10px;padding:10px 14px;border-radius:10px;background:rgba(20,26,44,.97);color:#eef3ff;border:1px solid #d8a44f;font:600 12px/1.4 system-ui,sans-serif;box-shadow:0 6px 18px rgba(0,0,0,.45)';
+        const info = document.createElement('span');
+        info.textContent = 'KUNPO 脚本有新版本：' + remoteVersion + '（当前 ' + SCRIPT_VERSION + '）';
+        const go = document.createElement('a');
+        go.textContent = '前往更新';
+        go.href = installUrl;
+        go.target = '_blank';
+        go.rel = 'noopener';
+        go.style.cssText = 'color:#8fc3ff;font-weight:700;text-decoration:underline;cursor:pointer;white-space:nowrap';
+        const close = document.createElement('span');
+        close.textContent = '×';
+        close.title = '本次忽略该版本';
+        close.style.cssText = 'cursor:pointer;font:700 16px/1 system-ui;color:#c3d2f2;padding:0 2px';
+        close.addEventListener('click', function () {
+            try { localStorage.setItem(UPDATE_DISMISS_KEY, remoteVersion); } catch (_) {}
+            el.remove();
+        });
+        el.appendChild(info);
+        el.appendChild(go);
+        el.appendChild(close);
+        document.body.appendChild(el);
+    }
+    async function checkForUpdate(opts) {
+        const force = !!(opts && opts.force);
+        if (!force) {
+            let last = 0;
+            try { last = Number(localStorage.getItem(UPDATE_CHECK_KEY)) || 0; } catch (_) {}
+            if (Date.now() - last < UPDATE_CHECK_INTERVAL_MS) return;
+        }
+        try { localStorage.setItem(UPDATE_CHECK_KEY, String(Date.now())); } catch (_) {}
+        let remoteVersion = null;
+        let installUrl = UPDATE_PRIMARY_URL;
+        const r1 = await httpGet(UPDATE_PRIMARY_URL);
+        if (r1.status >= 200 && r1.status < 300) {
+            remoteVersion = remoteVersionFromMeta(r1.responseText || '');
+        } else {
+            const r2 = await httpGet(UPDATE_FALLBACK_URL);
+            if (r2.status >= 200 && r2.status < 300) {
+                remoteVersion = remoteVersionFromMeta(r2.responseText || '');
+                installUrl = UPDATE_FALLBACK_URL;
+            }
+        }
+        if (!remoteVersion) {
+            if (force) showAssignmentToast('检查更新失败：无法获取远程版本');
+            return;
+        }
+        if (compareVersions(remoteVersion, SCRIPT_VERSION) > 0) {
+            let dismissed = '';
+            try { dismissed = localStorage.getItem(UPDATE_DISMISS_KEY) || ''; } catch (_) {}
+            if (!force && dismissed === remoteVersion) return;
+            showUpdateBanner(remoteVersion, installUrl);
+            if (force) showAssignmentToast('发现新版本：' + remoteVersion);
+        } else if (force) {
+            showAssignmentToast('已是最新版本：' + SCRIPT_VERSION);
+        }
+    }
+
     function boot() {
         mountExportUi();
         initAssignment();
+        void checkForUpdate();
     }
 
     if (window.__mwiSingleCleanup) window.__mwiSingleCleanup();
