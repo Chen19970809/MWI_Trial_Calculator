@@ -1267,7 +1267,8 @@ function equipShortLabel(idx) { return I18N[state.lang].equipShort[idx]; }
 // 右上角「下载脚本」按钮指向的地址。部署时可直接改下面默认值；
 // 也可以在页面加载前通过 localStorage.setItem('mwi_script_download_url', '...') 覆盖，
 // 方便同一个 HTML 文件在不同环境/不同公会使用不同脚本包。
-const SCRIPT_DOWNLOAD_DEFAULT = 'KUNPO试炼专用.txt';
+const SCRIPT_DOWNLOAD_DEFAULT = 'KUNPO试炼专用.user.js';
+// const SCRIPT_DOWNLOAD_DEFAULT = 'KUNPO试炼专用.txt';
 const SCRIPT_DOWNLOAD_STORAGE_KEY = 'mwi_script_download_url';
 function getScriptDownloadUrl() {
   try { return localStorage.getItem(SCRIPT_DOWNLOAD_STORAGE_KEY) || SCRIPT_DOWNLOAD_DEFAULT; }
