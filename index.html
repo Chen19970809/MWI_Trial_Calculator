@@ -50,6 +50,10 @@ h2 { font-size:16px; margin:10px 0 8px; color:var(--text-muted); }
 .btn:hover { background:var(--hover); border-color:var(--text-muted); }
 .btn-primary { background:var(--accent); color:#fff; border-color:var(--accent); }
 .btn-primary:hover { background:var(--accent-hover); }
+/* 下载脚本按钮：绿色高亮 + 呼吸光圈，引导成员安装导出脚本 */
+.btn-export-script { background:#1f9d55; color:#fff; border-color:#1f9d55; font-weight:600; animation:export-glow 2.4s ease-in-out infinite; }
+.btn-export-script:hover { background:#23b362; border-color:#23b362; color:#fff; }
+@keyframes export-glow { 0%,100% { box-shadow:0 0 0 0 rgba(31,157,85,.5);} 50% { box-shadow:0 0 0 6px rgba(31,157,85,0);} }
 .btn-danger { color:var(--danger); }
 .btn-sm { padding:3px 8px; font-size:12px; }
 .btn-icon { padding:6px 10px; font-size:16px; line-height:1; }
@@ -5435,7 +5439,7 @@ function renderExportScriptLinks() {
   const container = document.getElementById('export-script-links');
   if (!container) return;
   const url = getScriptDownloadUrl();
-  container.innerHTML = '<a href="'+escHtml(url)+'" download class="btn btn-sm" id="export-script-link" style="font-size:12px;padding:4px 8px;opacity:.6" title="'+escHtml(t('exportScriptTitle'))+'">'+escHtml(t('exportScript'))+'</a>';
+  container.innerHTML = '<a href="'+escHtml(url)+'" download class="btn btn-export-script" id="export-script-link" style="font-size:13px;padding:6px 14px" title="'+escHtml(t('exportScriptTitle'))+'">⬇ '+escHtml(t('exportScript'))+'</a>';
 }
 
 function makeTargetLevelOptions(selected) {

@@ -1364,6 +1364,9 @@
             '.kunpo-skill-icon{width:34px;height:34px;object-fit:contain;display:block;flex:0 0 34px}' +
             '.kunpo-skill-chip small{color:#c9d4ff;font-size:10px}' +
             '.kunpo-skill-chip[data-slot="aura"]{border:2px solid #30d158;background:#16331f;box-shadow:0 0 9px #30d15899}' +
+            '.kunpo-aura-holder-note{margin:9px 0 2px;padding:8px 10px;border:1px solid #ffd60a99;border-left:4px solid #ffd60a;border-radius:7px;background:#33290dd9;color:#ffe14d;font:700 12px/1.45 system-ui,sans-serif}' +
+            '.kunpo-aura-insanity-note{margin:9px 0 2px;padding:8px 10px;border:1px solid #ffb34099;border-left:4px solid #ffb340;border-radius:7px;background:#33280fdd;color:#ffb340;font:700 12px/1.45 system-ui,sans-serif}' +
+            '.kunpo-aura-holder-note + .kunpo-aura-insanity-note{margin-top:6px}' +
             '@media(max-width:760px){.kunpo-skill-grid{gap:3px}.kunpo-skill-chip{padding:5px 2px;font-size:10px}.kunpo-skill-icon{width:28px;height:28px;flex-basis:28px}}';
         document.head.appendChild(style);
     }
@@ -1391,7 +1394,7 @@
         chip.appendChild(lv);
         return chip;
     }
-    function renderSkillPanel(anchorCard, prof, skills) {
+    function renderSkillPanel(anchorCard, prof, skills, fixedAuraSlug) {
         const anchor = anchorCard && anchorCard.parentElement;
         const host = anchor && anchor.parentElement;
         if (!host || !anchor) return false;
@@ -1405,13 +1408,24 @@
         const sub = document.createElement('span');
         sub.textContent = prof ? ('职业：' + prof + ' · 按从左到右顺序携带') : '按从左到右顺序携带';
         heading.append(title, sub);
+        // 光环持有者提示（fixedAuraSlug 非空 = 光环来自光环设置，单独固定）
+        const holderNote = document.createElement('div');
+        holderNote.className = 'kunpo-aura-holder-note';
+        holderNote.textContent = '你是光环持有者！请将trigger删除！保证光环在冷却结束后立即使用！';
+        // 疯狂提示：面板光环为疯狂时显示（来自职业技能配置或光环设置均可）
+        const insanityNote = document.createElement('div');
+        insanityNote.className = 'kunpo-aura-insanity-note';
+        insanityNote.textContent = '疯狂trigger设置为我的当前HP>500';
         const grid = document.createElement('div');
         grid.className = 'kunpo-skill-grid';
         if (skills.a) grid.appendChild(buildSkillChip(skills.a, 'aura', '光环'));
         ['s1', 's2', 's3', 's4'].forEach(function (k) {
             if (skills[k]) grid.appendChild(buildSkillChip(skills[k], k, k.toUpperCase().replace('S', '技能')));
         });
-        panel.append(heading, grid);
+        panel.append(heading);
+        if (fixedAuraSlug) panel.appendChild(holderNote);
+        if (skills.a === 'insanity') panel.appendChild(insanityNote);
+        panel.appendChild(grid);
         host.insertAdjacentElement('afterend', panel);
         return true;
     }
@@ -1468,7 +1482,7 @@
                 skills.a = myAura;
             }
             if (firstCard && skills && (skills.a || skills.s1 || skills.s2 || skills.s3 || skills.s4)) {
-                renderSkillPanel(firstCard, prof, skills);
+                renderSkillPanel(firstCard, prof, skills, myAura);
             }
             announceAssignment('已高亮排刀：' + (slugs.length ? slugs.map(battleTrialName).join('、') : '无战斗') + ' / ' + lifeName + (lifeMatched ? '' : '（未匹配到生活卡片）'), announce);
         } finally {
