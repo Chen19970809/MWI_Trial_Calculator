@@ -13,6 +13,8 @@
 // @grant        GM_registerMenuCommand
 // @grant        GM_xmlhttpRequest
 // @grant        GM.xmlHttpRequest
+// @downloadURL  https://raw.githubusercontent.com/Chen19970809/MWI_Trial_Calculator/refs/heads/main/KUNPO%E8%AF%95%E7%82%BC%E4%B8%93%E7%94%A8.user.js
+// @updateURL    https://raw.githubusercontent.com/Chen19970809/MWI_Trial_Calculator/refs/heads/main/KUNPO%E8%AF%95%E7%82%BC%E4%B8%93%E7%94%A8.user.js
 // @connect      api.jsonbin.io
 // @connect      mwi-guild.43.167.210.211.sslip.io
 // ==/UserScript==
