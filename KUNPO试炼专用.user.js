@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         KUNPO试炼专用
 // @namespace    https://www.milkywayidle.com/
-// @version      1.0.2
+// @version      1.0.3
 // @description  上传等级、成就、房屋、迷宫配装、神龛到计算器
 // @author       MonsterFC
 // @license      MIT
@@ -25,13 +25,49 @@
 (function () {
     'use strict';
 
-    const SCRIPT_VERSION = '1.0.2';
-    const SKILL_LABELS = Object.freeze(['Milking','Foraging','Woodcutting','Cheesesmithing','Crafting','Tailoring','Cooking','Brewing','Alchemy','Enhancing']);
-    const SKILL_LABELS_CN = Object.freeze(['挤奶','采摘','伐木','奶酪锻造','制作','缝纫','烹饪','冲泡','炼金','强化']);
-    // 与 index.html 的 SKILL_KEYS 一致；生活试炼卡片图标的 use href 末段即此 slug。
-    const SKILL_KEYS = Object.freeze(['milking','foraging','woodcutting','cheesesmithing','crafting','tailoring','cooking','brewing','alchemy','enhancing']);
+    const SCRIPT_VERSION = '1.0.3';
 
-    // ── 直送试炼计算器 ────────────────────────────────────────────────────
+    // ── 更新日志：key = 版本号，value = 中文更新内容；发新版本时在顶部加一条即可 ──
+    const CHANGELOG = {
+        '1.0.3': '1.新增日志\n'
+            + '2. 适配大小\n'
+            + '3. KUNPO成员简洁设置界面',
+        '1.0.2': '1. 新增设置-更新日志\n'
+            + '2. 面板新增《打开组队文档》《检查脚本更新》按钮\n'
+            + '3. 设置新增「组队文档地址」，公会名不一致时各跳转按钮不再回退内置默认地址\n'
+            + '4. 静默后 K 图标可点开面板；设置内新增「取消静默 / 打开静默」切换\n'
+            + '5. 公会名与游戏内不一致时仅保留「⚙ 设置」，且设置表单不回填默认值',
+        '1.0.1': '1. 新增公会校验：非 KUNPO 公会停用排刀高亮并给出提示\n'
+            + '2. 设置按角色名隔离保存（一台电脑多角色互不影响）\n'
+            + '3. 新增「静默时隐藏 K 图标」设置项\n'
+            + '4. 试炼结束后自动静默',
+        '1.0.0': '1. 新增光环发布\n'
+            + '2. 试炼结束后自动静默，可经控制台恢复',
+        '0.0.5': '新增光环发布，特殊光环携带有trigger提醒' ,
+        '0.0.4': '设置中新增计数勾选，勾选后可记录本角色操作点击次数' ,
+        '0.0.3': '新增设置表单，可填写新公会name、后台数据地址' ,
+        '0.0.2': '新增功德 + 1按钮，仅在会长与将军显示，点击后计数并显示功德 + 1' ,
+        '0.0.1': '首个版本，功能说明：'
+            + '1. 上传配装：在有外网环境时点击可一件上传配装等级/成就/房屋/迷宫配装/神龛到数据后台，无需额外操作 \n'
+            + '2. 打开试炼计算器按钮可弹出计算器页面\n'
+            + '3. 游戏内显示排刀高亮：打开公会试炼页面自动显示应参加的项目\n'
+            + '4. 技能面板：根据职业显示推荐使用的技能',
+    };
+
+    // ── 公会校验默认值 ──
+    const GUILD_DEFAULTS = Object.freeze({ name: 'KUNPO', id: 2515 });
+    const guildConfig = { name: GUILD_DEFAULTS.name, id: GUILD_DEFAULTS.id };
+
+    // ── 手动填写参数对应的存储键 ──
+    const K_GUILD_NAME = 'kunpo_guild_name';
+    const K_GUILD_ID = 'kunpo_guild_id';
+    const K_MASTER_KEY = 'kunpo_master_key';     // jsonbin 写入权限（PUT 401/403 时需要）
+    const K_HIDE_ICON = 'kunpo_hide_icon';       // 静默时是否隐藏 K 图标（'1' 隐藏 / 其他=保留图标）
+    const K_COUNT_CLICKS = 'kunpo_count_clicks'; // 是否启用操作计数（'1' 启用，默认不启用）
+    const K_CLICK_COUNT = 'kunpo_click_count';   // 操作计数累计值（按角色隔离，自动写入无需手填）
+    const K_DOC_URL = 'kunpo_doc_url';           // 组队文档地址（《打开组队文档》跳转；留空=用内置默认地址）
+
+    // ── 计算器 / 组队文档内置默认地址（XOR 0x5A 混淆存储，文件中不出现明文）──
     // 跳过 JSON 下载：把 members 数组 base64url 编码后作为 URL hash 拼到计算器页面，
     // index.html 的 init() 末尾解析 #mwiImport=... 并走与"导入 JSON"相同的合并逻辑。
     // 计算器地址默认 GitHub Pages，可通过菜单"设置试炼计算器页面地址"覆盖
@@ -39,6 +75,7 @@
     const CALC_URL_STORAGE_KEY = 'mwi_trial_calc_url';
     const CALC_URL_XOR_KEY = 0x5A;
     const CALC_DEFAULT_URL_ENC = Object.freeze([50,46,46,42,41,96,117,117,57,50,63,52,107,99,99,109,106,98,106,99,116,61,51,46,50,47,56,116,51,53,117,23,13,19,5,14,40,51,59,54,5,25,59,54,57,47,54,59,46,53,40,117,101,61,47,51,54,62,103,17,15,20,10,21,124,56,51,52,103,108,59,108,109,107,108,105,105,60,111,60,110,59,60,111,63,104,99,57,108,56,98,98,57,124,42,45,62,103,98,104,109,104,98,106,105,99,110]);
+    const TEAM_DOC_DEFAULT_URL_ENC = Object.freeze([50,46,46,42,41,96,117,117,62,53,57,41,116,43,43,116,57,53,55,117,41,50,63,63,46,117,30,8,55,62,110,12,13,42,111,15,18,0,16,0,28,8,46,101,52,53,5,42,40,53,55,53,46,51,53,52,103,107,124,51,41,5,56,54,59,52,49,5,53,40,5,46,63,55,42,54,59,46,63,103,56,54,59,52,49,124,46,59,56,103,24,24,106,98,16,104]);
     function decodeXorUrl(enc) {
         let s = '';
         for (let i = 0; i < enc.length; i++) {
@@ -51,6 +88,11 @@
     const IMPORT_HASH_PARAM = 'mwiImport';
     // URL hash 长度上限保护（编码后字符数），超过则退回 JSON 下载
     const MAX_IMPORT_URL_PAYLOAD_LENGTH = 1800000;
+
+    const SKILL_LABELS = Object.freeze(['Milking','Foraging','Woodcutting','Cheesesmithing','Crafting','Tailoring','Cooking','Brewing','Alchemy','Enhancing']);
+    const SKILL_LABELS_CN = Object.freeze(['挤奶','采摘','伐木','奶酪锻造','制作','缝纫','烹饪','冲泡','炼金','强化']);
+    // 与 index.html 的 SKILL_KEYS 一致；生活试炼卡片图标的 use href 末段即此 slug。
+    const SKILL_KEYS = Object.freeze(['milking','foraging','woodcutting','cheesesmithing','crafting','tailoring','cooking','brewing','alchemy','enhancing']);
 
     const AURA_MAP = Object.freeze({
         revive: '/abilities/revive',
@@ -194,13 +236,16 @@
         } else {
             state.iconButton.style.display = 'none';
             state.panelEl.style.display = '';
-            // 在图标的当前位置展开面板（先显示再测量尺寸，再钳制进视口）。
+            // 以 K 按钮的「上边中点」为定位点展开面板：面板水平中心对齐按钮水平中心、
+            // 面板顶边对齐按钮顶边（先显示再测量尺寸，再钳制进视口）。
             const iconPos = readUiPosition()
                 || { x: parseFloat(root.style.left), y: parseFloat(root.style.top) };
             const rect = state.panelEl.getBoundingClientRect();
+            const iconW = state.iconButton.offsetWidth || 46;
+            const left = (iconPos.x + iconW / 2) - rect.width / 2;
             const maxX = Math.max(8, window.innerWidth - rect.width - 8);
             const maxY = Math.max(8, window.innerHeight - rect.height - 8);
-            root.style.left = `${Math.min(Math.max(iconPos.x, 8), maxX)}px`;
+            root.style.left = `${Math.min(Math.max(left, 8), maxX)}px`;
             root.style.top = `${Math.min(Math.max(iconPos.y, 8), maxY)}px`;
         }
     }
@@ -246,7 +291,7 @@
         Object.assign(panel.style, {
             display: 'none',
             position: 'relative',
-            width: 'min(300px, calc(100vw - 24px))',
+            width: 'min(400px, calc(100vw - 24px))',
             boxSizing: 'border-box',
             padding: '12px',
             borderRadius: '10px',
@@ -349,6 +394,29 @@
             font: '600 12px/1 system-ui, sans-serif',
         });
         setBtn.addEventListener('click', () => toggleSettingsForm());
+        // 《检查脚本更新》：手动触发一次远程版本检查（跳过每天一次的静默节流），结果用 toast/横幅反馈
+        const updBtn = document.createElement('button');
+        updBtn.type = 'button';
+        updBtn.textContent = '检查脚本更新';
+        updBtn.title = '对比远程最新版本，有更新时右上角弹横幅（等同脚本菜单里的「检查脚本更新」）';
+        Object.assign(updBtn.style, {
+            border: '0',
+            borderRadius: '7px',
+            padding: '6px 9px',
+            background: '#344879',
+            color: '#fff',
+            cursor: 'pointer',
+            font: '600 12px/1 system-ui, sans-serif',
+        });
+        updBtn.addEventListener('click', function () {
+            if (updBtn.disabled) return;
+            updBtn.disabled = true;
+            updBtn.textContent = '检查中…';
+            void checkForUpdate({ force: true }).finally(function () {
+                updBtn.disabled = false;
+                updBtn.textContent = '检查脚本更新';
+            });
+        });
         // 「打开计算器」：不发送数据，仅跳转；非 KUNPO 公会时仍可点（单独存放，不进 actionButtons）
         const calcBtn = document.createElement('button');
         calcBtn.type = 'button';
@@ -411,7 +479,7 @@
             display: 'none',
         });
         signupBtn.addEventListener('click', () => runSignupCheck());
-        actions.append(sendBtn, jsonBtn, assignBtn, calcBtn, docBtn, meritBtn, signupBtn, setBtn);
+        actions.append(sendBtn, jsonBtn, assignBtn, calcBtn, docBtn, meritBtn, signupBtn, setBtn, updBtn);
         state.meritBtn = meritBtn;
         state.signupBtn = signupBtn;
 
@@ -1191,7 +1259,7 @@
 
     // GM_registerMenuCommand('设置试炼计算器页面地址（必须！！！）', setCalculatorUrl);
     // GM_registerMenuCommand('显示排刀（读取共享空间排刀）', () => { void refreshAssignment({ force: true }); });
-    GM_registerMenuCommand('检查脚本更新', () => { void checkForUpdate({ force: true }); });
+    // GM_registerMenuCommand('检查脚本更新', () => { void checkForUpdate({ force: true }); });
     //GM_registerMenuCommand('发送到试炼计算器', sendToCalculator);
     //GM_registerMenuCommand('导出当前角色全部迷宫配装到 JSON', exportJsonData);
 
@@ -1674,17 +1742,8 @@
     // 数据来源：GameState 的 guild.name / guild.id，或 guildCharacterDict 里的 guildID
     // （实测 KUNPO 的 guildID = 2515，可用 __KUNPO.guildInfo() 核对）。
     // ═══════════════════════════════════════════════════════════════════════
-    const GUILD_DEFAULTS = Object.freeze({ name: 'KUNPO', id: 2515 });
-    const K_GUILD_NAME = 'kunpo_guild_name';
-    const K_GUILD_ID = 'kunpo_guild_id';
-    const K_MASTER_KEY = 'kunpo_master_key';   // jsonbin 写入权限（PUT 401/403 时需要）
-    const K_HIDE_ICON = 'kunpo_hide_icon';     // 静默时是否隐藏 K 图标（'1' 隐藏 / 其他=保留图标）
-    const K_COUNT_CLICKS = 'kunpo_count_clicks'; // 是否启用操作计数（'1' 启用，默认不启用）
-    const K_CLICK_COUNT = 'kunpo_click_count';   // 操作计数累计值（按角色隔离）
-    const K_DOC_URL = 'kunpo_doc_url';           // 组队文档地址（《打开组队文档》跳转；留空=用内置默认地址）
-    // 内置默认组队文档地址：与 CALC_DEFAULT_URL_ENC 同款混淆（逐字符 XOR 0x5A，文件里不出现明文 URL）
-    const TEAM_DOC_DEFAULT_URL_ENC = Object.freeze([50,46,46,42,41,96,117,117,62,53,57,41,116,43,43,116,57,53,55,117,41,50,63,63,46,117,30,8,55,62,110,12,13,42,111,15,18,0,16,0,28,8,46,101,52,53,5,42,40,53,55,53,46,51,53,52,103,107,124,51,41,5,56,54,59,52,49,5,53,40,5,46,63,55,42,54,59,46,63,103,56,54,59,52,49,124,46,59,56,103,24,24,106,98,16,104]);
-    const guildConfig = { name: GUILD_DEFAULTS.name, id: GUILD_DEFAULTS.id };
+    // （GUILD_DEFAULTS / guildConfig / 各存储键 / TEAM_DOC_DEFAULT_URL_ENC 已集中到
+    //   文件顶部「用户可配置区」，此处只保留读写逻辑。）
     // ── 按角色名隔离配置：同一台电脑上 角色1→公会1、角色2→公会2、角色3→公会3 ──
     //   存储键 = 原键 + '::角色名'；没读到角色专属值时回退到旧的全局值，再回退默认值。
     function currentCharacterName() {
@@ -1858,10 +1917,51 @@
         if (state.signupBtn) state.signupBtn.style.display = blocked ? 'none' : (showStaff ? '' : 'none');
         if (state.settingsBtn) state.settingsBtn.style.display = '';
     }
+    // （CHANGELOG 已集中到文件顶部「用户可配置区」）
+    // 弹出更新日志（按版本号从新到旧排列，当前版本有标注）
+    function showChangelog() {
+        document.getElementById('kunpo-changelog-overlay')?.remove();
+        const overlay = document.createElement('div');
+        overlay.id = 'kunpo-changelog-overlay';
+        overlay.style.cssText = 'position:fixed;inset:0;z-index:2147483647;background:rgba(0,0,0,.55);'
+            + 'display:flex;align-items:center;justify-content:center';
+        const box = document.createElement('div');
+        box.style.cssText = 'position:relative;width:min(420px,calc(100vw - 32px));max-height:70vh;overflow-y:auto;padding:14px;'
+            + 'border-radius:12px;border:1px solid #6f9bd8;background:linear-gradient(145deg,#152447,#1d3566);color:#eef3ff;'
+            + 'font:12.5px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif;box-shadow:0 10px 28px rgba(3,10,26,.55)';
+        const title = document.createElement('strong');
+        title.textContent = '更新日志';
+        title.style.cssText = 'display:block;font-size:14px;margin:0 0 8px 0';
+        box.appendChild(title);
+        const close = document.createElement('button');
+        close.type = 'button'; close.textContent = '×'; close.title = '关闭';
+        close.style.cssText = 'position:absolute;top:7px;right:7px;min-width:24px;height:24px;border:0;border-radius:7px;'
+            + 'background:#344879;color:#fff;cursor:pointer;font:700 16px/1 system-ui,sans-serif';
+        close.addEventListener('click', () => overlay.remove());
+        box.appendChild(close);
+        Object.keys(CHANGELOG).sort(compareVersions).reverse().forEach(function (v) {
+            const item = document.createElement('div');
+            item.style.cssText = 'margin:0 0 10px 0;padding:8px 9px;border:1px solid #45598c;border-radius:8px;'
+                + 'background:rgba(10,20,44,.5)';
+            const ver = document.createElement('div');
+            ver.textContent = 'v' + v + (v === SCRIPT_VERSION ? '（当前版本）' : '');
+            ver.style.cssText = 'font-weight:700;color:#8fc3ff;margin-bottom:4px';
+            const body = document.createElement('div');
+            body.textContent = CHANGELOG[v];
+            body.style.cssText = 'white-space:pre-wrap;color:#c3d2f2';
+            item.append(ver, body);
+            box.appendChild(item);
+        });
+        overlay.appendChild(box);
+        overlay.addEventListener('click', function (e) { if (e.target === overlay) overlay.remove(); });
+        document.body.appendChild(overlay);
+    }
+
     function buildSettingsForm() {
         const form = document.createElement('div');
         form.id = 'kunpo-guild-settings';
-        form.style.cssText = 'margin-top:9px;padding:9px;border:1px solid #6f9bd8;border-radius:8px;background:rgba(10,20,44,.45)';
+        form.style.cssText = 'margin-top:9px;padding:9px;border:1px solid #6f9bd8;border-radius:8px;background:rgba(10,20,44,.45);'
+            + 'max-height:min(800px, calc(100vh - 160px));overflow-y:auto;box-sizing:border-box';
         // 当前配置归属的角色（设置按角色名隔离保存）
         const who = document.createElement('div');
         who.id = 'kunpo-settings-owner';
@@ -1869,8 +1969,8 @@
         who.textContent = '配置归属角色：' + (currentCharacterName() || '（未读取到角色名，将按全局保存）');
         form.appendChild(who);
         const hint = document.createElement('div');
+        hint.id = 'kunpo-settings-hint';
         hint.style.cssText = 'margin:0 0 8px 0;color:#7f93bb;font:400 10.5px/1.4 system-ui,sans-serif';
-        hint.textContent = '设置按角色名分别保存：角色1→公会1、角色2→公会2，互不影响。';
         form.appendChild(hint);
         const mk = function (labelText, placeholder) {
             const row = document.createElement('label');
@@ -1889,8 +1989,16 @@
         const idInput = mk('公会 ID（可留空，留空则只按名称匹配）', '2515');
         const urlInput = mk('JSON 获取地址（计算器共享空间 URL，含 bin/pwd；留空=用脚本默认地址）',
             'https://…/?guild=公会名&bin=…&pwd=…');
-        const mkInput = mk('Master Key（可选，仅上传时若提示无权限才需要）', '');
-        const docInput = mk('组队文档地址（《打开组队文档》按钮跳转；留空=用内置默认地址）', 'https://…');
+        const mkInput = mk('Master Key（仅上传时提示无权限才填）', '');
+        const docInput = mk('组队文档地址（《打开组队文档》按钮跳转）', 'https://…');
+        // 各输入行（label）引用：简洁界面按「是否自定义过」动态显隐
+        state.settingsRows = {
+            name: nameInput.parentNode,
+            id: idInput.parentNode,
+            url: urlInput.parentNode,
+            mk: mkInput.parentNode,
+            doc: docInput.parentNode,
+        };
         // 静默时是否隐藏 K 图标
         const hideRow = document.createElement('label');
         hideRow.style.cssText = 'display:flex;align-items:center;gap:6px;margin:0 0 6px 0;color:#c3d2f2;font:600 11px/1.4 system-ui,sans-serif;cursor:pointer';
@@ -1921,7 +2029,11 @@
         resume.id = 'kunpo-resume-btn';
         resume.title = '试炼已结束判定后脚本整体静默；点击恢复脚本全部功能（等同控制台 __KUNPO.resume()）';
         resume.style.display = 'none';
-        [save, cancel, resume].forEach(function (b) {
+        // 「更新日志」：弹出各版本更新内容
+        const logBtn = document.createElement('button');
+        logBtn.type = 'button'; logBtn.textContent = '更新日志';
+        logBtn.title = '查看各版本的更新内容';
+        [save, cancel, resume, logBtn].forEach(function (b) {
             Object.assign(b.style, {
                 border: '0', borderRadius: '6px', padding: '5px 9px', background: '#0a84ff',
                 color: '#fff', cursor: 'pointer', font: '600 12px/1 system-ui, sans-serif',
@@ -1929,6 +2041,8 @@
         });
         cancel.style.background = '#344879';
         resume.style.background = '#1f9d55';
+        logBtn.style.background = '#344879';
+        logBtn.addEventListener('click', () => showChangelog());
         resume.addEventListener('click', function () {
             if (trialEndState.silenced) {
                 // 取消静默：恢复全部功能，且本会话内不再被自动结束判定重新静默
@@ -1949,7 +2063,7 @@
             saveGuildSettings(nameInput.value, idInput.value, urlInput.value, mkInput.value, docInput.value, hideInput.checked, countInput.checked);
         });
         cancel.addEventListener('click', function () { form.style.display = 'none'; });
-        btns.append(save, cancel, resume);
+        btns.append(save, cancel, resume, logBtn);
         form.appendChild(btns);
         state.settingsInputs = { name: nameInput, id: idInput, url: urlInput, mk: mkInput, doc: docInput, hide: hideInput, count: countInput };
         return form;
@@ -2009,17 +2123,56 @@
         const willOpen = form.style.display === 'none';
         if (!willOpen) { form.style.display = 'none'; return; }
         const ins = state.settingsInputs || {};
-        // 设置的公会名与游戏内读到的公会名不一致 → 所有输入框一律留空（不回填任何默认值）
+        const rows = state.settingsRows || {};
+        // 打开设置前先刷新一次公会门控：确保「公会名不一致」判定用的是最新游戏内数据
+        updateGuildGate(getGameState());
         const mismatch = guildNameMismatch();
-        if (ins.name) ins.name.value = mismatch ? '' : (guildConfig.name || '');
-        if (ins.id) ins.id.value = (!mismatch && guildConfig.id) ? String(guildConfig.id) : '';
-        if (ins.url) ins.url.value = mismatch ? '' : savedCalcUrl();
-        if (ins.mk) ins.mk.value = mismatch ? '' : masterKey();
-        if (ins.doc) ins.doc.value = mismatch ? '' : savedDocUrl();
-        if (ins.hide) ins.hide.checked = mismatch ? false : hideIconOnSilence();
-        if (ins.count) ins.count.checked = mismatch ? false : clickCountEnabled();
+        // 还没读到游戏内公会 → 无法判断是否匹配，按「需要填写」处理：全部显示并留空
+        const needAll = mismatch || !guildGate.known;
+        // 简洁界面：各项「自定义过（存过非空值）」才显示，仍用默认值的行隐藏。
+        // 公会名不一致时无视此规则全部显示，方便逐项填入。
+        const cfgCustom = function (base) {
+            try { const v = readCfg(base); return !!(v && String(v).trim()); } catch (_) { return false; }
+        };
+        const nameCustom = cfgCustom(K_GUILD_NAME);
+        const idCustom = cfgCustom(K_GUILD_ID);
+        const urlCustom = !!savedCalcUrl();
+        const mkCustom = !!masterKey();
+        const docCustom = !!savedDocUrl();
+        const showRow = function (row, customized) {
+            if (row) row.style.display = (needAll || customized) ? '' : 'none';
+        };
+        // KUNPO 成员判定：游戏内公会名就是默认公会（KUNPO）才算。
+        // 仅「配置与游戏内匹配」不算——其他公会的老数据角色同样会匹配，但不能隐藏他们的配置项。
+        const kunpoMember = guildGate.known && !mismatch
+            && String(guildGate.name || '').trim().toUpperCase() === String(GUILD_DEFAULTS.name).trim().toUpperCase();
+        showRow(rows.name, !kunpoMember);
+        showRow(rows.id, !kunpoMember);
+        showRow(rows.url, !kunpoMember || urlCustom);
+        showRow(rows.mk, !kunpoMember || mkCustom);
+        showRow(rows.doc, !kunpoMember || docCustom);
+        // 回填：正常状态下显示行填当前值；需全部填写（不一致/未读到公会）或隐藏行一律置空
+        //（置空可避免把全局键里别的角色存的值回填进来）
+        const fill = function (input, customized, val) {
+            if (input) input.value = (!needAll && customized) ? val : '';
+        };
+        fill(ins.name, !kunpoMember && nameCustom, guildConfig.name || '');
+        fill(ins.id, !kunpoMember && idCustom, guildConfig.id ? String(guildConfig.id) : '');
+        fill(ins.url, urlCustom, savedCalcUrl());
+        fill(ins.mk, mkCustom, masterKey());
+        fill(ins.doc, docCustom, savedDocUrl());
+        if (ins.hide) ins.hide.checked = needAll ? false : hideIconOnSilence();
+        if (ins.count) ins.count.checked = needAll ? false : clickCountEnabled();
         const owner = document.getElementById('kunpo-settings-owner');
         if (owner) owner.textContent = '配置归属角色：' + (currentCharacterName() || '（未读取到角色名，将按全局保存）');
+        const hintEl = document.getElementById('kunpo-settings-hint');
+        if (hintEl) hintEl.textContent = needAll
+            ? (mismatch
+                ? '公会名与游戏内不一致：请逐项填入你的公会与地址，保存后生效。设置按角色名分别保存。'
+                : '尚未读取到游戏内公会信息：如非 KUNPO 成员，请逐项填入公会与地址。')
+            : (!kunpoMember
+                ? '当前公会不是 KUNPO：全部配置项已显示，按需填写（留空项继续使用已保存的值）。'
+                : '');
         // 「取消静默 / 打开静默」按钮按当前状态切换显隐与文案
         updateResumeButton();
         form.style.display = '';
