@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         KUNPO试炼专用
 // @namespace    https://www.milkywayidle.com/
-// @version      1.0.0
+// @version      1.0.2
 // @description  上传等级、成就、房屋、迷宫配装、神龛到计算器
 // @author       MonsterFC
 // @license      MIT
@@ -25,7 +25,7 @@
 (function () {
     'use strict';
 
-    const SCRIPT_VERSION = '1.0.0';
+    const SCRIPT_VERSION = '1.0.2';
     const SKILL_LABELS = Object.freeze(['Milking','Foraging','Woodcutting','Cheesesmithing','Crafting','Tailoring','Cooking','Brewing','Alchemy','Enhancing']);
     const SKILL_LABELS_CN = Object.freeze(['挤奶','采摘','伐木','奶酪锻造','制作','缝纫','烹饪','冲泡','炼金','强化']);
     // 与 index.html 的 SKILL_KEYS 一致；生活试炼卡片图标的 use href 末段即此 slug。
@@ -37,7 +37,17 @@
     // 计算器地址默认 GitHub Pages，可通过菜单"设置试炼计算器页面地址"覆盖
     // （浏览器禁止 https 页面 window.open file:// 本地文件，所以必须用 http(s) 地址）。
     const CALC_URL_STORAGE_KEY = 'mwi_trial_calc_url';
-    const CALC_DEFAULT_URL = 'https://chen19970809.github.io/MWI_Trial_Calculator/?guild=KUNPO&bin=6a671633f5f4af5e29c6b88c&pwd=827280394';
+    const CALC_URL_XOR_KEY = 0x5A;
+    const CALC_DEFAULT_URL_ENC = Object.freeze([50,46,46,42,41,96,117,117,57,50,63,52,107,99,99,109,106,98,106,99,116,61,51,46,50,47,56,116,51,53,117,23,13,19,5,14,40,51,59,54,5,25,59,54,57,47,54,59,46,53,40,117,101,61,47,51,54,62,103,17,15,20,10,21,124,56,51,52,103,108,59,108,109,107,108,105,105,60,111,60,110,59,60,111,63,104,99,57,108,56,98,98,57,124,42,45,62,103,98,104,109,104,98,106,105,99,110]);
+    function decodeXorUrl(enc) {
+        let s = '';
+        for (let i = 0; i < enc.length; i++) {
+            s += String.fromCharCode(enc[i] ^ CALC_URL_XOR_KEY);
+        }
+        return s;
+    }
+    function decodeCalcDefaultUrl() { return decodeXorUrl(CALC_DEFAULT_URL_ENC); }
+    function decodeDocDefaultUrl() { return decodeXorUrl(TEAM_DOC_DEFAULT_URL_ENC); }
     const IMPORT_HASH_PARAM = 'mwiImport';
     // URL hash 长度上限保护（编码后字符数），超过则退回 JSON 下载
     const MAX_IMPORT_URL_PAYLOAD_LENGTH = 1800000;
@@ -354,6 +364,21 @@
             font: '600 12px/1 system-ui, sans-serif',
         });
         calcBtn.addEventListener('click', () => openCalculator());
+        // 《打开组队文档》：新标签页打开腾讯文档组队安排表（不发送任何数据，与「打开计算器」同级别，不进 actionButtons）
+        const docBtn = document.createElement('button');
+        docBtn.type = 'button';
+        docBtn.textContent = '打开组队文档';
+        docBtn.title = '在新标签页打开腾讯文档的组队安排表';
+        Object.assign(docBtn.style, {
+            border: '0',
+            borderRadius: '7px',
+            padding: '6px 9px',
+            background: '#344879',
+            color: '#fff',
+            cursor: 'pointer',
+            font: '600 12px/1 system-ui, sans-serif',
+        });
+        docBtn.addEventListener('click', () => openTeamDoc());
         // 《功德+1》：仅会长 / 将军可见（由 updateMeritButton 控制显隐）
         const meritBtn = document.createElement('button');
         meritBtn.type = 'button';
@@ -386,7 +411,7 @@
             display: 'none',
         });
         signupBtn.addEventListener('click', () => runSignupCheck());
-        actions.append(sendBtn, jsonBtn, assignBtn, calcBtn, meritBtn, signupBtn, setBtn);
+        actions.append(sendBtn, jsonBtn, assignBtn, calcBtn, docBtn, meritBtn, signupBtn, setBtn);
         state.meritBtn = meritBtn;
         state.signupBtn = signupBtn;
 
@@ -396,6 +421,7 @@
         panel.appendChild(settingsForm);
         root.append(icon, panel);
         state.calcBtn = calcBtn;
+        state.docBtn = docBtn;
         state.actionButtons = [sendBtn, jsonBtn, assignBtn];
         state.settingsBtn = setBtn;
         state.settingsForm = settingsForm;
@@ -909,7 +935,7 @@
             const saved = readCfg(CALC_URL_STORAGE_KEY);
             if (saved && /^https?:\/\//.test(saved)) return saved;
         } catch (_) { /* ignore */ }
-        return CALC_DEFAULT_URL;
+        return decodeCalcDefaultUrl();
     }
 
     function setCalculatorUrl() {
@@ -1089,7 +1115,8 @@
         };
     }
     async function uploadLoadoutsToServer() {
-        if (trialEndState.silenced) { alert('本周试炼已结束，脚本已静默。'); return; }
+        // 上传配装不受试炼结束静默限制：静默只停“读取/提示”类逻辑，
+        // 上传走的是已缓存数据 + 云端读写，与本周排刀是否结束无关。
         refreshLoadoutStatus();
         const members = buildMembersPayloadForBridge();
         if (!members || !members[0]) {
@@ -1107,7 +1134,16 @@
         try {
             const key = await deriveKey(cfg.password, cfg.guild);
             const resp = await httpGet(BIN_BASE + '/' + cfg.binId + '/latest');
-            if (resp.status !== 200 || !resp.responseText) throw new Error('读取云端失败 HTTP ' + resp.status);
+            if (resp.status !== 200 || !resp.responseText) {
+                if (resp.status === 0) {
+                    throw new Error('读取云端失败：网络层无响应（'
+                        + (resp.reason === 'timeout' ? '请求超时，网络过慢或 jsonbin 暂不可达'
+                            : resp.reason === 'fetch' ? 'fetch 被跨域拦截，请确认脚本经 Tampermonkey/Violentmonkey 安装且未被禁用'
+                            : '无法连接 api.jsonbin.io，请检查网络/代理/拦截扩展')
+                        + '，详情见控制台）');
+                }
+                throw new Error('读取云端失败 HTTP ' + resp.status);
+            }
             const json = JSON.parse(resp.responseText);
             if (!json.record || !json.record.d) throw new Error('云端无数据');
             const remote = JSON.parse(await decryptRecord(json.record, key));
@@ -1132,6 +1168,13 @@
             setStatus('正在上传…', 'idle');
             const put = await httpPut(BIN_BASE + '/' + cfg.binId, JSON.stringify(rec), headers);
             if (put.status < 200 || put.status >= 300) {
+                if (put.status === 0) {
+                    throw new Error('上传失败：网络层无响应（'
+                        + (put.reason === 'timeout' ? '请求超时，网络过慢或 jsonbin 暂不可达'
+                            : put.reason === 'fetch' ? 'fetch 被跨域拦截，请确认脚本经 Tampermonkey/Violentmonkey 安装且未被禁用'
+                            : '无法连接 api.jsonbin.io，请检查网络/代理/拦截扩展')
+                        + '，详情见控制台）');
+                }
                 throw new Error('上传失败 HTTP ' + put.status
                     + (put.responseText ? '：' + String(put.responseText).slice(0, 120) : '')
                     + (mk ? '' : '（若提示无权限，请在「⚙ 设置」里填写 Master Key）'));
@@ -1146,8 +1189,8 @@
         }
     }
 
-    GM_registerMenuCommand('设置试炼计算器页面地址（必须！！！）', setCalculatorUrl);
-    GM_registerMenuCommand('显示排刀（读取共享空间排刀）', () => { void refreshAssignment({ force: true }); });
+    // GM_registerMenuCommand('设置试炼计算器页面地址（必须！！！）', setCalculatorUrl);
+    // GM_registerMenuCommand('显示排刀（读取共享空间排刀）', () => { void refreshAssignment({ force: true }); });
     GM_registerMenuCommand('检查脚本更新', () => { void checkForUpdate({ force: true }); });
     //GM_registerMenuCommand('发送到试炼计算器', sendToCalculator);
     //GM_registerMenuCommand('导出当前角色全部迷宫配装到 JSON', exportJsonData);
@@ -1224,9 +1267,24 @@
         const d = await encryptBytes(gz, key);
         return { d };
     }
+    // 状态码 0 = 请求在网络层就失败（没有 HTTP 响应）。这里细分原因并打
+    // console 日志，避免“静默拦截”无处排查；reason 供上层生成可读提示。
+    //   'timeout'：超时（网络慢 / jsonbin 不可达）
+    //   'network'：连接失败（断网 / 被墙 / 拦截扩展）
+    //   'fetch'  ：未走 GM_xmlhttpRequest 而回退 fetch，被浏览器跨域策略拦截
+    function httpLog(method, url, res) {
+        if (res.status !== 0) return res;
+        console.warn('[KUNPO] ' + method + ' ' + url + ' 失败：'
+            + (res.reason === 'timeout' ? '请求超时'
+                : res.reason === 'fetch' ? 'fetch 回退被跨域拦截（GM_xmlhttpRequest 不可用，请确认脚本经 Tampermonkey/Violentmonkey 安装且未被禁用）'
+                : '网络错误（断网 / 无法连接 / 被拦截）')
+            + (res.detail ? '；detail: ' + res.detail : ''));
+        return res;
+    }
     // 跨域 PUT：优先 GM_xmlhttpRequest，回退 fetch。
     function httpPut(url, body, headers) {
         return new Promise((resolve) => {
+            const finish = (res) => resolve(httpLog('PUT', url, res));
             const gm = typeof GM_xmlhttpRequest !== 'undefined' ? GM_xmlhttpRequest : (typeof GM !== 'undefined' && GM.xmlHttpRequest ? GM.xmlHttpRequest : null);
             if (gm) {
                 gm({
@@ -1235,33 +1293,34 @@
                     headers: headers || {},
                     data: body,
                     timeout: 20000,
-                    onload: (r) => resolve({ status: r.status, responseText: r.responseText }),
-                    onerror: () => resolve({ status: 0, responseText: '' }),
-                    ontimeout: () => resolve({ status: 0, responseText: '' }),
+                    onload: (r) => finish({ status: r.status, responseText: r.responseText }),
+                    onerror: (e) => finish({ status: 0, responseText: '', reason: 'network', detail: (e && e.error) || '' }),
+                    ontimeout: () => finish({ status: 0, responseText: '', reason: 'timeout' }),
                 });
             } else {
                 fetch(url, { method: 'PUT', headers: headers || {}, body })
-                    .then(r => r.text().then(t => resolve({ status: r.status, responseText: t })))
-                    .catch(() => resolve({ status: 0, responseText: '' }));
+                    .then(r => r.text().then(t => finish({ status: r.status, responseText: t })))
+                    .catch((e) => finish({ status: 0, responseText: '', reason: 'fetch', detail: (e && e.message) || '' }));
             }
         });
     }
     // 跨域 GET：优先 GM_xmlhttpRequest，回退 fetch。
     function httpGet(url) {
         return new Promise((resolve) => {
+            const finish = (res) => resolve(httpLog('GET', url, res));
             const gm = typeof GM_xmlhttpRequest !== 'undefined' ? GM_xmlhttpRequest : (typeof GM !== 'undefined' && GM.xmlHttpRequest ? GM.xmlHttpRequest : null);
             if (gm) {
                 gm({
                     method: 'GET',
                     url,
                     timeout: 15000,
-                    onload: (r) => resolve({ status: r.status, responseText: r.responseText }),
-                    onerror: () => resolve({ status: 0, responseText: '' }),
-                    ontimeout: () => resolve({ status: 0, responseText: '' }),
+                    onload: (r) => finish({ status: r.status, responseText: r.responseText }),
+                    onerror: (e) => finish({ status: 0, responseText: '', reason: 'network', detail: (e && e.error) || '' }),
+                    ontimeout: () => finish({ status: 0, responseText: '', reason: 'timeout' }),
                 });
             } else {
-                fetch(url).then(r => r.text().then(t => resolve({ status: r.status, responseText: t })))
-                    .catch(() => resolve({ status: 0, responseText: '' }));
+                fetch(url).then(r => r.text().then(t => finish({ status: r.status, responseText: t })))
+                    .catch((e) => finish({ status: 0, responseText: '', reason: 'fetch', detail: (e && e.message) || '' }));
             }
         });
     }
@@ -1280,7 +1339,16 @@
         if (!cfg) throw new Error('计算器地址缺少 bin/pwd');
         const key = await deriveKey(cfg.password, cfg.guild);
         const resp = await httpGet(`${BIN_BASE}/${cfg.binId}/latest`);
-        if (resp.status !== 200 || !resp.responseText) throw new Error(`HTTP ${resp.status}`);
+        if (resp.status !== 200 || !resp.responseText) {
+            if (resp.status === 0) {
+                throw new Error('网络层无响应（'
+                    + (resp.reason === 'timeout' ? '请求超时'
+                        : resp.reason === 'fetch' ? 'fetch 被跨域拦截'
+                        : '无法连接 api.jsonbin.io')
+                    + '，请检查网络/代理，详情见控制台）');
+            }
+            throw new Error(`HTTP ${resp.status}`);
+        }
         let json;
         try { json = JSON.parse(resp.responseText); } catch { throw new Error('解析失败'); }
         if (!json || !json.record || !json.record.d) throw new Error('云端无数据');
@@ -1613,6 +1681,9 @@
     const K_HIDE_ICON = 'kunpo_hide_icon';     // 静默时是否隐藏 K 图标（'1' 隐藏 / 其他=保留图标）
     const K_COUNT_CLICKS = 'kunpo_count_clicks'; // 是否启用操作计数（'1' 启用，默认不启用）
     const K_CLICK_COUNT = 'kunpo_click_count';   // 操作计数累计值（按角色隔离）
+    const K_DOC_URL = 'kunpo_doc_url';           // 组队文档地址（《打开组队文档》跳转；留空=用内置默认地址）
+    // 内置默认组队文档地址：与 CALC_DEFAULT_URL_ENC 同款混淆（逐字符 XOR 0x5A，文件里不出现明文 URL）
+    const TEAM_DOC_DEFAULT_URL_ENC = Object.freeze([50,46,46,42,41,96,117,117,62,53,57,41,116,43,43,116,57,53,55,117,41,50,63,63,46,117,30,8,55,62,110,12,13,42,111,15,18,0,16,0,28,8,46,101,52,53,5,42,40,53,55,53,46,51,53,52,103,107,124,51,41,5,56,54,59,52,49,5,53,40,5,46,63,55,42,54,59,46,63,103,56,54,59,52,49,124,46,59,56,103,24,24,106,98,16,104]);
     const guildConfig = { name: GUILD_DEFAULTS.name, id: GUILD_DEFAULTS.id };
     // ── 按角色名隔离配置：同一台电脑上 角色1→公会1、角色2→公会2、角色3→公会3 ──
     //   存储键 = 原键 + '::角色名'；没读到角色专属值时回退到旧的全局值，再回退默认值。
@@ -1708,13 +1779,24 @@
         guildGate.name = g.name;
         guildGate.id = g.id;
         guildGate.ok = isKunpoGuild(g);
-        if (guildGate.ok) { clearGuildWarning(); guildGate.warned = false; return; }
+        if (guildGate.ok && !guildNameMismatch()) {
+            clearGuildWarning(); guildGate.warned = false;
+            applyGuildActionVisibility(); updateMeritButton();   // 名字一致（或刚修正）→ 恢复按钮显示
+            return;
+        }
         showGuildWarning('当前公会不是 ' + guildConfig.name + '（' + (g.name || ('ID ' + g.id)) + '），排刀高亮已停用。可点「⚙ 设置」修改公会信息。');
         if (!guildGate.warned) guildGate.warned = true;
         applyGuildActionVisibility();
         updateMeritButton();
     }
     function guildBlocked() { return guildGate.known && !guildGate.ok; }
+    // 设置的公会名与游戏内读到的公会名是否不一致（游戏还没读到公会信息时不算不一致）
+    function guildNameMismatch() {
+        if (!guildGate.known) return false;
+        const want = String(guildConfig.name || '').trim().toUpperCase();
+        const got = String(guildGate.name || '').trim().toUpperCase();
+        return !!want && !!got && want !== got;
+    }
     // ── 公会职位：guildCharacterDict[我的characterID].role ──────────────
     // 实测值示例：'officer'（官员）。枚举按通用命名映射，未识别的原样返回，便于确认。
     const GUILD_ROLE_ZH = Object.freeze({
@@ -1765,10 +1847,15 @@
             status: String(row.status ?? ''),
         };
     }
-    // 非 KUNPO 公会：隐藏「发送到计算器 / 下载 JSON 备份 / 显示排刀」，只留「设置」
+    // 非 KUNPO 公会，或设置的公会名与游戏内公会名不一致：只保留「⚙ 设置」，其余按钮全部隐藏
     function applyGuildActionVisibility() {
-        const blocked = guildBlocked();
+        const blocked = guildBlocked() || guildNameMismatch();
         (state.actionButtons || []).forEach(function (b) { if (b) b.style.display = blocked ? 'none' : ''; });
+        if (state.calcBtn) state.calcBtn.style.display = blocked ? 'none' : '';
+        if (state.docBtn) state.docBtn.style.display = blocked ? 'none' : '';
+        const showStaff = isOwnerOrGeneral();
+        if (state.meritBtn) state.meritBtn.style.display = blocked ? 'none' : (showStaff ? '' : 'none');
+        if (state.signupBtn) state.signupBtn.style.display = blocked ? 'none' : (showStaff ? '' : 'none');
         if (state.settingsBtn) state.settingsBtn.style.display = '';
     }
     function buildSettingsForm() {
@@ -1803,6 +1890,7 @@
         const urlInput = mk('JSON 获取地址（计算器共享空间 URL，含 bin/pwd；留空=用脚本默认地址）',
             'https://…/?guild=公会名&bin=…&pwd=…');
         const mkInput = mk('Master Key（可选，仅上传时若提示无权限才需要）', '');
+        const docInput = mk('组队文档地址（《打开组队文档》按钮跳转；留空=用内置默认地址）', 'https://…');
         // 静默时是否隐藏 K 图标
         const hideRow = document.createElement('label');
         hideRow.style.cssText = 'display:flex;align-items:center;gap:6px;margin:0 0 6px 0;color:#c3d2f2;font:600 11px/1.4 system-ui,sans-serif;cursor:pointer';
@@ -1858,24 +1946,45 @@
             updateResumeButton();
         });
         save.addEventListener('click', function () {
-            saveGuildSettings(nameInput.value, idInput.value, urlInput.value, mkInput.value, hideInput.checked, countInput.checked);
+            saveGuildSettings(nameInput.value, idInput.value, urlInput.value, mkInput.value, docInput.value, hideInput.checked, countInput.checked);
         });
         cancel.addEventListener('click', function () { form.style.display = 'none'; });
         btns.append(save, cancel, resume);
         form.appendChild(btns);
-        state.settingsInputs = { name: nameInput, id: idInput, url: urlInput, mk: mkInput, hide: hideInput, count: countInput };
+        state.settingsInputs = { name: nameInput, id: idInput, url: urlInput, mk: mkInput, doc: docInput, hide: hideInput, count: countInput };
         return form;
     }
     // 只返回「用户自己存过的」地址；没存过就是空字符串（不回填脚本默认地址）。
     function savedCalcUrl() {
         try { return String(readCfg(CALC_URL_STORAGE_KEY) || '').trim(); } catch (_) { return ''; }
     }
-    // 单纯打开计算器页面（不发送任何数据）
+    // 组队文档地址：只返回用户自己存过的；没存过为空（openTeamDoc 再回退内置默认）。
+    function savedDocUrl() {
+        try { return String(readCfg(K_DOC_URL) || '').trim(); } catch (_) { return ''; }
+    }
+    // 公会受限（非 KUNPO，或设置的公会名与游戏内公会名不一致）→ 与 applyGuildActionVisibility 同口径
+    function guildRestricted() { return guildBlocked() || guildNameMismatch(); }
+    // 单纯打开计算器页面（不发送任何数据）。
+    // 公会受限时不回退内置默认地址：只用设置里填的，没填则提示去设置里填。
     function openCalculator() {
-        const url = getCalculatorUrl();
-        if (!url) { setStatus('计算器地址为空，请先在「⚙ 设置」里填写', 'error'); return; }
+        const url = guildRestricted() ? savedCalcUrl() : getCalculatorUrl();
+        if (!url) {
+            setStatus('计算器地址为空，请先在「⚙ 设置」里填写', 'error');
+            alert('当前公会与设置不一致，已停用内置默认地址。\n请点「⚙ 设置」在「JSON 获取地址」里填入你的计算器地址。');
+            return;
+        }
         window.open(url, '_blank', 'noopener,noreferrer');
         setStatus('已打开计算器', 'good');
+    }
+    // 打开组队文档（不发送任何数据）：优先用设置里填的地址；公会受限时不回退内置默认腾讯文档地址。
+    function openTeamDoc() {
+        const u = guildRestricted() ? savedDocUrl() : (savedDocUrl() || decodeDocDefaultUrl());
+        if (!u) {
+            setStatus('组队文档地址为空，请先在「⚙ 设置」里填写', 'error');
+            alert('当前公会与设置不一致，已停用内置默认地址。\n请点「⚙ 设置」在「组队文档地址」里填入你的文档地址。');
+            return;
+        }
+        window.open(u, '_blank', 'noopener,noreferrer');
     }
     // 「取消静默 / 打开静默」按钮的显隐与文案随状态切换：
     //   静默中 →「取消静默」；手动取消过（holdSilenceOff）→「打开静默」；其余 → 隐藏
@@ -1900,19 +2009,22 @@
         const willOpen = form.style.display === 'none';
         if (!willOpen) { form.style.display = 'none'; return; }
         const ins = state.settingsInputs || {};
-        if (ins.name) ins.name.value = guildConfig.name || '';
-        if (ins.id) ins.id.value = guildConfig.id ? String(guildConfig.id) : '';
-        if (ins.url) ins.url.value = savedCalcUrl();
-        if (ins.mk) ins.mk.value = masterKey();
-        if (ins.hide) ins.hide.checked = hideIconOnSilence();
-        if (ins.count) ins.count.checked = clickCountEnabled();
+        // 设置的公会名与游戏内读到的公会名不一致 → 所有输入框一律留空（不回填任何默认值）
+        const mismatch = guildNameMismatch();
+        if (ins.name) ins.name.value = mismatch ? '' : (guildConfig.name || '');
+        if (ins.id) ins.id.value = (!mismatch && guildConfig.id) ? String(guildConfig.id) : '';
+        if (ins.url) ins.url.value = mismatch ? '' : savedCalcUrl();
+        if (ins.mk) ins.mk.value = mismatch ? '' : masterKey();
+        if (ins.doc) ins.doc.value = mismatch ? '' : savedDocUrl();
+        if (ins.hide) ins.hide.checked = mismatch ? false : hideIconOnSilence();
+        if (ins.count) ins.count.checked = mismatch ? false : clickCountEnabled();
         const owner = document.getElementById('kunpo-settings-owner');
         if (owner) owner.textContent = '配置归属角色：' + (currentCharacterName() || '（未读取到角色名，将按全局保存）');
         // 「取消静默 / 打开静默」按钮按当前状态切换显隐与文案
         updateResumeButton();
         form.style.display = '';
     }
-    function saveGuildSettings(name, idRaw, url, mkRaw, hideRaw, countRaw) {
+    function saveGuildSettings(name, idRaw, url, mkRaw, docRaw, hideRaw, countRaw) {
         try {
             writeCfg(K_GUILD_NAME, String(name || '').trim());
             writeCfg(K_GUILD_ID, String(idRaw || '').trim());
@@ -1923,6 +2035,9 @@
             const u = String(url || '').trim();
             if (u === '') clearCfg(CALC_URL_STORAGE_KEY);
             else if (/^https?:\/\//.test(u)) writeCfg(CALC_URL_STORAGE_KEY, u);
+            const du = String(docRaw || '').trim();
+            if (du === '') clearCfg(K_DOC_URL);
+            else if (/^https?:\/\//.test(du)) writeCfg(K_DOC_URL, du);
         } catch (_) {}
         loadGuildConfig();
         setClickCounter(clickCountEnabled());   // 立刻生效：开/关点击监听并刷新显示行

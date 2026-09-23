@@ -864,6 +864,7 @@ table.member-table tbody tr:hover td.sticky-l.name-cell { background-color:var(-
     <button class="btn" id="btn-upload" onclick="uploadToServer()" style="display:none" title="">☁️ <span id="btn-upload-label">上传</span></button>
     <button class="btn" id="btn-share" onclick="openShareDialog()">共享设置</button>
     <button class="btn" id="btn-import-json" onclick="importJson()">导入</button>
+    <button class="btn" id="btn-open-team-doc" onclick="openTeamDoc()" title="">打开组队文档</button>
     <button class="btn" id="btn-update-levels" onclick="updateLevelsFromCsv()" style="display:none" title="">更新等级</button>
     <span id="export-script-links" class="export-script-links"></span>
     <button class="btn btn-primary" id="btn-calculate" onclick="calculate()">计算最优分配</button>
@@ -1019,6 +1020,7 @@ const I18N = {
     displayCols:'列数', displayColsTip:'展示区域分成的列数（1-9 列）。修改后每列行数会按当前成员数重新生成均衡默认值。',
     displayRows:'每列行数', displayRowsTip:'依次填写每一列的行数，以空格分隔（如 4 3 2 1 = 第1列4行、第2列3行、第3列2行、第4列1行）。行数之和不足时，剩余成员会并入最后一列。',
     docImportBtn:'文档', allProfessions:'所有职业',
+    openTeamDoc:'打开组队文档', openTeamDocTip:'打开腾讯文档的组队安排表（新标签页）',
     battleTrial:'战斗试炼', battleTrialTip:'点击图标区域展开下拉，单选一个战斗试炼图标',
     battleTrialIconNames:['刺猬','虫群','变色龙','水母','獾'],
     battleProfessions:'出战职业', battleProfessionsTip:'点击展开多选下拉，可勾选多个出战职业（选项为《所有职业》导入的全部职业）',
@@ -1146,6 +1148,7 @@ const I18N = {
     displayCols:'Columns', displayColsTip:'Number of columns (1-9) in the display area. Changing this regenerates a balanced rows-per-column string based on current members.',
     displayRows:'Rows per Column', displayRowsTip:'Row count of each column in order, separated by spaces (e.g. 4 3 2 1 = 4 rows in col 1, 3 in col 2, 2 in col 3, 1 in col 4). Leftover members go to the last column.',
     docImportBtn:'Doc', allProfessions:'All Professions',
+    openTeamDoc:'Team Doc', openTeamDocTip:'Open the team arrangement sheet on Tencent Docs (new tab)',
     battleTrial:'Battle Trial', battleTrialTip:'Click the icon area to open the dropdown and pick one battle trial icon',
     battleTrialIconNames:['Hedgehog','Swarm','Chameleon','Jellyfish','Badger'],
     battleProfessions:'Battle Professions', battleProfessionsTip:'Click to open the multi-select dropdown; options are all professions imported into All Professions',
@@ -5326,6 +5329,8 @@ function updateStaticText() {
   renderBattleTrialOptions();
   const docImportBtn = document.getElementById('btn-doc-import');
   if (docImportBtn) docImportBtn.textContent = t('docImportBtn');
+  const teamDocBtn = document.getElementById('btn-open-team-doc');
+  if (teamDocBtn) { teamDocBtn.textContent = t('openTeamDoc'); teamDocBtn.title = t('openTeamDocTip'); }
   const gbTitle = document.getElementById('h3-global-buff');
   if (gbTitle) gbTitle.firstChild.textContent = t('globalBuffs') + ' ';
   const gb = state.globalBuffs || {};
@@ -5401,6 +5406,10 @@ function updateStaticText() {
   updatePullStatus();
 }
 
+// 打开组队文档（腾讯文档在线表格，新标签页）
+function openTeamDoc() {
+  window.open('https://docs.qq.com/sheet/DRmd4VWp5UHZJZFRt?no_promotion=1&is_blank_or_template=blank&tab=BB08J2', '_blank', 'noopener,noreferrer');
+}
 // 顶部"未获取 / 已获取 hh:mm:ss"徽标 + 获取按钮的状态样式。个人端未拉取时按钮高亮闪烁。
 function updatePullStatus() {
   const badge = document.getElementById('pull-status');
