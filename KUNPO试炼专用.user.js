@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         KUNPO试炼专用
 // @namespace    https://www.milkywayidle.com/
-// @version      1.0.4
+// @version      1.0.5
 // @description  上传等级、成就、房屋、迷宫配装、神龛到计算器
 // @author       MonsterFC
 // @license      MIT
@@ -23,10 +23,11 @@
 (function () {
     'use strict';
 
-    const SCRIPT_VERSION = '1.0.3';
+    const SCRIPT_VERSION = '1.0.5';
 
     // ── 更新日志：key = 版本号，value = 中文更新内容；发新版本时在顶部加一条即可 ──
     const CHANGELOG = {
+        '1.0.5': '1.上传新增默认 Access Key\n',
         '1.0.4': '1.上传配装中新增光环数据\n'
             + '2. 会内组队光环推荐',
         '1.0.3': '1.新增日志\n'
@@ -71,11 +72,7 @@
     const K_AURA_PRIORITY = 'kunpo_aura_priority'; // 光环优先级（5 个槽位，元素为 AURA_MAP 键或 '' 表示不参与）
     const K_AURA_MANUAL = 'kunpo_aura_manual';     // 光环手动录入（{成员名: {AURA_MAP键: 等级}}，服务器未上传时兜底）
 
-    // ── 计算器 / 组队文档内置默认地址（XOR 0x5A 混淆存储，文件中不出现明文）──
-    // 跳过 JSON 下载：把 members 数组 base64url 编码后作为 URL hash 拼到计算器页面，
-    // index.html 的 init() 末尾解析 #mwiImport=... 并走与"导入 JSON"相同的合并逻辑。
-    // 计算器地址默认 GitHub Pages，可通过菜单"设置试炼计算器页面地址"覆盖
-    // （浏览器禁止 https 页面 window.open file:// 本地文件，所以必须用 http(s) 地址）。
+
     const CALC_URL_STORAGE_KEY = 'mwi_trial_calc_url';
     const CALC_URL_XOR_KEY = 0x5A;
     // 国内直连镜像（EdgeOne Pages 国内边缘节点）：勾选《国内直连》后《打开计算器》跳这里
@@ -91,6 +88,9 @@
     }
     function decodeCalcDefaultUrl() { return decodeXorUrl(CALC_DEFAULT_URL_ENC); }
     function decodeDocDefaultUrl() { return decodeXorUrl(TEAM_DOC_DEFAULT_URL_ENC); }
+    // ── KUNPO 成员默认上传凭证（jsonbin Access Key，仅 Bins Update 权限）──
+    const KUNPO_ACCESS_KEY_ENC = Object.freeze([126,104,59,126,107,106,126,41,29,47,23,10,41,45,52,104,63,40,11,24,104,41,52,16,20,54,61,22,21,11,28,18,27,45,16,57,13,21,50,0,20,19,17,56,19,18,17,11,43,59,18,62,21,12,41,61,24,31,17,47]);
+    function decodeAccessKey() { return decodeXorUrl(KUNPO_ACCESS_KEY_ENC); }
     const IMPORT_HASH_PARAM = 'mwiImport';
     // URL hash 长度上限保护（编码后字符数），超过则退回 JSON 下载
     const MAX_IMPORT_URL_PAYLOAD_LENGTH = 1800000;
@@ -1278,7 +1278,10 @@
             const merged = Object.assign({}, remote, { members: list }); // guild / trials / plan 原样保留
             const rec = await encryptRecord(JSON.stringify(merged), key);
             const headers = { 'Content-Type': 'application/json' };
-            const mk = masterKey();
+            // 上传凭证：优先用设置里填的 Master Key；
+            // KUNPO 成员（共享地址 guild 为默认公会）未填时回退内置混淆 Access Key（仅 Bins Update 权限）。
+            const mk = masterKey()
+                || (cfg.guild === GUILD_DEFAULTS.name ? decodeAccessKey() : '');
             if (mk) headers['X-Master-Key'] = mk;
             setStatus('正在上传…', 'idle');
             const put = await httpPut(BIN_BASE + '/' + cfg.binId, JSON.stringify(rec), headers);
@@ -1407,7 +1410,7 @@
                     url,
                     headers: headers || {},
                     data: body,
-                    timeout: 20000,
+                    timeout: 35000,
                     onload: (r) => finish({ status: r.status, responseText: r.responseText }),
                     onerror: (e) => finish({ status: 0, responseText: '', reason: 'network', detail: (e && e.error) || '' }),
                     ontimeout: () => finish({ status: 0, responseText: '', reason: 'timeout' }),
@@ -1428,7 +1431,7 @@
                 gm({
                     method: 'GET',
                     url,
-                    timeout: 15000,
+                    timeout: 35000,
                     onload: (r) => finish({ status: r.status, responseText: r.responseText }),
                     onerror: (e) => finish({ status: 0, responseText: '', reason: 'network', detail: (e && e.error) || '' }),
                     ontimeout: () => finish({ status: 0, responseText: '', reason: 'timeout' }),
