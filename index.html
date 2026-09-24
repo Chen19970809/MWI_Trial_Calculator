@@ -3818,19 +3818,19 @@ function syncMemberViewTabs() {
   const au = document.getElementById('btn-view-aura');
   const ad = document.getElementById('btn-view-aura-data');
   const leader = isGuildLeader();
-  // 非会长端：不显示《成员数据》/《+ 添加成员》/《展示分配》/《技能配置》/《光环设置》/《光环数据》。
+  // 非会长端：不显示《成员数据》/《+ 添加成员》/《展示分配》/《技能配置》/《光环设置》。
+  // 《光环数据》例外：所有成员可见（只读的光环等级表）。
   // 只改内存 state 不写 localStorage：若之后拿到 Master Key 成为会长，原来的视图偏好还在。
   if (!leader && state.memberView === 'members') state.memberView = 'assignment';
   if (!leader && state.displayMode) state.displayMode = false;
   if (!leader && state.skillConfigMode) state.skillConfigMode = false;
   if (!leader && state.auraConfigMode) state.auraConfigMode = false;
-  if (!leader && state.auraDataMode) state.auraDataMode = false;
   if (m) m.style.display = leader ? '' : 'none';
   if (add) add.style.display = leader ? '' : 'none';
   if (d) d.style.display = leader ? '' : 'none';
   if (k) k.style.display = leader ? '' : 'none';
   if (au) au.style.display = leader ? '' : 'none';
-  if (ad) ad.style.display = leader ? '' : 'none';
+  if (ad) ad.style.display = '';   // 光环数据：所有成员可见
   if (a) a.classList.toggle('active', state.memberView === 'assignment' && !state.displayMode);
   if (s) s.classList.toggle('active', state.memberView === 'score' && !state.displayMode);
   if (m) m.classList.toggle('active', state.memberView === 'members' && !state.displayMode);
@@ -3863,10 +3863,12 @@ function toggleDisplayMode() {
   renderDisplayMode();
   syncMemberViewTabs();
 }
-// 根据 displayMode 切换：试炼配置区 ↔ 展示设置区；成员表 ↔ 展示区域/技能配置区/光环设置区。
+// 根据 displayMode 切换：试炼配置区 ↔ 展示设置区；成员表 ↔ 展示区域/技能配置区/光环设置区/光环数据区。
+// 成员端例外：《光环数据》为只读视图，不用进入会长专属的 displayMode 也可单独开启。
 function renderDisplayMode() {
   const leader = isGuildLeader();
-  const on = state.displayMode && leader;
+  const auraDataOnly = !leader && state.auraDataMode;   // 成员端《光环数据》：仅展示光环等级表
+  const on = (state.displayMode && leader) || auraDataOnly;
   const skill = on && state.skillConfigMode;
   const aura = on && state.auraConfigMode && !skill;
   const auraData = on && state.auraDataMode && !skill && !aura;
@@ -3878,13 +3880,13 @@ function renderDisplayMode() {
   const auraArea = document.getElementById('aura-config-area');
   const auraDataArea = document.getElementById('aura-data-area');
   if (trialSection) trialSection.style.display = on ? 'none' : '';
-  if (settingsSection) settingsSection.style.display = on ? '' : 'none';
+  if (settingsSection) settingsSection.style.display = (on && leader) ? '' : 'none';   // 展示设置为会长专属，成员端不显示
   if (tableWrap) tableWrap.style.display = on ? 'none' : '';
   if (displayArea) displayArea.style.display = (skill || aura || auraData) ? 'none' : (on ? 'flex' : 'none');
   if (skillArea) skillArea.style.display = skill ? 'flex' : 'none';
   if (auraArea) auraArea.style.display = aura ? 'flex' : 'none';
   if (auraDataArea) auraDataArea.style.display = auraData ? 'flex' : 'none';
-  if (on) renderDisplaySettings();
+  if (on && leader) renderDisplaySettings();
   if (skill) renderSkillConfigArea();
   if (aura) renderAuraConfigArea();
   if (auraData) renderAuraDataArea();
@@ -4147,7 +4149,7 @@ function memberAuraLevel(p, key) {
   return Number.isFinite(v) && v > 0 ? v : 0; // 值默认为 0
 }
 function toggleAuraDataMode() {
-  if (!isGuildLeader()) { alert(t('leaderOnly')); return; }
+  // 《光环数据》为只读视图，所有成员可用（不再限会长）。
   state.auraDataMode = !state.auraDataMode;
   if (state.auraDataMode) {
     // 进入光环数据时确保同时进入展示分配（上方仍是展示设置），并退出其他子模式（互斥）。

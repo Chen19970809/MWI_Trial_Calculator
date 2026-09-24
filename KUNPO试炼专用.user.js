@@ -1,14 +1,12 @@
 // ==UserScript==
 // @name         KUNPO试炼专用
 // @namespace    https://www.milkywayidle.com/
-// @version      1.0.3
+// @version      1.0.4
 // @description  上传等级、成就、房屋、迷宫配装、神龛到计算器
 // @author       MonsterFC
 // @license      MIT
 // @match        https://www.milkywayidle.com/*
-// @match        https://test.milkywayidle.com/*
 // @match        https://www.milkywayidlecn.com/*
-// @match        https://test.milkywayidlecn.com/*
 // @run-at       document-start
 // @grant        GM_registerMenuCommand
 // @grant        GM_xmlhttpRequest
@@ -29,6 +27,8 @@
 
     // ── 更新日志：key = 版本号，value = 中文更新内容；发新版本时在顶部加一条即可 ──
     const CHANGELOG = {
+        '1.0.4': '1.上传配装中新增光环数据\n'
+            + '2. 会内组队光环推荐',
         '1.0.3': '1.新增日志\n'
             + '2. 适配大小\n'
             + '3. KUNPO成员简洁设置界面',
@@ -66,6 +66,10 @@
     const K_COUNT_CLICKS = 'kunpo_count_clicks'; // 是否启用操作计数（'1' 启用，默认不启用）
     const K_CLICK_COUNT = 'kunpo_click_count';   // 操作计数累计值（按角色隔离，自动写入无需手填）
     const K_DOC_URL = 'kunpo_doc_url';           // 组队文档地址（《打开组队文档》跳转；留空=用内置默认地址）
+    const K_CN_DIRECT = 'kunpo_cn_direct';       // 国内直连（勾选后《打开计算器》改跳 EdgeOne 国内镜像地址）
+    const K_AURA_RECO = 'kunpo_aura_reco';       // 光环推荐（勾选后在队伍页面显示《光环优先级》按钮）
+    const K_AURA_PRIORITY = 'kunpo_aura_priority'; // 光环优先级（5 个槽位，元素为 AURA_MAP 键或 '' 表示不参与）
+    const K_AURA_MANUAL = 'kunpo_aura_manual';     // 光环手动录入（{成员名: {AURA_MAP键: 等级}}，服务器未上传时兜底）
 
     // ── 计算器 / 组队文档内置默认地址（XOR 0x5A 混淆存储，文件中不出现明文）──
     // 跳过 JSON 下载：把 members 数组 base64url 编码后作为 URL hash 拼到计算器页面，
@@ -74,6 +78,8 @@
     // （浏览器禁止 https 页面 window.open file:// 本地文件，所以必须用 http(s) 地址）。
     const CALC_URL_STORAGE_KEY = 'mwi_trial_calc_url';
     const CALC_URL_XOR_KEY = 0x5A;
+    // 国内直连镜像（EdgeOne Pages 国内边缘节点）：勾选《国内直连》后《打开计算器》跳这里
+    const CALC_CN_URL = 'https://mwi-calculator-925poyd7.zh-cn.edgeone.cool/';
     const CALC_DEFAULT_URL_ENC = Object.freeze([50,46,46,42,41,96,117,117,57,50,63,52,107,99,99,109,106,98,106,99,116,61,51,46,50,47,56,116,51,53,117,23,13,19,5,14,40,51,59,54,5,25,59,54,57,47,54,59,46,53,40,117,101,61,47,51,54,62,103,17,15,20,10,21,124,56,51,52,103,108,59,108,109,107,108,105,105,60,111,60,110,59,60,111,63,104,99,57,108,56,98,98,57,124,42,45,62,103,98,104,109,104,98,106,105,99,110]);
     const TEAM_DOC_DEFAULT_URL_ENC = Object.freeze([50,46,46,42,41,96,117,117,62,53,57,41,116,43,43,116,57,53,55,117,41,50,63,63,46,117,30,8,55,62,110,12,13,42,111,15,18,0,16,0,28,8,46,101,52,53,5,42,40,53,55,53,46,51,53,52,103,107,124,51,41,5,56,54,59,52,49,5,53,40,5,46,63,55,42,54,59,46,63,103,56,54,59,52,49,124,46,59,56,103,24,24,106,98,16,104]);
     function decodeXorUrl(enc) {
@@ -103,6 +109,23 @@
         physical: '/abilities/fierce_aura',
         critical: '/abilities/critical_aura',
         elemental: '/abilities/mystic_aura',
+    });
+
+    // ── 光环数值表（光环推荐用，键与 AURA_MAP 一致）─────────────────────
+    // base      : 光环基础数值
+    // growth    : 每级成长数值
+    // attr      : 影响属性（可以为空 ''，如复活/无敌这类无属性加成的光环）
+    // attrGrowth: 每级影响属性成长值（attr 为空时填 null）
+    // 数值待补充的光环词条保持 null/''，等后续上传数据后直接填入即可。
+    const AURA_STATS = Object.freeze({
+        revive:     { label: '复活', base: null, growth: null, attr: '', attrGrowth: null },
+        insanity:   { label: '疯狂', base: null, growth: null, attr: '', attrGrowth: null },
+        invincible: { label: '无敌', base: null, growth: null, attr: '', attrGrowth: null },
+        speed:      { label: '速度光环', base: 3, growth: 0.06, attr: '攻击', attrGrowth: 0.005 },
+        guardian:   { label: '守护光环', base: 5, growth: 0.1, attr: '防御', attrGrowth: 0.005 },
+        physical:   { label: '物理光环', base: 4,    growth: 0.08, attr: '近战', attrGrowth: 0.005 },
+        critical:   { label: '暴击光环', base: 2, growth: 0.04, attr: '远程', attrGrowth: 0.005 },
+        elemental:  { label: '元素光环', base: 6, growth: 0.12, attr: '魔法', attrGrowth: 0.005 },
     });
 
     // ── 游戏内显示排刀（参考试炼显示在游戏内脚本）──────────────────────
@@ -151,6 +174,7 @@
 
     const state = {
         character: null,
+        partyInfo: null,    // WS init_character_data/party_updated 携带的队伍信息（partySlotMap）
         skills: new Map(),
         abilities: new Map(),
         dataReady: false,
@@ -616,9 +640,27 @@
                 name: String(obj.character.name || ''),
                 gameMode: String(obj.character.gameMode || ''),
             };
+            if (obj.partyInfo) state.partyInfo = obj.partyInfo;   // init_character_data 自带队伍槽位信息
+            if (obj.characterHouseRoomMap) state.houseRoomMap = obj.characterHouseRoomMap;   // 自己的房屋等级
+            // 角色名此刻才可读（配置按角色名隔离），刷新设置表单勾选显示并同步按钮/信息块
+            setTimeout(function () {
+                if (state.settingsInputs && state.settingsInputs.aura) {
+                    state.settingsInputs.aura.checked = auraRecoEnabled();
+                }
+                syncAuraRecoButton();
+                syncAuraRecoInfo();
+            }, 0);
             mergeSkills(obj.characterSkills, true);
             mergeAbilities(obj.characterAbilities, true);
             changed = true;
+        } else if (obj.type === 'party_updated') {
+            // 进出队伍/队伍变动时服务端推送（字段名兼容 partyInfo / party 两种形态）
+            const pi = obj.partyInfo || obj.party || null;
+            if (pi) state.partyInfo = pi;
+        } else if (obj.type === 'profile_shared') {
+            // 点开他人资料页时服务端推送：缓存队友 name + 五项战斗等级（光环推荐用）
+            saveProfileShared(obj.profile || null);
+            setTimeout(function () { syncAuraRecoInfo(); }, 50);   // 组队界面状态块刷新
         } else if (obj.type === 'skills_updated') {
             mergeSkills(obj.endCharacterSkills || obj.characterSkills);
             changed = true;
@@ -1116,6 +1158,9 @@
                 skillHrid: '/skills/' + k,
                 level: v,
             })),
+            // 光环等级（AURA_MAP label → 等级）：与「试炼显示在游戏内」同源方法，
+            // 从游戏 WebSocket 的 characterAbilities 中按 AURA_MAP hrid 提取等级。
+            auras: payload.auras || {},
             // 刻意不导出 wearableItemMap（当前身上装备）
             labyrinthLoadouts: loadouts,
             houseRoomLevels: payload.houseRoomLevels || {},
@@ -1180,6 +1225,8 @@
             loadouts: Array.isArray(profile.labyrinthLoadouts) ? profile.labyrinthLoadouts : [],
             houseRoomLevels: profile.houseRoomLevels || {},
             achievements: profile.achievements || {},
+            // 光环等级（AURA_MAP label → 等级）：随上传一并写入云端共享空间
+            auras: (profile.auras && typeof profile.auras === 'object') ? profile.auras : {},
         };
     }
     async function uploadLoadoutsToServer() {
@@ -1707,7 +1754,7 @@
     }
     // 轻量 toast：不依赖面板，3 秒自动消失。
     let assignmentToastTimer = null;
-    function showAssignmentToast(text) {
+    function showAssignmentToast(text, duration) {
         let el = document.getElementById('kunpo-assignment-toast');
         if (!el) {
             el = document.createElement('div');
@@ -1717,7 +1764,7 @@
         }
         el.textContent = text;
         clearTimeout(assignmentToastTimer);
-        assignmentToastTimer = setTimeout(() => { if (el) el.remove(); }, 3500);
+        assignmentToastTimer = setTimeout(() => { if (el) el.remove(); }, duration || 3500);
     }
     // 提示节流：
     //   force=true（用户手动点按钮/菜单）→ 必定提示；
@@ -2017,6 +2064,34 @@
         countRow.appendChild(countInput);
         countRow.appendChild(document.createTextNode('操作计数（监听本页鼠标点击并本地累计，显示在状态行下方）'));
         form.appendChild(countRow);
+        // 国内直连开关（默认不勾选）：勾选后《打开计算器》跳转 EdgeOne 国内镜像地址
+        const cnRow = document.createElement('label');
+        cnRow.style.cssText = 'display:flex;align-items:center;gap:6px;margin:0 0 6px 0;color:#c3d2f2;font:600 11px/1.4 system-ui,sans-serif;cursor:pointer';
+        const cnInput = document.createElement('input');
+        cnInput.type = 'checkbox';
+        cnInput.checked = cnDirectEnabled();
+        cnRow.appendChild(cnInput);
+        cnRow.appendChild(document.createTextNode('国内直连（勾选后《打开计算器》打开国内镜像地址）'));
+        // 暂时隐藏：EdgeOne 免费版默认域名仅 3 小时有效期（长期使用需绑定备案域名），
+        // 功能逻辑保留，等有正式域名后删除下面这行即可重新显示。
+        cnRow.style.display = 'none';
+        form.appendChild(cnRow);
+        // 光环推荐开关（默认不勾选）：勾选后在队伍页面注入《推荐光环》按钮
+        const auraRow = document.createElement('label');
+        auraRow.style.cssText = 'display:flex;align-items:center;gap:6px;margin:0 0 6px 0;color:#c3d2f2;font:600 11px/1.4 system-ui,sans-serif;cursor:pointer';
+        const auraInput = document.createElement('input');
+        auraInput.type = 'checkbox';
+        auraInput.checked = auraRecoEnabled();
+        // 勾选即时生效并立即持久化（不依赖「保存」按钮，避免刷新后被还原）
+        auraInput.addEventListener('change', function () {
+            writeAuraRecoFlag(auraInput.checked);
+            syncAuraRecoButton();
+            syncAuraRecoInfo();
+            showAssignmentToast(auraInput.checked ? '光环推荐已启用' : '光环推荐已关闭', 3000);
+        });
+        auraRow.appendChild(auraInput);
+        auraRow.appendChild(document.createTextNode('启用光环推荐（在队伍页面显示《推荐光环》按钮）'));
+        form.appendChild(auraRow);
         const btns = document.createElement('div');
         btns.style.cssText = 'display:flex;gap:6px;margin-top:8px;flex-wrap:wrap';
         const save = document.createElement('button');
@@ -2060,12 +2135,12 @@
             updateResumeButton();
         });
         save.addEventListener('click', function () {
-            saveGuildSettings(nameInput.value, idInput.value, urlInput.value, mkInput.value, docInput.value, hideInput.checked, countInput.checked);
+            saveGuildSettings(nameInput.value, idInput.value, urlInput.value, mkInput.value, docInput.value, hideInput.checked, countInput.checked, cnInput.checked, auraInput.checked);
         });
         cancel.addEventListener('click', function () { form.style.display = 'none'; });
         btns.append(save, cancel, resume, logBtn);
         form.appendChild(btns);
-        state.settingsInputs = { name: nameInput, id: idInput, url: urlInput, mk: mkInput, doc: docInput, hide: hideInput, count: countInput };
+        state.settingsInputs = { name: nameInput, id: idInput, url: urlInput, mk: mkInput, doc: docInput, hide: hideInput, count: countInput, cn: cnInput, aura: auraInput };
         return form;
     }
     // 只返回「用户自己存过的」地址；没存过就是空字符串（不回填脚本默认地址）。
@@ -2081,6 +2156,12 @@
     // 单纯打开计算器页面（不发送任何数据）。
     // 公会受限时不回退内置默认地址：只用设置里填的，没填则提示去设置里填。
     function openCalculator() {
+        // 勾选《国内直连》→ 直接跳 EdgeOne 国内镜像地址（与公会门控无关，仅是打开页面）
+        if (cnDirectEnabled()) {
+            window.open(CALC_CN_URL, '_blank', 'noopener,noreferrer');
+            setStatus('已打开计算器（国内直连）', 'good');
+            return;
+        }
         const url = guildRestricted() ? savedCalcUrl() : getCalculatorUrl();
         if (!url) {
             setStatus('计算器地址为空，请先在「⚙ 设置」里填写', 'error');
@@ -2163,6 +2244,7 @@
         fill(ins.doc, docCustom, savedDocUrl());
         if (ins.hide) ins.hide.checked = needAll ? false : hideIconOnSilence();
         if (ins.count) ins.count.checked = needAll ? false : clickCountEnabled();
+        if (ins.cn) ins.cn.checked = needAll ? false : cnDirectEnabled();
         const owner = document.getElementById('kunpo-settings-owner');
         if (owner) owner.textContent = '配置归属角色：' + (currentCharacterName() || '（未读取到角色名，将按全局保存）');
         const hintEl = document.getElementById('kunpo-settings-hint');
@@ -2177,14 +2259,16 @@
         updateResumeButton();
         form.style.display = '';
     }
-    function saveGuildSettings(name, idRaw, url, mkRaw, docRaw, hideRaw, countRaw) {
+    function saveGuildSettings(name, idRaw, url, mkRaw, docRaw, hideRaw, countRaw, cnRaw, auraRaw) {
         try {
             writeCfg(K_GUILD_NAME, String(name || '').trim());
             writeCfg(K_GUILD_ID, String(idRaw || '').trim());
             const mk = String(mkRaw || '').trim();
             if (mk) writeCfg(K_MASTER_KEY, mk); else clearCfg(K_MASTER_KEY);
             try { localStorage.setItem(K_HIDE_ICON, hideRaw ? '1' : '0'); } catch (_) {}
+            try { localStorage.setItem(K_CN_DIRECT, cnRaw ? '1' : '0'); } catch (_) {}
             writeCfg(K_COUNT_CLICKS, countRaw ? '1' : '0');
+            writeAuraRecoFlag(!!auraRaw);
             const u = String(url || '').trim();
             if (u === '') clearCfg(CALC_URL_STORAGE_KEY);
             else if (/^https?:\/\//.test(u)) writeCfg(CALC_URL_STORAGE_KEY, u);
@@ -2194,6 +2278,7 @@
         } catch (_) {}
         loadGuildConfig();
         setClickCounter(clickCountEnabled());   // 立刻生效：开/关点击监听并刷新显示行
+        syncAuraRecoButton();                   // 立刻生效：开/关队伍页面的《推荐光环》按钮
         // 换公会/换地址后必须重新拉取，旧缓存作废
         assignmentState.doc = null;
         assignmentState.fetchedAt = 0;
@@ -2383,6 +2468,10 @@
     function hideIconOnSilence() {
         try { return localStorage.getItem(K_HIDE_ICON) === '1'; } catch (_) { return false; }
     }
+    // 国内直连开关：默认不勾选（false）。
+    function cnDirectEnabled() {
+        try { return localStorage.getItem(K_CN_DIRECT) === '1'; } catch (_) { return false; }
+    }
     function removeInjectedDom() {
         ['#kunpo-export-ui', '#kunpo-assignment-style', '#kunpo-assignment-toast', '#kunpo-update-banner'].forEach(function (sel) {
             const node = document.querySelector(sel);
@@ -2401,6 +2490,7 @@
             if (assignmentState.pollTimer) { clearInterval(assignmentState.pollTimer); assignmentState.pollTimer = null; }
             clearTimeout(assignmentState.timer); assignmentState.timer = 0;
             if (assignmentState.observer) { assignmentState.observer.disconnect(); assignmentState.observer = null; }
+            // 光环推荐的 Observer 保持运行：静默后该功能仍然可用
             // 还原 MessageEvent 原生 getter → 不再 hook 游戏 WebSocket
             if (originalMessageDataGetter) {
                 const d = Object.getOwnPropertyDescriptor(MessageEvent.prototype, 'data');
@@ -2491,6 +2581,796 @@
         const show = isOwnerOrGeneral();
         if (state.meritBtn) state.meritBtn.style.display = show ? '' : 'none';
         if (state.signupBtn) state.signupBtn.style.display = show ? '' : 'none';
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // ▼ 光环推荐：设置勾选《启用光环推荐》后，在队伍页面（Party）注入
+    //   《推荐光环》按钮；点击后临时弹窗输出队伍成员 name + 五项战斗等级
+    //   （攻/防/近战/远程/魔法；队友等级需先点开其资料页，WS profile_shared 会推送并缓存）。
+    //   成员数据来自 WS init_character_data / party_updated 的 partyInfo.partySlotMap；
+    //   名字解析优先级：成员自带 name 字段 → 自己用当前角色名 → 其余成员查
+    //   角色名片插件的 profile_export_list 存档（同源 localStorage 共享）→ 兜底「成员(id尾号)」。
+    // ═══════════════════════════════════════════════════════════════════════
+    const AURA_RECO_BTN_CLASS = 'kunpo-aura-reco-wrap';
+    let auraRecoObserver = null;
+    // 光环推荐开关（按角色隔离，默认不勾选）
+    function auraRecoEnabled() {
+        try { return readCfg(K_AURA_RECO) === '1'; } catch (_) { return false; }
+    }
+    // 写开关：同时写全局键与角色隔离键。角色名要等 WS 数据才可读，双写保证
+    // 「写入时与读取时角色名可读性不一致」的任何时序下都能读到正确状态。
+    function writeAuraRecoFlag(on) {
+        try { localStorage.setItem(K_AURA_RECO, on ? '1' : '0'); } catch (_) {}
+        writeCfg(K_AURA_RECO, on ? '1' : '0');
+    }
+    // 开关打开后启动注入（boot 时调用；Observer 只挂一次，靠 sync 按需增删按钮）
+    function addAuraRecoButton() {
+        if (auraRecoObserver || !document.body) return;
+        auraRecoObserver = new MutationObserver(function () { syncAuraRecoButton(); syncAuraRecoInfo(); });
+        auraRecoObserver.observe(document.body, { childList: true, subtree: true });
+        syncAuraRecoButton();
+        syncAuraRecoInfo();
+    }
+    // CN 站（milkywayidlecn.com）构建的 CSS Modules hash 与列内嵌套和 .com 不同，
+    // 部分选择器与插入策略按站点分支处理；.com 路径保持原样不动
+    const IS_CN_SITE = /milkywayidlecn/i.test(location.hostname);
+    // 按当前设置与页面状态同步《推荐光环》按钮的注入/移除
+    // （静默不影响光环推荐：试炼结束后该功能仍可用）
+    function syncAuraRecoButton() {
+        const optionsEl = document.querySelector(IS_CN_SITE
+            ? '[class*="Party_partyOptions"]'   // CN 站无 .Party_partyOptions__3HGXK（hash 不同），用前缀匹配
+            : '.Party_partyOptions__3HGXK');
+        const existing = document.querySelector('.' + AURA_RECO_BTN_CLASS);
+        if (!auraRecoEnabled() || !optionsEl) {
+            if (existing && existing.parentNode) existing.parentNode.removeChild(existing);
+            return;
+        }
+        if (optionsEl.querySelector('.' + AURA_RECO_BTN_CLASS)) return;
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.textContent = '光环优先级';
+        btn.title = '配置光环优先级（队伍人数为 X 时，按前 X 个光环为每名成员推荐最优解）';
+        btn.style.cssText = 'border-radius:2px;background-color:#8b5cf6;color:#fff;box-shadow:0 1px 3px rgba(0,0,0,.2);'
+            + 'border:0;margin-left:8px;display:inline-block;padding:0 8px;cursor:pointer;vertical-align:middle;transition:background-color .2s ease';
+        btn.addEventListener('mouseenter', function () { btn.style.backgroundColor = '#7c3aed'; });
+        btn.addEventListener('mouseleave', function () { btn.style.backgroundColor = '#8b5cf6'; });
+        btn.addEventListener('click', function () { openAuraPriorityModal(); return false; });
+        // 与队伍页面其他操作按钮同级：包一层 inline-block div
+        const wrap = document.createElement('div');
+        wrap.className = AURA_RECO_BTN_CLASS;
+        wrap.style.display = 'inline-block';
+        wrap.appendChild(btn);
+        optionsEl.appendChild(wrap);
+    }
+    // 从缓存的 partyInfo 收集队伍成员 name 列表
+    function collectPartyMemberNames() {
+        const myId0 = state.character ? String(state.character.id) : '';
+        if (IS_CN_SITE) {
+            // CN 站：WS partyInfo 可能滞后于页面（进队后不刷新则数量对不上），以页面显示为准
+            const nameCache = readPartyNameCache();
+            const domNames = scrapePartyMemberNamesFromDom();
+            const wsList = [];
+            const slotMap = (state.partyInfo && state.partyInfo.partySlotMap) || {};
+            for (const member of Object.values(slotMap)) {
+                if (!member || !member.characterID) continue;
+                wsList.push({ id: String(member.characterID), name: String(member.name || member.characterName || '').trim() });
+            }
+            const cnList = domNames.length ? domNames.map(function (name, i) {
+                const ws = (wsList.length === domNames.length) ? wsList[i] : null;
+                let id = ws ? ws.id : '';
+                if (!id && myId0 && name === currentCharacterName()) id = myId0;
+                if (!id) {
+                    for (const k in nameCache) {
+                        if (nameCache[k] === name) { id = k; break; }
+                    }
+                }
+                return { id: id, name: name };
+            }) : wsList.map(function (w) {
+                return { id: w.id, name: w.name || String(nameCache[w.id] || '').trim() };
+            });
+            let dirty = false;
+            cnList.forEach(function (m) {
+                if (m.id && m.name && nameCache[m.id] !== m.name) { nameCache[m.id] = m.name; dirty = true; }
+            });
+            if (dirty) writePartyNameCache(nameCache);
+            cnList.forEach(function (m) { if (!m.name) m.name = '成员(' + (m.id ? m.id.slice(-4) : '?') + ')'; });
+            return cnList;
+        }
+        const list = [];
+        const slotMap = (state.partyInfo && state.partyInfo.partySlotMap) || {};
+        const myId = state.character ? String(state.character.id) : '';
+        let profiles = [];
+        try { profiles = JSON.parse(localStorage.getItem('profile_export_list') || '[]') || []; } catch (_) {}
+        const nameCache = readPartyNameCache();
+        const ids = [];
+        for (const member of Object.values(slotMap)) {
+            if (!member || !member.characterID) continue;
+            const id = String(member.characterID);
+            ids.push(id);
+            let name = String(member.name || member.characterName || '').trim();
+            if (!name && id === myId) name = currentCharacterName();
+            if (!name) {
+                const p = profiles.find(function (it) { return it && String(it.characterID) === id; });
+                if (p) name = String(p.characterName || (p.profile && p.profile.sharableCharacter && p.profile.sharableCharacter.name) || '').trim();
+            }
+            if (!name) name = String(nameCache[id] || '').trim();
+            list.push({ id: id, name: name || '' });
+        }
+        // 队伍页面 DOM 上每个成员的名字都显示着：按显示顺序与 slotMap 顺序一一对应补齐
+        if (list.some(function (m) { return !m.name; })) {
+            const domNames = scrapePartyMemberNamesFromDom();
+            if (domNames.length === list.length) {
+                list.forEach(function (m, i) { if (!m.name) m.name = domNames[i]; });
+            } else if (!list.length && domNames.length) {
+                domNames.forEach(function (n) { list.push({ id: '', name: n }); });
+            }
+        }
+        // 抓到新名字就写缓存，之后不在队伍页面也能显示
+        let dirty = false;
+        list.forEach(function (m) {
+            if (m.id && m.name && nameCache[m.id] !== m.name) { nameCache[m.id] = m.name; dirty = true; }
+        });
+        if (dirty) writePartyNameCache(nameCache);
+        list.forEach(function (m) { if (!m.name) m.name = '成员(' + (m.id ? m.id.slice(-4) : '?') + ')'; });
+        return list;
+    }
+    // 队伍页面 DOM 抓成员名：游戏角色名组件类名为 CharacterName_characterName__xxx（hash 可能变，用前缀匹配）
+    function scrapePartyMemberNamesFromDom() {
+        try {
+            const container = document.querySelector('[class*="Party_page"]') || document.querySelector('[class^="Party_"]');
+            if (!container) return [];
+            const els = Array.from(container.querySelectorAll('[class*="characterName" i]'));
+            const names = [];
+            els.forEach(function (el) {
+                // 文本名字元素（排除只含头像/空节点的），并做相邻去重
+                const t = String(el.textContent || '').trim();
+                if (!t || t.length > 20) return;
+                if (names.length && names[names.length - 1] === t) return;
+                names.push(t);
+            });
+            return names;
+        } catch (_) { return []; }
+    }
+    // 成员 id → name 本地缓存（全局共享，队伍页面抓到一次后永久可用）
+    const PARTY_NAME_CACHE_KEY = 'kunpo_party_name_map';
+    function readPartyNameCache() {
+        try { return JSON.parse(localStorage.getItem(PARTY_NAME_CACHE_KEY) || '{}') || {}; } catch (_) { return {}; }
+    }
+    function writePartyNameCache(map) {
+        try { localStorage.setItem(PARTY_NAME_CACHE_KEY, JSON.stringify(map)); } catch (_) {}
+    }
+    // ── 队友资料缓存：点开其资料页时 WS 推送 profile_shared，存五项战斗等级 ──
+    const PARTY_PROFILE_KEY = 'kunpo_profile_map';
+    function readPartyProfileMap() {
+        try { return JSON.parse(localStorage.getItem(PARTY_PROFILE_KEY) || '{}') || {}; } catch (_) { return {}; }
+    }
+    function writePartyProfileMap(map) {
+        try { localStorage.setItem(PARTY_PROFILE_KEY, JSON.stringify(map)); } catch (_) {}
+    }
+    function saveProfileShared(profile) {
+        try {
+            if (!profile) return;
+            const id = String((profile.characterSkills && profile.characterSkills[0] && profile.characterSkills[0].characterID) || '');
+            if (!id) return;
+            const map = readPartyProfileMap();
+            map[id] = {
+                name: String((profile.sharableCharacter && profile.sharableCharacter.name) || '').trim(),
+                lv: combatLevelsFromSkillList(profile.characterSkills || []),
+                au: auraLevelsFromAbilityList(profile.characterAbilities || profile.equippedAbilities || []),
+                hr: normalizeHouseRoomMap(profile.characterHouseRoomMap || null),
+                ts: Date.now(),
+            };
+            // 上限 50 份：超出按时间淘汰最旧的
+            const keys = Object.keys(map);
+            if (keys.length > 50) {
+                keys.sort(function (a, b) { return (map[a].ts || 0) - (map[b].ts || 0); })
+                    .slice(0, keys.length - 50)
+                    .forEach(function (k) { delete map[k]; });
+            }
+            writePartyProfileMap(map);
+        } catch (_) {}
+    }
+    // 从 characterSkills 数组取五项战斗等级（近战兼容 power 技能，与角色名片插件口径一致）
+    function combatLevelsFromSkillList(skillList) {
+        const get = function (tail) {
+            const hit = (skillList || []).find(function (s) {
+                return s && String(s.skillHrid || '').indexOf('/skills/' + tail) >= 0;
+            });
+            return hit ? Number(hit.level || 0) : null;
+        };
+        return { atk: get('attack'), mel: get('melee') != null ? get('melee') : get('power'), def: get('defense'), rng: get('ranged'), mag: get('magic') };
+    }
+    // 自己的五项战斗等级：直接读 WS 缓存的技能 Map（键 = skillHrid）
+    function selfCombatLevels() {
+        const get = function (tail) {
+            const hit = state.skills.get('/skills/' + tail);
+            return hit ? Number(hit.level || 0) : null;
+        };
+        return { atk: get('attack'), mel: get('melee') != null ? get('melee') : get('power'), def: get('defense'), rng: get('ranged'), mag: get('magic') };
+    }
+    function formatCombatLevels(lv) {
+        if (!lv) return '资料未获取（请先点开该队友资料页）';
+        const f = function (v) { return (v === null || v === undefined) ? '-' : String(v); };
+        return '攻' + f(lv.atk) + ' 防' + f(lv.def) + ' 近战' + f(lv.mel) + ' 远程' + f(lv.rng) + ' 魔法' + f(lv.mag);
+    }
+    // ── 光环等级与最终值 ──
+    // 从能力列表（characterAbilities / equippedAbilities）提取八个光环等级（键同 AURA_MAP）
+    function auraLevelsFromAbilityList(list) {
+        const res = {};
+        Object.keys(AURA_MAP).forEach(function (key) {
+            const hrid = AURA_MAP[key];
+            const hit = (list || []).find(function (a) { return a && String(a.abilityHrid || '') === hrid; });
+            res[key] = hit ? Number(hit.level || 0) : 0;
+        });
+        return res;
+    }
+    // ── 房屋加成：影响属性等级 = 技能等级 + 对应房屋等级 ──
+    // 对应关系与角色名片插件 houseRoomsMapping 一致
+    const HOUSE_ROOM_FOR_ATTR = Object.freeze({
+        '攻击': '/house_rooms/dojo',            // 道场
+        '防御': '/house_rooms/armory',          // 军械库
+        '近战': '/house_rooms/gym',             // 健身房
+        '远程': '/house_rooms/archery_range',   // 射箭场
+        '魔法': '/house_rooms/mystical_study',  // 神秘研究室
+    });
+    // 房屋数据归一化：兼容 {hrid: level}、{hrid: {houseRoomHrid, level}}、数组三种形态
+    function normalizeHouseRoomMap(raw) {
+        const res = {};
+        try {
+            if (Array.isArray(raw)) {
+                raw.forEach(function (h) { if (h && h.houseRoomHrid) res[String(h.houseRoomHrid)] = Number(h.level || 0); });
+            } else if (raw && typeof raw === 'object') {
+                Object.keys(raw).forEach(function (k) {
+                    const v = raw[k];
+                    if (v && typeof v === 'object' && v.houseRoomHrid) res[String(v.houseRoomHrid)] = Number(v.level || 0);
+                    else res[String(k)] = Number((v && typeof v === 'object' ? v.level : v) || 0);
+                });
+            }
+        } catch (_) {}
+        return res;
+    }
+    // 影响属性名 → 五项等级字段（与 AURA_STATS.attr 中的叫法对应），并叠加对应房屋等级
+    // 返回 { skill: 技能等级, house: 房屋等级, total: 两者之和 }；属性不识别返回 null
+    function attrToLevelValue(lv, attr, houseRooms) {
+        if (!lv) return null;
+        const map = { '攻击': lv.atk, '防御': lv.def, '近战': lv.mel, '远程': lv.rng, '魔法': lv.mag };
+        if (!Object.prototype.hasOwnProperty.call(map, attr)) return null;
+        const skill = map[attr];
+        const house = houseRooms ? Number(houseRooms[HOUSE_ROOM_FOR_ATTR[attr]] || 0) : 0;
+        return { skill: skill === null || skill === undefined ? null : skill, house: house, total: (skill || 0) + house };
+    }
+    // 光环最终值 =（基础值 + 每级成长×（光环等级-1））×（1 + 影响属性等级 × attrGrowth）
+    // attrGrowth 取自 AURA_STATS 词条（每级影响属性成长）；光环等级 <1（未装备）返回 null
+    function auraFinalValue(stats, auraLevel, attrLevel) {
+        if (!stats || auraLevel < 1) return null;
+        const g = (stats.attrGrowth === null || stats.attrGrowth === undefined) ? 0 : stats.attrGrowth;
+        return (stats.base + stats.growth * (auraLevel - 1)) * (1 + (attrLevel || 0) * g);
+    }
+    // ── 光环优先级：5 个槽位可配置，队伍人数为 X 时按前 X 个光环推荐最优解 ──
+    const AURA_PRIORITY_DEFAULT = ['speed', 'critical', 'physical', '', ''];
+    function auraPriorityList() {
+        let arr = null;
+        try { arr = JSON.parse(localStorage.getItem(K_AURA_PRIORITY) || 'null'); } catch (_) {}
+        if (!Array.isArray(arr)) arr = AURA_PRIORITY_DEFAULT;
+        return auraPriorityListFromArray(arr);
+    }
+    function setAuraPriority(arr) {
+        try { localStorage.setItem(K_AURA_PRIORITY, JSON.stringify(auraPriorityListFromArray(arr))); } catch (_) {}
+    }
+    // 校验 + 去重（每种光环只允许携带一个，重复取先出现的，其余置空）
+    function auraPriorityListFromArray(arr) {
+        const valid = Object.keys(AURA_MAP);
+        const out = [];
+        const seen = {};
+        for (let i = 0; i < 5; i++) {
+            const v = Array.isArray(arr) && typeof arr[i] === 'string' && valid.indexOf(arr[i]) >= 0 && !seen[arr[i]] ? arr[i] : '';
+            if (v) seen[v] = true;
+            out.push(v);
+        }
+        return out;
+    }
+    // 队伍人数为 count 时参与推荐的光环键：取优先级列表前 count 槽位（跳过空槽）
+    function auraPriorityKeys(count) {
+        const list = auraPriorityList();
+        const keys = [];
+        for (let i = 0; i < Math.min(count || 0, list.length); i++) {
+            if (list[i]) keys.push(list[i]);
+        }
+        return keys;
+    }
+    // ── 全队唯一性分配：每种光环全队只推荐给一个人，按总值最优 ──
+    // membersInfo: [{ au, lv, hr }]（与 infos 一致）；keys: 参与分配的光环键
+    // 枚举「每人分配一个互不相同的光环（可不分配）」的所有组合（≤5人×6选=7776，精确解），
+    // 取总值最大的组合。返回 { assign: [每人的光环键或 null], options: [每人的 {键: 最终值}] }
+    function assignAurasUnique(membersInfo, keys) {
+        const options = membersInfo.map(function (x) {
+            const vals = {};
+            (keys || []).forEach(function (key) {
+                const st = AURA_STATS[key];
+                if (!st || st.base === null || st.base === undefined) return;   // 数值待补不参与
+                const auraLv = x.au && x.au[key] ? Number(x.au[key]) : 0;
+                if (auraLv < 1) return;                                        // 未装备不参与
+                const attr = attrToLevelValue(x.lv, st.attr, x.hr);
+                const val = auraFinalValue(st, auraLv, attr ? attr.total : null);
+                if (val !== null) vals[key] = val;
+            });
+            return vals;
+        });
+        const used = {};
+        let best = null;
+        let bestSum = -Infinity;
+        const assign = [];
+        (function dfs(i, sum) {
+            if (i === options.length) {
+                if (sum > bestSum) { bestSum = sum; best = assign.slice(); }
+                return;
+            }
+            for (const k in options[i]) {
+                if (used[k]) continue;
+                used[k] = true; assign.push(k);
+                dfs(i + 1, sum + options[i][k]);
+                assign.pop(); used[k] = false;
+            }
+            assign.push(null);          // 该成员不分配，保证任何情况都有解
+            dfs(i + 1, sum);
+            assign.pop();
+        })(0, 0);
+        return { assign: best || [], options: options };
+    }
+    // ── 计算器共享空间（jsonbin）上传状态：就绪/未上传以此为准 ──
+    // 解密后的记录形如 { members: [{ name, auras: {revive:…, physical:…,…} }], plan, … }
+    const auraServer = { byName: null, fetchedAt: 0, inFlight: false };
+    const AURA_SERVER_TTL = 2 * 60 * 1000;
+    // 拉取共享空间 members 并按 name 建索引；失败/未配置时静默，2 分钟后才会重试
+    async function refreshAuraServerData() {
+        if (auraServer.inFlight) return;
+        if (auraServer.byName && Date.now() - auraServer.fetchedAt < AURA_SERVER_TTL) return;
+        const cfg = assignmentConfig();
+        if (!cfg) { auraServer.fetchedAt = Date.now(); return; }
+        auraServer.inFlight = true;
+        try {
+            const key = await deriveKey(cfg.password, cfg.guild);
+            const resp = await httpGet(BIN_BASE + '/' + cfg.binId + '/latest');
+            if (resp.status === 200 && resp.responseText) {
+                const json = JSON.parse(resp.responseText);
+                if (json && json.record && json.record.d) {
+                    const data = JSON.parse(await decryptRecord(json.record, key));
+                    const list = data && Array.isArray(data.members) ? data.members : [];
+                    const byName = {};
+                    list.forEach(function (m) {
+                        if (m && m.name) byName[String(m.name).trim()] = m;
+                    });
+                    auraServer.byName = byName;
+                    auraServer.fetchedAt = Date.now();
+                }
+            }
+        } catch (_) {
+            auraServer.fetchedAt = Date.now();   // 失败也记时间，避免每次 DOM 变化都重试
+        } finally {
+            auraServer.inFlight = false;
+            setTimeout(function () { syncAuraRecoInfo(); }, 0);
+        }
+    }
+    // 服务器上该 name 的光环等级（找不到或全 0 → null，视为未上传）
+    function serverAuraLevels(name) {
+        if (!auraServer.byName) return null;
+        const m = auraServer.byName[String(name || '').trim()];
+        if (!m) return null;
+        const au = {};
+        let any = false;
+        Object.keys(AURA_MAP).forEach(function (k) {
+            const v = m.auras ? Number(m.auras[k] || 0) : 0;
+            au[k] = v;
+            if (v > 0) any = true;
+        });
+        return any ? au : null;
+    }
+    // ── 手动录入兜底：服务器找不到或全 0 时，在信息块里直接填八个光环等级 ──
+    function readAuraManual() {
+        try { return JSON.parse(localStorage.getItem(K_AURA_MANUAL) || '{}') || {}; } catch (_) { return {}; }
+    }
+    function writeAuraManual(map) {
+        try { localStorage.setItem(K_AURA_MANUAL, JSON.stringify(map)); } catch (_) {}
+    }
+    // 该成员的手动光环（有任一非 0 才算有效，否则 null）
+    function manualAuraLevels(map, name) {
+        const entry = map[String(name || '').trim()];
+        if (!entry || typeof entry !== 'object') return null;
+        const au = {};
+        let any = false;
+        Object.keys(AURA_MAP).forEach(function (k) {
+            const v = Number(entry[k] || 0);
+            au[k] = v;
+            if (v > 0) any = true;
+        });
+        return any ? au : null;
+    }
+    // 八个光环输入框（数字，0-99），data-aura-key 供事件委托写回
+    function auraInputsHtml(name) {
+        const manual = readAuraManual()[String(name || '').trim()] || {};
+        let cells = '';
+        Object.keys(AURA_MAP).forEach(function (k) {
+            const label = ((AURA_STATS[k] && AURA_STATS[k].label) || k).replace(/光环$/, '');
+            const v = manual[k] != null ? manual[k] : '';
+            cells += '<label style="display:inline-flex;align-items:center;gap:2px;margin:1px 3px;">'
+                + '<span style="font-weight:400;opacity:.85">' + label + '</span>'
+                + '<input data-aura-key="' + k + '" type="number" min="0" max="99" value="' + v + '"'
+                + ' style="width:34px;padding:0 2px;border:1px solid #45598c;border-radius:3px;background:#0e1830;color:#eef3ff;'
+                + 'font:11px system-ui,sans-serif;text-align:center"/>'
+                + '</label>';
+        });
+        return '<div style="display:flex;flex-wrap:wrap;justify-content:center;margin-top:3px">' + cells + '</div>';
+    }
+
+    // ── 组队界面成员位置下方的状态/推荐信息块 ──
+    // 第一行：等级资料（等待资料/资料已采集）；第二行：光环数据（光环未上传/光环数据就绪）；
+    // 全员就绪时显示：推荐携带 + 最终值 + 计算过程。
+    const AURA_INFO_CLASS = 'kunpo-aura-member-info';
+    // 队伍页面内成员名字元素（与抓名逻辑一致，连续重复去重）
+    function auraNameElements(container) {
+        const els = Array.from(container.querySelectorAll('[class*="characterName" i]'));
+        const out = [];
+        els.forEach(function (el) {
+            const t = String(el.textContent || '').trim();
+            if (!t || t.length > 20) return;
+            if (out.length) {
+                const prevT = String(out[out.length - 1].textContent || '').trim();
+                if (prevT === t) return;
+            }
+            out.push(el);
+        });
+        return out;
+    }
+    function removeAuraInfoBlocks() {
+        document.querySelectorAll('.' + AURA_INFO_CLASS).forEach(function (el) {
+            if (el.parentNode) el.parentNode.removeChild(el);
+        });
+    }
+    // 找成员卡根节点：从名字元素向上爬，直到某个祖先同时包含多个成员名字元素为止，
+    // 最后一个「只含本人名字元素」的祖先即成员槽根 → 信息块插到它后面（整张卡片下方）。
+    // 注意：必须按已收集的名字元素身份计数（node.contains），不能用类名子串重新查询——
+    // 角色名组件是嵌套结构，内层元素类名同样含 "characterName" 子串，会误判成多个成员。
+    function auraSlotRootFor(nameEl, container, nameEls) {
+        if (IS_CN_SITE) {
+            // CN 站：卡片是绝对定位（不在文档流），列高只到名字行，宽度估算也不可靠——
+            // 直接按「X 与名字中心对齐 + 位于名字下方 + 含精灵图」找到本成员的卡片元素，
+            // 列根 = 名字元素与卡片的最近公共祖先（必然同时包含名字行与卡片）
+            const nRect = nameEl.getBoundingClientRect();
+            const cx = nRect.left + nRect.width / 2;
+            let sprite = null;
+            const sprites = container.querySelectorAll('img, svg, canvas');
+            for (const s of sprites) {
+                const r = s.getBoundingClientRect();
+                if (r.width < 30 || r.height < 30) continue;          // 跳过小图标/装饰
+                if (cx < r.left || cx > r.right) continue;            // X 与名字中心对齐
+                if (r.top < nRect.bottom - 4) continue;               // 位于名字下方
+                if (!sprite || r.top < sprite.getBoundingClientRect().top) sprite = s;   // 取最靠上的
+            }
+            if (!sprite) return nameEl.parentNode;
+            // 卡片框：从精灵图向上爬到宽度不再明显增长的祖先（带边框的卡片容器）
+            let cardEl = sprite;
+            let w = sprite.getBoundingClientRect().width;
+            let p = sprite.parentElement;
+            while (p && p !== container.parentNode && !p.contains(nameEl)) {
+                const pw = p.getBoundingClientRect().width;
+                if (pw <= w * 1.05) break;
+                cardEl = p; w = pw;
+                p = p.parentElement;
+            }
+            nameEl.__cnCard = cardEl;
+            const lca = auraCommonAncestor([nameEl, cardEl]);
+            return lca || nameEl.parentNode;
+        }
+        let root = nameEl;
+        let node = nameEl.parentNode;
+        while (node && node !== container && node.nodeType === 1) {
+            let count = 0;
+            for (let i = 0; i < nameEls.length; i++) {
+                if (node.contains(nameEls[i])) count++;
+                if (count > 1) break;
+            }
+            if (count > 1) break;
+            root = node;
+            node = node.parentNode;
+        }
+        return root;
+    }
+    // 最近公共祖先：候选按「离 els[0] 由近到远」排列，过滤包含其余名字元素的节点，取最近一个
+    function auraCommonAncestor(els) {
+        if (!els.length) return null;
+        let candidates = [];
+        let node = els[0].parentNode;
+        while (node && node.nodeType === 1) { candidates.push(node); node = node.parentNode; }
+        for (let i = 1; i < els.length; i++) {
+            candidates = candidates.filter(function (c) { return c.contains(els[i]); });
+            if (!candidates.length) return null;
+        }
+        return candidates.length ? candidates[0] : null;
+    }
+    // CN 站诊断日志（节流：同一原因只打一次）
+    let lastCnAuraLog = '';
+    function cnAuraLog(msg) {
+        if (lastCnAuraLog === msg) return;
+        lastCnAuraLog = msg;
+        try { console.info('[KUNPO][CN] ' + msg); } catch (_) {}
+    }
+    // CN 站列内可见元素的最大底边：卡片是绝对定位不占列高，列自身高度只到名字行，
+    // 直接用列根 bottom 会让块盖在卡片上；取列内所有可见元素（含绝对定位的卡片）的最大底边
+    function cnColumnBottom(root) {
+        let bottom = root.getBoundingClientRect().bottom;
+        try {
+            const all = root.querySelectorAll('*');
+            for (let i = 0; i < all.length; i++) {
+                const c = all[i];
+                // 排除信息块及其所有后代：块是 fixed 且随本函数移动，
+                // 若把块内元素的底边算进来，下一帧块会被自己推着无限下移
+                if (c.closest && c.closest('.' + AURA_INFO_CLASS)) continue;
+                const r = c.getBoundingClientRect();
+                if (r.height > 1 && r.width > 1 && r.bottom > bottom) bottom = r.bottom;
+            }
+        } catch (_) {}
+        return bottom;
+    }
+    // CN 站「修改队伍」编辑模式检测：编辑面板的槽位配置行含「最低等级/最高等级」字样
+    function cnPartyEditMode() {
+        try {
+            const container = document.querySelector('[class*="Party_page"]') || document.querySelector('[class^="Party_"]');
+            if (!container) return false;
+            const text = container.textContent || '';
+            return text.indexOf('最低等级') >= 0 && text.indexOf('最高等级') >= 0;
+        } catch (_) { return false; }
+    }
+    // CN 站信息块重定位：左/宽取列根（整列）矩形，顶部取「列内最大底边」（fixed 不受 overflow 裁剪影响）
+    function repositionCnAuraBlocks() {
+        if (cnPartyEditMode()) {   // 编辑模式：块会挡住槽位操作区 → 隐藏
+            document.querySelectorAll('.' + AURA_INFO_CLASS).forEach(function (b) { b.style.display = 'none'; });
+            return;
+        }
+        document.querySelectorAll('.' + AURA_INFO_CLASS).forEach(function (block) {
+            const root = block.__cnSlotRoot;
+            if (!root || !root.isConnected) {
+                if (block.parentNode) block.parentNode.removeChild(block);
+                return;
+            }
+            const r = root.getBoundingClientRect();
+            if (r.width < 10) { block.style.display = 'none'; return; }
+            block.style.display = '';
+            block.style.left = Math.round(r.left) + 'px';
+            block.style.width = Math.round(r.width) + 'px';
+            block.style.top = Math.round(cnColumnBottom(root) + 4) + 'px';
+        });
+    }
+    let cnAuraPosInstalled = false;
+    function ensureCnAuraPosListeners() {
+        if (cnAuraPosInstalled) return;
+        cnAuraPosInstalled = true;
+        window.addEventListener('scroll', repositionCnAuraBlocks, true);   // capture：捕获内部滚动容器
+        window.addEventListener('resize', repositionCnAuraBlocks);
+    }
+    // 按当前数据同步每个成员名字下方的信息块（内容无变化时不重写，避免触发 Observer 死循环）
+    function syncAuraRecoInfo() {
+        // 两站通用：scoped 容器（全文档查询会混入聊天/公会等面板的 100+ 隐藏名字组件，不可用）
+        const container = document.querySelector('[class*="Party_page"]') || document.querySelector('[class^="Party_"]');
+        if (!auraRecoEnabled() || !container) {
+            if (IS_CN_SITE) cnAuraLog('跳过: enabled=' + auraRecoEnabled()
+                + ' container=' + (container ? 'ok' : 'null'));
+            removeAuraInfoBlocks(); return;
+        }
+        void refreshAuraServerData();   // 缓存过期时后台拉取共享空间数据，完成后会再触发一次同步
+        if (IS_CN_SITE && cnPartyEditMode()) {
+            // CN 站「修改队伍」编辑模式：信息块会挡住槽位操作区 → 移除，退出编辑后自动恢复
+            cnAuraLog('编辑模式，隐藏信息块');
+            removeAuraInfoBlocks(); return;
+        }
+        const members = collectPartyMemberNames();
+        const nameEls = auraNameElements(container);
+        if (!members.length || members.length !== nameEls.length) {
+            if (IS_CN_SITE) cnAuraLog('跳过: members=' + members.length + ' nameEls=' + nameEls.length);
+            removeAuraInfoBlocks(); return;
+        }
+        const profileMap = readPartyProfileMap();
+        const myId = state.character ? String(state.character.id) : '';
+        const selfHr = normalizeHouseRoomMap(state.houseRoomMap || null);
+        const manualMap = readAuraManual();
+        const infos = members.map(function (m) {
+            const isSelf = m.id && m.id === myId;
+            const info = profileMap[m.id] || {};
+            const lv = isSelf ? selfCombatLevels() : (info.lv || null);
+            const hr = isSelf ? selfHr : (info.hr || null);
+            // 光环数据源：服务器（计算器共享空间上传）→ 手动录入；都不存在 → 未上传
+            const serverAu = serverAuraLevels(m.name);
+            const manualAu = manualAuraLevels(manualMap, m.name);
+            const au = serverAu || manualAu || null;
+            return {
+                name: m.name, lv: lv, au: au, hr: hr,
+                ready: !!lv,
+                auraSource: serverAu ? 'server' : (manualAu ? 'manual' : null),
+                auraReady: !!(serverAu || manualAu),
+            };
+        });
+        const allReady = infos.every(function (x) { return x.ready && x.auraReady; });
+        const recoKeys = auraPriorityKeys(members.length);
+        // 全员就绪 → 全队唯一性分配（每种光环只给一人，总值最优）
+        const allocation = allReady ? assignAurasUnique(infos, recoKeys) : null;
+        nameEls.forEach(function (el, i) {
+            try {
+            const x = infos[i];
+            let html;
+            const showInputs = !x.auraReady || x.auraSource === 'manual';
+            const status1 = x.ready ? '资料已采集' : '等待资料';
+            const status2 = x.auraReady
+                ? ('光环数据就绪' + (x.auraSource === 'manual' ? '（手动）' : ''))
+                : '光环未上传';
+            if (allReady && allocation && allocation.assign[i]) {
+                const recKey = allocation.assign[i];
+                const st = AURA_STATS[recKey];
+                const auraLv = Number(x.au[recKey] || 0);
+                const a = attrToLevelValue(x.lv, st.attr, x.hr);
+                const val = Math.round(allocation.options[i][recKey] * 100) / 100;
+                // 三行格式：推荐XX光环：最终值% / 光环等级：XX / 属性 等级+房屋等级
+                const skillText = (a && a.skill !== null && a.skill !== undefined) ? a.skill : '-';
+                const houseText = (a && a.house) ? '+' + a.house : '+0';
+                // 计算过程保留在悬停提示
+                const calc = '(' + st.base + '+' + st.growth + '×' + (auraLv - 1) + ')×(1+' + (a ? a.total : 0) + '×' + st.attrGrowth + ')=' + val;
+                html = '<div title="' + calc + '">推荐：' + st.label + '：' + val + '%</div>'
+                    + '<div>光环等级：' + auraLv + '</div>'
+                    + '<div>' + (st.attr || '') + ' ' + skillText + houseText + '</div>';
+            } else if (allReady) {
+                html = '<div>资料已采集</div><div>无可推荐光环</div>';
+            } else {
+                html = '<div>' + status1 + '</div><div>' + status2 + '</div>';
+            }
+            if (showInputs) html += auraInputsHtml(x.name);
+            // 信息块放进成员列根节点内部末尾：撑高根节点，显示在整张卡片下方（不新增网格列）
+            const slotRoot = auraSlotRootFor(el, container, nameEls);
+            if (!slotRoot || !slotRoot.parentNode) return;
+            let block = null;
+            for (let i = 0; i < slotRoot.children.length; i++) {
+                const c = slotRoot.children[slotRoot.children.length - 1 - i];
+                if (c.classList && c.classList.contains(AURA_INFO_CLASS)) { block = c; break; }
+            }
+            if (!block) {
+                block = document.createElement('div');
+                block.className = AURA_INFO_CLASS;
+                block.style.cssText = IS_CN_SITE
+                    ? // CN 站：fixed 视口定位（列根可能带 overflow:hidden，absolute 会被裁剪），坐标由 reposition 计算
+                      'position:fixed;z-index:60;padding:2px 8px;border-radius:4px;background:#0e1b3a;color:#fff;'
+                    + 'font:700 11px/1.5 system-ui,sans-serif;text-align:center;min-height:56px;box-sizing:border-box;'
+                    + 'display:flex;flex-direction:column;align-items:center;justify-content:center;overflow:hidden;'
+                    : 'margin-top:4px;padding:2px 8px;border-radius:4px;background:#0e1b3a;color:#fff;'
+                    + 'font:700 11px/1.5 system-ui,sans-serif;text-align:center;width:100%;min-height:56px;box-sizing:border-box;'
+                    + 'display:flex;flex-direction:column;align-items:center;justify-content:center;overflow:hidden;pointer-events:none';
+                // 手动录入写回：input 实时保存，change（失焦）后刷新推荐
+                block.addEventListener('input', function (e) {
+                    const t = e.target;
+                    if (!t || !t.dataset || !t.dataset.auraKey) return;
+                    const name = block.dataset.memberName || '';
+                    if (!name) return;
+                    const map = readAuraManual();
+                    const entry = Object.assign({}, map[name] || {});
+                    const v = Math.max(0, Math.min(99, Number(t.value) || 0));
+                    if (v > 0) entry[t.dataset.auraKey] = v; else delete entry[t.dataset.auraKey];
+                    map[name] = entry;
+                    writeAuraManual(map);
+                    syncAuraRecoInfo();
+                });
+                block.addEventListener('change', function () { syncAuraRecoInfo(); });
+                // 阻止点击冒泡到游戏的事件委托（否则点击信息块会触发打开角色资料）
+                ['click', 'mousedown', 'mouseup', 'pointerdown', 'pointerup'].forEach(function (evt) {
+                    block.addEventListener(evt, function (e) { e.stopPropagation(); });
+                });
+                if (IS_CN_SITE) {
+                    block.__cnSlotRoot = slotRoot;        // 供列内最大底边扫描
+                    block.__cnCard = el.__cnCard || null; // 供左/宽定位（卡片矩形）
+                    ensureCnAuraPosListeners();
+                }
+                slotRoot.appendChild(block);
+            }
+            block.dataset.memberName = x.name;
+            // 有输入框时展开高度并开放鼠标交互；否则固定 56px 且不响应指针
+            const wantPE = showInputs ? 'auto' : 'none';
+            const wantH = showInputs ? 'auto' : '56px';
+            if (block.style.pointerEvents !== wantPE) block.style.pointerEvents = wantPE;
+            if (block.style.height !== wantH) block.style.height = wantH;
+            // 正在输入时不重写 innerHTML，避免输入框失焦
+            const active = document.activeElement;
+            if (!(active && block.contains(active) && showInputs) && block.dataset.sig !== html) {
+                block.innerHTML = html;
+                block.dataset.sig = html;
+            }
+            } catch (e) { if (IS_CN_SITE) try { console.warn('[KUNPO][CN] 渲染异常:', e); } catch (_) {} }
+        });
+        if (IS_CN_SITE) {
+            repositionCnAuraBlocks();
+            cnAuraLog('信息块已渲染: ' + members.length + ' 个');
+        }
+    }
+
+    // ── 光环优先级弹窗：5 个槽位，每个左侧「光环N」、右侧从八个光环中单选 ──
+    // 保存后，队伍人数为 X 时按前 X 个光环为每名成员推荐最终值最高的最优解
+    function openAuraPriorityModal() {
+        const old = document.getElementById('kunpo-aura-priority-modal');
+        if (old && old.parentNode) old.parentNode.removeChild(old);
+        const list = auraPriorityList();
+        const overlay = document.createElement('div');
+        overlay.id = 'kunpo-aura-priority-modal';
+        overlay.style.cssText = 'position:fixed;inset:0;z-index:2147483647;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center';
+        const box = document.createElement('div');
+        box.style.cssText = 'min-width:300px;max-width:90vw;padding:16px 18px;border-radius:10px;background:rgba(15,24,48,.97);'
+            + 'border:1px solid #6f9bd8;color:#eef3ff;font:600 12px/1.6 system-ui,sans-serif;box-shadow:0 10px 30px rgba(0,0,0,.5)';
+        const title = document.createElement('div');
+        title.textContent = '光环优先级';
+        title.style.cssText = 'font-size:14px;margin-bottom:6px';
+        const hint = document.createElement('div');
+        hint.textContent = '队伍人数为 X 时，按前 X 个光环为每名成员推荐最终值最高的最优解；选「（不参与）」跳过该槽位';
+        hint.style.cssText = 'color:#7f93bb;font-weight:400;font-size:11px;margin-bottom:10px';
+        box.appendChild(title);
+        box.appendChild(hint);
+        const selects = [];
+        for (let i = 0; i < 5; i++) {
+            const row = document.createElement('div');
+            row.style.cssText = 'display:flex;align-items:center;gap:8px;margin-bottom:8px';
+            const lab = document.createElement('span');
+            lab.textContent = '光环' + (i + 1);
+            lab.style.cssText = 'width:44px;color:#c3d2f2;flex-shrink:0';
+            const sel = document.createElement('select');
+            sel.style.cssText = 'flex:1;padding:4px 6px;border:1px solid #45598c;border-radius:5px;background:#0e1830;color:#eef3ff;font:12px system-ui,sans-serif';
+            sel.appendChild(new Option('（不参与）', ''));
+            Object.keys(AURA_MAP).forEach(function (k) {
+                sel.appendChild(new Option((AURA_STATS[k] && AURA_STATS[k].label) || k, k));
+            });
+            sel.value = list[i] || '';
+            row.appendChild(lab);
+            row.appendChild(sel);
+            box.appendChild(row);
+            selects.push(sel);
+        }
+        // 唯一性约束：每种光环只携带一个 → 其他槽位中已选的光环禁用（灰色不可选）
+        function refreshAuraAvailability() {
+            const chosen = selects.map(function (s) { return s.value; }).filter(Boolean);
+            selects.forEach(function (s) {
+                Array.from(s.options).forEach(function (opt) {
+                    if (!opt.value) { opt.disabled = false; return; }
+                    opt.disabled = chosen.indexOf(opt.value) >= 0 && s.value !== opt.value;
+                });
+            });
+        }
+        selects.forEach(function (sel) { sel.addEventListener('change', refreshAuraAvailability); });
+        refreshAuraAvailability();
+        const btns = document.createElement('div');
+        btns.style.cssText = 'display:flex;gap:8px;margin-top:12px';
+        const mkBtn = function (text, bg) {
+            const b = document.createElement('button');
+            b.type = 'button';
+            b.textContent = text;
+            b.style.cssText = 'border:0;border-radius:6px;padding:5px 10px;background:' + bg + ';color:#fff;cursor:pointer;font:600 12px/1 system-ui,sans-serif';
+            return b;
+        };
+        const save = mkBtn('保存', '#0a84ff');
+        save.addEventListener('click', function () {
+            setAuraPriority(selects.map(function (s) { return s.value; }));
+            overlay.parentNode.removeChild(overlay);
+            syncAuraRecoInfo();   // 立即按新优先级刷新组队界面信息块
+            showAssignmentToast('光环优先级已保存', 3000);
+        });
+        // 清除缓存：删掉本功能生成的成员信息缓存（队友资料 + 成员名映射），信息块回到「等待资料」
+        const clearCache = mkBtn('清除缓存', '#b45309');
+        clearCache.addEventListener('click', function () {
+            [PARTY_PROFILE_KEY, PARTY_NAME_CACHE_KEY].forEach(function (k) {
+                try { localStorage.removeItem(k); } catch (_) {}
+            });
+            syncAuraRecoInfo();
+            showAssignmentToast('已清除光环推荐的成员信息缓存', 3000);
+        });
+        const close = mkBtn('关闭', '#344879');
+        close.addEventListener('click', function () { overlay.parentNode.removeChild(overlay); });
+        btns.appendChild(save);
+        btns.appendChild(clearCache);
+        btns.appendChild(close);
+        box.appendChild(btns);
+        overlay.appendChild(box);
+        overlay.addEventListener('click', function (e) { if (e.target === overlay) overlay.parentNode.removeChild(overlay); });
+        document.body.appendChild(overlay);
     }
 
     // ═══════════════════════════════════════════════════════════════════════
@@ -2764,6 +3644,7 @@
     function boot() {
         mountExportUi();
         initAssignment();
+        addAuraRecoButton();
         void checkForUpdate();
     }
 
