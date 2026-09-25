@@ -261,6 +261,7 @@ table.member-table td.idx-cell input.idx-input { width:44px; text-align:center; 
 #btn-upload.dirty::after { content:''; position:absolute; top:-3px; right:-3px; width:8px; height:8px; border-radius:50%; background:#c25e00; box-shadow:0 0 0 2px var(--bg); }
 #btn-upload.busy { opacity:.6; pointer-events:none; }
 #btn-migrate-cos.busy { opacity:.6; pointer-events:none; }
+#btn-upload-cos.busy { opacity:.6; pointer-events:none; }
 table.member-table td.name-cell { text-align:left; }
 table.member-table td input { width:100%; border:1px solid transparent; background:transparent; font-size:13px; padding:2px 4px; border-radius:3px; color:var(--text); }
 table.member-table td input:focus { border-color:var(--accent); background:var(--input-bg); outline:none; }
@@ -876,6 +877,8 @@ table.member-table tbody tr:hover td.sticky-l.name-cell { background-color:var(-
     <button class="btn btn-icon" id="btn-theme" onclick="toggleTheme()">🌙</button>
     <button class="btn" id="btn-pull" onclick="pullFromServer()" style="display:none" title="">🔄 <span id="btn-pull-label">获取</span></button>
     <button class="btn" id="btn-upload" onclick="uploadToServer()" style="display:none" title="">☁️ <span id="btn-upload-label">上传</span></button>
+    <button class="btn" id="btn-pull-cos" onclick="pullFromServer('cos')" style="display:none" title="">🔄 <span id="btn-pull-cos-label">获取(COS)</span></button>
+    <button class="btn" id="btn-upload-cos" onclick="uploadToServerCos()" style="display:none" title="">☁️ <span id="btn-upload-cos-label">上传(COS)</span></button>
     <button class="btn" id="btn-share" onclick="openShareDialog()">共享设置</button>
     <button class="btn" id="btn-migrate-cos" onclick="migrateJsonbinToCos()" style="display:none" title="">📦 <span id="btn-migrate-cos-label">迁移到腾讯桶</span></button>
     <button class="btn" id="btn-import-backup" onclick="importBackupFile()" title="">📥 <span id="btn-import-backup-label">导入备份</span></button>
@@ -1138,6 +1141,11 @@ const I18N = {
     backupImportLocal:'仅导入本地', backupImportUpload:'导入并上传到腾讯桶',
     backupNoApi:'上传到腾讯桶需要填写云函数地址', backupNeedBin:'请填写云端空间 binId', backupNeedPwd:'请填写公会密码（用于加密上传）',
     backupImported:'备份已导入本地', backupUploaded:'备份已导入并上传到腾讯云 COS', backupFail:'备份导入失败',
+    pullDataCos:'获取(COS)', pullTooltipCos:'从腾讯云 COS 拉取当前公会最新数据（经云函数中转，数据保持加密）',
+    uploadDataCos:'上传(COS)', uploadTooltipCos:'把本地数据加密后写入腾讯云 COS（会长端覆盖，个人端按角色名合并）',
+    cosNeedApi:'请先点「迁移到腾讯桶」或「导入备份」，在弹窗里填好云函数地址并保存',
+    cosNoKey:'缺少解密密钥：请用带 pwd 参数的分享链接打开页面', cosPullOk:'已从腾讯云 COS 拉取最新数据',
+    cosNoData:'腾讯桶里还没有这份数据（对象不存在）',
     importSuccess:'导入成功', importFailed:'未找到有效数据',
     teamWork:'团队工作能力', nextClearNeeds:'下1次还需', pts:'点', perSec:'点/秒',
     targetLevel:'通关目标', estTime:'估算时间', reach:'到达',
@@ -1283,6 +1291,11 @@ const I18N = {
     backupImportLocal:'Import locally only', backupImportUpload:'Import and upload to COS',
     backupNoApi:'Uploading to COS requires the Cloud Function URL', backupNeedBin:'Please enter the cloud binId', backupNeedPwd:'Please enter the guild password (used for encryption)',
     backupImported:'Backup imported locally', backupUploaded:'Backup imported and uploaded to Tencent Cloud COS', backupFail:'Backup import failed',
+    pullDataCos:'Pull (COS)', pullTooltipCos:'Fetch the latest guild data from Tencent Cloud COS (via the Cloud Function; data stays encrypted)',
+    uploadDataCos:'Upload (COS)', uploadTooltipCos:'Encrypt and write local data to Tencent Cloud COS (leader overwrites, member merges by name)',
+    cosNeedApi:'Fill in and save the Cloud Function URL from the "Migrate to COS" or "Import Backup" dialog first',
+    cosNoKey:'Missing decryption key: open the page with a share link that includes the pwd parameter', cosPullOk:'Latest data pulled from Tencent Cloud COS',
+    cosNoData:'No such object in the COS bucket yet',
     importSuccess:'Imported successfully', importFailed:'No valid data found',
     teamWork:'Team Work', nextClearNeeds:'Next clear needs', pts:'pts', perSec:'pts/s',
     targetLevel:'Clear Target', estTime:'Est. Time', reach:'Reach',
@@ -2248,6 +2261,9 @@ let state = {
   binId: null,
   encKey: null,
   pwd: '',
+  // 默认云端通道：'jsonbin' | 'cos'。由分享链接的 src 参数决定（?src=cos）。
+  // 只影响"读"（页面初始化自动加载 + 「获取」按钮）；"写"始终由你点哪个上传按钮决定。
+  cloudSrc: 'jsonbin',
   isShared: false,
   // 配装列表头选中的 settingSuffix（PascalCase，如 Milking/Foraging/…/Goblin），
   // 决定成员表格里"配装"列每一行显示的是谁的哪套配装。默认挤奶。
@@ -5544,6 +5560,14 @@ function updateStaticText() {
   if (upLbl) upLbl.textContent = t('upload');
   const upBtn = document.getElementById('btn-upload');
   if (upBtn) upBtn.title = t('uploadTooltip');
+  const pcLbl = document.getElementById('btn-pull-cos-label');
+  if (pcLbl) pcLbl.textContent = t('pullDataCos');
+  const pcBtn = document.getElementById('btn-pull-cos');
+  if (pcBtn) pcBtn.title = t('pullTooltipCos');
+  const ucLbl = document.getElementById('btn-upload-cos-label');
+  if (ucLbl) ucLbl.textContent = t('uploadDataCos');
+  const ucBtn = document.getElementById('btn-upload-cos');
+  if (ucBtn) ucBtn.title = t('uploadTooltipCos');
   const connEl = document.getElementById('conn-status');
   if (!state.isShared) connEl.textContent = t('offlineMode');
   else connEl.textContent = t('connected')+': '+state.guild;
@@ -6954,11 +6978,11 @@ async function createBin(guild, password, masterKey) {
 }
 
 // === 腾讯云 COS 迁移（jsonbin → COS） ===
-// 桶固定：mwi-kunpo-1315858741（ap-shanghai-fsi）；对象路径 mwi/{guild}/{binId}.json。
+// 桶：kunpo-mwi-1315858741（ap-shanghai）；对象路径 mwi/{guild}/{binId}.json。
 // 浏览器不能直写 COS（不能暴露 SecretId/SecretKey），因此统一走云函数代理：
 //   POST {apiBase}            body {action:'put', guild, bin, d}  header X-Auth
 //   GET  {apiBase}?guild=&bin=                                    header X-Auth → {record:{d}}
-// 搬运的是 encryptRecord 产生的密文 { d }，全程不解密，云函数与 COS 都看不到明文。
+// 所有数据都是 encryptRecord 产生的密文 { d }，云函数与 COS 都看不到明文。
 const COS_BUCKET = 'kunpo-mwi-1315858741';
 const COS_REGION = 'ap-shanghai';
 let isMigrating = false;
@@ -6972,6 +6996,136 @@ function cosMigrateHintText() {
     .replace('{bucket}', COS_BUCKET)
     .replace('{region}', COS_REGION)
     .replace('{key}', cosObjectKey(state.guild, state.binId));
+}
+
+// --- COS 统一调用层 ---
+// 函数 URL 有两种响应形态：集成响应（原生 body）与透传（外层再包一层 statusCode/headers/body）。
+// 这里统一拆包，避免以后改配置又要动业务代码。
+function unwrapScfResponse(json) {
+  if (json && typeof json === 'object' && typeof json.body === 'string' && typeof json.statusCode === 'number') {
+    try { return JSON.parse(json.body); } catch(e) { return json; }
+  }
+  return json;
+}
+async function cosApiCall(method, query, payload) {
+  const apiBase = getCosApiBase().replace(/\/+$/, '');
+  if (!apiBase) throw new Error(t('cosNeedApi'));
+  const qs = query ? ('?' + new URLSearchParams(query).toString()) : '';
+  const headers = { 'X-Auth': getCosToken() };
+  if (payload) headers['Content-Type'] = 'application/json';
+  const resp = await fetch(apiBase + qs, {
+    method: method,
+    headers: headers,
+    body: payload ? JSON.stringify(payload) : undefined
+  });
+  const raw = await resp.text();
+  let json = null;
+  try { json = raw ? JSON.parse(raw) : null; } catch(e) { json = null; }
+  json = unwrapScfResponse(json);
+  const status = (json && typeof json.statusCode === 'number') ? json.statusCode : resp.status;
+  if (status === 404) return { status: 404, json: json };
+  if (status < 200 || status >= 300) {
+    const msg = (json && json.message) ? json.message : String(raw || '').slice(0, 200);
+    throw new Error('COS HTTP ' + status + '：' + msg);
+  }
+  return { status: status, json: json };
+}
+// 读取云端记录；对象不存在时返回 null（不抛错）
+async function cosGetRecord() {
+  const r = await cosApiCall('GET', { guild: state.guild || 'default', bin: state.binId || '' }, null);
+  if (r.status === 404) return null;
+  if (r.json && r.json.record) return r.json;
+  if (r.json && typeof r.json.body === 'string') {
+    try { const inner = JSON.parse(r.json.body); if (inner && inner.record) return inner; } catch(e) {}
+  }
+  return null;
+}
+// 写入云端记录（密文 d）
+async function cosPutRecord(d) {
+  return cosApiCall('POST', null, { action:'put', guild: state.guild, bin: state.binId, d: d });
+}
+
+// 从 COS 拉取并解密进 state（行为对齐 loadFromBin：补齐 id、按 id 排序、标记已拉取）
+async function loadFromCos() {
+  state.__cosErr = '';
+  try {
+    if (!state.encKey) { state.__cosErr = t('cosNoKey'); return false; }
+    const data = await cosGetRecord();
+    if (!data || !data.record || !data.record.d) { state.__cosErr = t('cosNoData'); return false; }
+    const dec = await decryptRecord(data.record, state.encKey);
+    Object.assign(state, JSON.parse(dec));
+    if (Array.isArray(state.members)) {
+      let maxId = -1;
+      state.members.forEach(p => { if (typeof p.id === 'number' && isFinite(p.id) && p.id > maxId) maxId = p.id; });
+      state.members.forEach(p => { if (typeof p.id !== 'number' || !isFinite(p.id)) p.id = ++maxId; });
+      state.members.sort((a, b) => (a.id|0) - (b.id|0));
+    }
+    state.hasPulled = true;
+    state.lastPullTs = Date.now();
+    return true;
+  } catch(e) {
+    console.error('COS load failed:', e);
+    state.__cosErr = (e && e.message) ? e.message : String(e);
+    return false;
+  }
+}
+
+// 上传到 COS：会长端覆盖、个人端按 name+_ts 合并（逻辑对齐 uploadToServer，只是换通道）
+async function uploadToServerCos() {
+  if (!state.isShared || !state.binId || !state.encKey) { alert(t('notShared')); return; }
+  if (!getCosApiBase()) { alert(t('cosNeedApi')); return; }
+  if (!isGuildLeader() && !state.hasPulled) { alert(t('pullFirstAlert')); return; }
+  if (isUploading) { alert(t('uploading')); return; }
+  isUploading = true;
+  const btn = document.getElementById('btn-upload-cos');
+  if (btn) { btn.disabled = true; btn.classList.add('busy'); }
+  let mergeFail = null;
+  try {
+    const localData = { guild:state.guild, members:(state.members||[]).map(slimMemberForUpload), trials:state.trials };
+    let merged = localData;
+    try {
+      const remoteRec = await cosGetRecord();
+      if (remoteRec && remoteRec.record && remoteRec.record.d) {
+        const dec = await decryptRecord(remoteRec.record, state.encKey);
+        merged = mergeState(localData, JSON.parse(dec));
+      }
+    } catch(e) {
+      mergeFail = { status:0, message:String((e && e.message) || e) };
+      console.warn('COS merge failed, uploading without merge:', e);
+    }
+    const rec = await encryptRecord(JSON.stringify(merged), state.encKey);
+    if (isGuildLeader()) {
+      const sizeBytes = new Blob([JSON.stringify(rec)]).size;
+      const ok = await showUploadConfirmModal(sizeBytes);
+      if (!ok) throw { __uploadCancelled: true };
+    }
+    await cosPutRecord(rec.d);
+    // 本地状态同步为 merged，让 UI 反映合并后（可能被"其他人的新数据"拉进来的）内容
+    const prevSig = (state.members || []).map(p => p && p.id).join(',');
+    state.members = merged.members;
+    state.trials = merged.trials;
+    const newSig = (state.members || []).map(p => p && p.id).join(',');
+    if (prevSig !== newSig) {
+      try { renderTableHeader(); renderMemberTable(); renderSummary(); } catch(e) {}
+    }
+    clearDirty();
+    const badge = document.getElementById('pull-status');
+    if (badge) { badge.textContent = t('uploadOk'); badge.className = 'pull-status ok'; clearTimeout(window.__mwiPullFlashTimer); window.__mwiPullFlashTimer = setTimeout(updatePullStatus, 1800); }
+    showUploadSuccessModal(t('uploadOk'));
+  } catch(e) {
+    if (!(e && e.__uploadCancelled)) {
+      console.error('COS upload failed:', e);
+      let msg = (e && e.message) ? e.message : String(e);
+      if (e && e.__mergeFail) {
+        msg += '\n\n' + t('uploadMergeFailHint')
+          .replace('{status}', String(e.__mergeFail.status))
+          .replace('{msg}', e.__mergeFail.message || '-');
+      }
+      alert(msg);
+    }
+  }
+  isUploading = false;
+  if (btn) { btn.disabled = false; btn.classList.remove('busy'); }
 }
 
 // 从 jsonbin 拉取最新记录（原样返回 { d } 密文，不解密）
@@ -7034,6 +7188,9 @@ async function runCosMigrate() {
       body: body
     });
     if (!resp.ok) throw new Error('HTTP '+resp.status+'：'+(await readServerMessage(resp)));
+    // 成功上云后，本浏览器默认通道切到 COS：下次「获取」走桶，分享链接自动带 src=cos
+    state.cloudSrc = 'cos';
+    try { localStorage.setItem('mwi_cloud_src', 'cos'); } catch(e) {}
     closeCosMigrateDialog();
     showUploadSuccessModal(t('migrateOk'));
   } catch(e) {
@@ -7094,6 +7251,22 @@ function backupMode() {
   const r = document.querySelector('input[name="backup-mode"]:checked');
   return r ? r.value : 'merge';
 }
+// 弹窗底部的对象路径预览：按输入框实时计算。不能直接用 cosMigrateHintText()，
+// 那是拿当时的 state 算的，导入前 state.guild / state.binId 可能还没填。
+function backupHintText() {
+  const g = String((__mwiBackup && __mwiBackup.data && __mwiBackup.data.guild) || state.guild || '-');
+  const bin = backupVal('bk-bin') || state.binId || '-';
+  return t('cosMigrateHint')
+    .replace('{guild}', g)
+    .replace('{bin}', bin)
+    .replace('{bucket}', COS_BUCKET)
+    .replace('{region}', COS_REGION)
+    .replace('{key}', cosObjectKey(g, bin));
+}
+function refreshBackupHint() {
+  const el = document.getElementById('bk-hint');
+  if (el) el.textContent = backupHintText();
+}
 function openBackupImportDialog() {
   const b = __mwiBackup; if (!b) return;
   const d = b.data;
@@ -7118,9 +7291,9 @@ function openBackupImportDialog() {
       '</div></div>'+
     '<div class="share-field"><label>'+escHtml(t('cosApiBase'))+'</label><input type="text" id="bk-api" value="'+escHtml(getCosApiBase())+'" placeholder="https://service-xxxx.gz.apigw.tencentcs.com/release/mwi"></div>'+
     '<div class="share-field"><label>'+escHtml(t('cosToken'))+'</label><input type="text" id="bk-token" value="'+escHtml(getCosToken())+'" placeholder=""></div>'+
-    '<div class="share-field"><label>'+escHtml(t('backupBin'))+'</label><input type="text" id="bk-bin" value="'+escHtml(state.binId || '')+'" placeholder=""></div>'+
+    '<div class="share-field"><label>'+escHtml(t('backupBin'))+'</label><input type="text" id="bk-bin" value="'+escHtml(state.binId || '')+'" placeholder="" oninput="refreshBackupHint()"></div>'+
     '<div class="share-field"><label>'+escHtml(t('backupPwd'))+'</label><input type="text" id="bk-pwd" value="" placeholder="'+escHtml(pwdPlaceholder)+'"></div>'+
-    '<div style="font-size:11px;color:var(--text-muted);margin:8px 0;white-space:pre-wrap">'+escHtml(cosMigrateHintText())+'</div>'+
+    '<div id="bk-hint" style="font-size:11px;color:var(--text-muted);margin:8px 0;white-space:pre-wrap">'+escHtml(backupHintText())+'</div>'+
     '<div class="modal-actions">'+
       '<button class="btn" onclick="closeBackupImportDialog()">'+escHtml(t('closeBtn'))+'</button>'+
       '<button class="btn" onclick="runBackupImport(false)">'+escHtml(t('backupImportLocal'))+'</button>'+
@@ -7173,6 +7346,8 @@ function applyBackupToState(mode) {
   state.members = members;
   state.trials = trials;
   if (d.guild) state.guild = d.guild;
+  // 老备份只有 {guild,members,trials}；带 plan 的备份（saveData 输出）才恢复排刀，避免误清空当前排刀
+  if (Object.prototype.hasOwnProperty.call(d, 'plan')) state.plan = d.plan || null;
   try { renderAll(); } catch(e) { console.error('renderAll failed:', e); }
   saveData();
   return true;
@@ -7184,20 +7359,27 @@ async function runBackupImport(withUpload) {
   const bin = backupVal('bk-bin');
   const pwd = backupVal('bk-pwd');
   const mode = backupMode();
+  // 加密 salt 必须取「备份里的公会名」：导入前 state.guild 可能还是空的或别的公会，
+  // 拿它当 salt 会把密文锁死在错误的密钥上，成员端永远解不开。
+  const guild = String((b.data && b.data.guild) || state.guild || 'default').trim() || 'default';
   try { localStorage.setItem('mwi_cos_api', apiBase); localStorage.setItem('mwi_cos_token', token); } catch(e) {}
+  const btnUp = document.querySelector('#backup-import-overlay .btn-primary');
+  if (btnUp) { btnUp.disabled = true; btnUp.classList.add('busy'); }
   try {
     if (withUpload) {
       if (!apiBase) { alert(t('backupNoApi')); return; }
       if (!bin) { alert(t('backupNeedBin')); return; }
-      let key = state.encKey;
-      if (!key) {
-        if (!pwd) { alert(t('backupNeedPwd')); return; }
-        key = await deriveKey(pwd, state.guild || (b.data && b.data.guild) || 'default');
-        state.encKey = key;
-      }
-      applyBackupToState(mode);
+      // 填了密码 → 以它为准重新派生；没填 → 复用会话密钥（但仅当公会一致时）
+      let key = null;
+      if (pwd) key = await deriveKey(pwd, guild);
+      else if (state.encKey && state.guild === guild) key = state.encKey;
+      if (!key) { alert(t('backupNeedPwd')); return; }
+      state.encKey = key;
+      if (pwd) state.pwd = pwd;
+      state.guild = guild;
       state.binId = bin;
-      const payload = JSON.stringify({ guild:state.guild, members:(state.members||[]).map(slimMemberForUpload), trials:state.trials });
+      applyBackupToState(mode);
+      const payload = JSON.stringify({ guild:state.guild, members:(state.members||[]).map(slimMemberForUpload), trials:state.trials, plan:(state.plan || null) });
       const rec = await encryptRecord(payload, key);
       const resp = await fetch(apiBase, {
         method:'POST',
@@ -7205,7 +7387,14 @@ async function runBackupImport(withUpload) {
         body: JSON.stringify({ action:'put', guild:state.guild, bin:bin, d:rec.d })
       });
       if (!resp.ok) throw new Error('HTTP '+resp.status+'：'+(await readServerMessage(resp)));
+      // 已经落桶 = 已同步，dirty 红点与顶栏连接状态都要跟上（applyBackupToState 里的 saveData 会把 dirty 置 true）
+      state.isShared = true;
+      // 成功上云后，本浏览器默认通道切到 COS：下次「获取」走桶，分享链接自动带 src=cos
+      state.cloudSrc = 'cos';
+      try { localStorage.setItem('mwi_cloud_src', 'cos'); } catch(e) {}
+      clearDirty();
       closeBackupImportDialog();
+      try { updateConnectionStatus(); renderExportScriptLinks(); } catch(e) {}
       showUploadSuccessModal(t('backupUploaded'));
       return;
     }
@@ -7215,6 +7404,8 @@ async function runBackupImport(withUpload) {
   } catch(e) {
     console.error('Backup import failed:', e);
     alert(t('backupFail')+'：'+((e && e.message) ? e.message : String(e)));
+  } finally {
+    if (btnUp) { btnUp.disabled = false; btnUp.classList.remove('busy'); }
   }
 }
 
@@ -7311,6 +7502,9 @@ function getShareUrl() {
   url.searchParams.set('guild', state.guild);
   url.searchParams.set('bin', state.binId);
   if (state.pwd) url.searchParams.set('pwd', state.pwd);
+  // 当前走 COS 通道时，分享出去的链接带上 src=cos，成员打开就自动从桶拉，无需改操作习惯
+  if (state.cloudSrc === 'cos') url.searchParams.set('src', 'cos');
+  else url.searchParams.delete('src');
   // const mk = localStorage.getItem('mwi_master_key');
   // if (mk) url.searchParams.set('mk', mk);
   return url.toString();
@@ -7346,31 +7540,41 @@ function updateConnectionStatus() {
   const pullBtn = document.getElementById('btn-pull');
   const upBtn = document.getElementById('btn-upload');
   const mgBtn = document.getElementById('btn-migrate-cos');
+  const pcBtn = document.getElementById('btn-pull-cos');
+  const ucBtn = document.getElementById('btn-upload-cos');
   if (state.isShared) {
-    el.textContent = t('connected')+': '+state.guild;
+    el.textContent = t('connected')+': '+state.guild+(state.cloudSrc === 'cos' ? ' (COS)' : '');
     if (pullBtn) pullBtn.style.display = '';
     if (upBtn) upBtn.style.display = '';
     if (mgBtn) mgBtn.style.display = '';
+    if (pcBtn) pcBtn.style.display = '';
+    if (ucBtn) ucBtn.style.display = '';
   } else {
     el.textContent = t('offlineMode');
     if (pullBtn) pullBtn.style.display = 'none';
     if (upBtn) upBtn.style.display = 'none';
     if (mgBtn) mgBtn.style.display = 'none';
+    if (pcBtn) pcBtn.style.display = 'none';
+    if (ucBtn) ucBtn.style.display = 'none';
   }
   updatePullStatus();
 }
 
 // 手动从云端拉取最新数据。个人端必须先执行过此函数（或 init 时自动 load 成功）才允许后续上传，
 // 这样保证本地数据是在服务端"最新版本"之上做的增量修改，"本人这条以 name 为主键覆盖同名条目"不会把别人抹掉。
-async function pullFromServer() {
+async function pullFromServer(provider) {
+  // 未显式指定时跟随当前链接的 src（?src=cos），这样成员点「获取」拿到的和初始化加载的是同一处数据
+  const useCos = (provider || state.cloudSrc) === 'cos';
   if (!state.isShared || !state.binId) { alert(t('notShared')); return; }
+  if (useCos && !getCosApiBase()) { alert(t('cosNeedApi')); return; }
   // 关键：如果本地有未上传的改动（比如刚 import 完的本人数据），
   // 先把它快照出来，pull 完成后按 name 合并回去，不允许云端把本地编辑冲掉。
   const localHasDirty = !!state.dirty;
   const localMembersSnap = localHasDirty ? (state.members || []).slice() : null;
   const localTrialsSnap  = localHasDirty ? (state.trials  || []).slice() : null;
-  const ok = await loadFromBin();
-  if (!ok) { alert(t('pullFailed')); return; }
+  state.__cosErr = '';
+  const ok = useCos ? await loadFromCos() : await loadFromBin();
+  if (!ok) { alert(t('pullFailed') + (useCos && state.__cosErr ? '\n' + state.__cosErr : '')); return; }
   if (localMembersSnap) {
     // 云端 pull 下来后的 state.members = 云端最新；这里把 localMembersSnap 里的每一条按 name 合并回去
     const remoteByName = {};
@@ -7479,17 +7683,22 @@ async function init() {
   const bin = params.get('bin');
   const pwd = params.get('pwd');
   const mk = params.get('mk');
+  const src = params.get('src');
   if (mk) localStorage.setItem('mwi_master_key', mk);
+  // src=cos → 本链接默认走腾讯云 COS 通道（只影响"读"：初始化自动加载 + 「获取」按钮）
+  // 优先级：URL 的 src 参数 > localStorage 里上次成功上云后记住的通道 > 默认 jsonbin
+  try { if (localStorage.getItem('mwi_cloud_src') === 'cos') state.cloudSrc = 'cos'; } catch(e) {}
+  if (src === 'cos') state.cloudSrc = 'cos';
+  else if (src === 'jsonbin') state.cloudSrc = 'jsonbin';
   if (guild && bin) {
     state.guild = guild; state.binId = bin; state.isShared = true;
     let loadedFromShare = false;
     if (pwd) {
       state.pwd = pwd;
       state.encKey = await deriveKey(pwd, guild);
-      loadedFromShare = await loadFromBin();
-    } else {
-      loadedFromShare = await loadFromBin();
     }
+    // 按 src 决定初始化时从哪条通道加载（COS 通道失败会退回本地数据，不阻塞页面）
+    loadedFromShare = (state.cloudSrc === 'cos') ? await loadFromCos() : await loadFromBin();
     updateConnectionStatus();
     if (!state.trials) state.trials = [{skill:0,max:20,targetLevel:START_LV},{skill:1,max:20,targetLevel:START_LV},{skill:2,max:20,targetLevel:START_LV},{skill:3,max:20,targetLevel:START_LV}];
     state.trials.forEach(t => { if (!t.targetLevel) t.targetLevel = START_LV; });
