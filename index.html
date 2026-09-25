@@ -5569,8 +5569,7 @@ function updateStaticText() {
   const ucBtn = document.getElementById('btn-upload-cos');
   if (ucBtn) ucBtn.title = t('uploadTooltipCos');
   const connEl = document.getElementById('conn-status');
-  if (!state.isShared) connEl.textContent = t('offlineMode');
-  else connEl.textContent = t('connected')+': '+state.guild;
+  if (connEl) connEl.textContent = connStatusText();
   updatePullStatus();
 }
 
@@ -7535,6 +7534,11 @@ async function createShare() {
     alert(t('shareCreated'));
   } catch(e) { alert(t('createFailed')+': '+e.message); }
 }
+// 顶栏连接状态文本。唯一来源，避免 renderAll 与 updateConnectionStatus 两处写法不一致互相覆盖。
+function connStatusText() {
+  if (!state.isShared) return t('offlineMode');
+  return t('connected')+': '+state.guild+(state.cloudSrc === 'cos' ? ' (COS)' : '');
+}
 function updateConnectionStatus() {
   const el = document.getElementById('conn-status');
   const pullBtn = document.getElementById('btn-pull');
@@ -7543,7 +7547,7 @@ function updateConnectionStatus() {
   const pcBtn = document.getElementById('btn-pull-cos');
   const ucBtn = document.getElementById('btn-upload-cos');
   if (state.isShared) {
-    el.textContent = t('connected')+': '+state.guild+(state.cloudSrc === 'cos' ? ' (COS)' : '');
+    el.textContent = connStatusText();
     if (pullBtn) pullBtn.style.display = '';
     if (upBtn) upBtn.style.display = '';
     if (mgBtn) mgBtn.style.display = '';

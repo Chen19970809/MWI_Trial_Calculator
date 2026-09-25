@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         KUNPO试炼专用
 // @namespace    https://www.milkywayidle.com/
-// @version      1.0.5
+// @version      1.0.6
 // @description  上传等级、成就、房屋、迷宫配装、神龛到计算器
 // @author       MonsterFC
 // @license      MIT
@@ -14,6 +14,7 @@
 // @downloadURL  https://raw.githubusercontent.com/Chen19970809/MWI_Trial_Calculator/refs/heads/main/KUNPO%E8%AF%95%E7%82%BC%E4%B8%93%E7%94%A8.user.js
 // @updateURL    https://raw.githubusercontent.com/Chen19970809/MWI_Trial_Calculator/refs/heads/main/KUNPO%E8%AF%95%E7%82%BC%E4%B8%93%E7%94%A8.user.js
 // @connect      api.jsonbin.io
+// @connect      1315858741-5moib0woaa.ap-shanghai.tencentscf.com
 // @connect      mwi-guild.43.167.210.211.sslip.io
 // @connect      raw.githubusercontent.com
 // @connect      cdn.jsdelivr.net
@@ -23,11 +24,12 @@
 (function () {
     'use strict';
 
-    const SCRIPT_VERSION = '1.0.5';
+    const SCRIPT_VERSION = '1.0.6';
 
     // ── 更新日志：key = 版本号，value = 中文更新内容；发新版本时在顶部加一条即可 ──
     const CHANGELOG = {
-        '1.0.5': '1.上传新增默认 Access Key\n',
+        '1.0.6': '1.数据后台迁移到腾讯COS',
+        '1.0.5': '1.上传新增默认 Access Key',
         '1.0.4': '1.上传配装中新增光环数据\n'
             + '2. 会内组队光环推荐',
         '1.0.3': '1.新增日志\n'
@@ -132,10 +134,33 @@
     // 从 index.html 计算器共享空间（jsonbin）拉取并解密 plan，在游戏试炼卡片上
     // 高亮当前角色的战斗试炼，并注入技能面板（光环 + 技能1~4）。
     const BIN_BASE = 'https://api.jsonbin.io/v3/b';
+    // ── 腾讯云 COS 通道（经云函数中转，替代 jsonbin）────────────────────
+    // 云函数地址本身不是秘密：没有 X-Auth 口令连读都读不到。COS_AUTH_TOKEN 对应
+    // 云函数环境变量 MWI_AUTH。公会为 KUNPO（游戏内读到且设置一致）时直接用这两个
+    // 内置默认值，成员不需要任何额外配置；其它公会继续走原来的 jsonbin 通道。
+    const COS_API_BASE = 'https://1315858741-5moib0woaa.ap-shanghai.tencentscf.com';
+    const COS_AUTH_TOKEN = 'KUNPO20260925';
+    // 是否走 COS：① 游戏内读到的公会是 KUNPO 且未被门控拦截（与「内置默认地址」同口径）
+    //             ② 共享地址里的 guild 也是 KUNPO（避免别的公会误写进这个桶）
+    function useCosBackend(cfg) {
+        if (guildRestricted()) return false;
+        return String((cfg && cfg.guild) || '').trim().toUpperCase() === GUILD_DEFAULTS.name;
+    }
+    function cosGetUrl(cfg) {
+        return COS_API_BASE + '?guild=' + encodeURIComponent(cfg.guild || 'KUNPO')
+            + '&bin=' + encodeURIComponent(cfg.binId || '');
+    }
+    // 函数 URL 可能返回「集成响应」（原生 body）或「透传」（外层再包 statusCode/headers/body）
+    function unwrapScfResponse(j) {
+        if (j && typeof j === 'object' && typeof j.body === 'string' && typeof j.statusCode === 'number') {
+            try { return JSON.parse(j.body); } catch (_) { return j; }
+        }
+        return j;
+    }
     const COMBAT_ABILITY_ICON_BASE = 'https://mwi-guild.43.167.210.211.sslip.io/dist/icons/abilities';
     const TRIAL_CARD_SELECTOR = 'div[class*="trialTile"]';
-    const ASSIGNMENT_CACHE_MS = 5 * 60 * 1000;
-    const ASSIGNMENT_POLL_MS = 2 * 60 * 1000;
+    // 注：排刀不再按时间缓存（原 ASSIGNMENT_CACHE_MS / ASSIGNMENT_POLL_MS 已移除），
+    // 改为「本会话成功拉过一次就不再自动拉」，见 assignmentState.fetchedOnce。
     const BATTLE_TRIAL_SLUGS = Object.freeze(['hedgehog', 'swarm', 'chameleon', 'jellyfish', 'badger']);
     // 战斗试炼 slug → 中文名（与 index.html 的 BATTLE_TRIAL_ICONS 顺序一致）。
     const BATTLE_TRIAL_ZH = Object.freeze({
@@ -158,7 +183,9 @@
         vampirism: '吸血', retribution: '惩戒', spike_shell: '尖刺防护',
     });
     const assignmentState = {
-        doc: null, fetchedAt: 0, inFlight: false,
+        // fetchedOnce：本会话已经成功拉过一次排刀。此后不再自动拉取
+        // （进入试炼界面 / 轮询都不再触发），只有手动点「显示排刀」或改设置才强制拉。
+        doc: null, fetchedAt: 0, fetchedOnce: false, inFlight: false,
         timer: 0, pollTimer: null, observer: null, rendering: false,
         // 试炼页面是否已打开（页面里有试炼卡片）：用于「刚打开页面的那一次」才提示。
         cardsPresent: false,
@@ -243,6 +270,23 @@
         state.uiRoot.style.right = 'auto';
         state.uiRoot.style.bottom = 'auto';
         return p;
+    }
+
+    // 面板尺寸变化后重新钳制到视口内。
+    // 场景：展开/收起设置表单、公会警告条插入，都会让面板变高，
+    // 若不重新钳制，面板底部会伸出视口，最下面的内容看不见。
+    function clampPanelToViewport() {
+        if (!state.uiRoot) return;
+        if (state.uiRoot.dataset.collapsed === 'true') { placeIcon(readUiPosition()); return; }
+        if (!state.panelEl) return;
+        const rect = state.panelEl.getBoundingClientRect();
+        const p = clampUiPosition(
+            { x: parseFloat(state.uiRoot.style.left), y: parseFloat(state.uiRoot.style.top) },
+            rect.width,
+            rect.height,
+        );
+        state.uiRoot.style.left = `${p.x}px`;
+        state.uiRoot.style.top = `${p.y}px`;
     }
 
     function applyCollapsed(collapsed) {
@@ -573,21 +617,7 @@
         collapseBtn.addEventListener('click', () => applyCollapsed(true));
 
         // 视口尺寸变化时保持可见：收起态重新钳制图标；展开态重新钳制面板。
-        uiResizeHandler = () => {
-            if (!state.uiRoot) return;
-            if (state.uiRoot.dataset.collapsed === 'true') {
-                placeIcon(readUiPosition());
-            } else {
-                const rect = state.panelEl.getBoundingClientRect();
-                const p = clampUiPosition(
-                    { x: parseFloat(state.uiRoot.style.left), y: parseFloat(state.uiRoot.style.top) },
-                    rect.width,
-                    rect.height,
-                );
-                state.uiRoot.style.left = `${p.x}px`;
-                state.uiRoot.style.top = `${p.y}px`;
-            }
-        };
+        uiResizeHandler = () => { clampPanelToViewport(); };
         window.addEventListener('resize', uiResizeHandler);
 
         // 默认收起为 K 图标；记住用户上次的展开/收起选择。
@@ -1248,20 +1278,7 @@
         setStatus('正在读取云端数据…', 'idle');
         try {
             const key = await deriveKey(cfg.password, cfg.guild);
-            const resp = await httpGet(BIN_BASE + '/' + cfg.binId + '/latest');
-            if (resp.status !== 200 || !resp.responseText) {
-                if (resp.status === 0) {
-                    throw new Error('读取云端失败：网络层无响应（'
-                        + (resp.reason === 'timeout' ? '请求超时，网络过慢或 jsonbin 暂不可达'
-                            : resp.reason === 'fetch' ? 'fetch 被跨域拦截，请确认脚本经 Tampermonkey/Violentmonkey 安装且未被禁用'
-                            : '无法连接 api.jsonbin.io，请检查网络/代理/拦截扩展')
-                        + '，详情见控制台）');
-                }
-                throw new Error('读取云端失败 HTTP ' + resp.status);
-            }
-            const json = JSON.parse(resp.responseText);
-            if (!json.record || !json.record.d) throw new Error('云端无数据');
-            const remote = JSON.parse(await decryptRecord(json.record, key));
+            const remote = await cloudFetchRecord(cfg, key);
             const me = profileToMember(members[0]);
             if (!me) throw new Error('无法解析本人数据');
             const list = Array.isArray(remote.members) ? remote.members.slice() : [];
@@ -1277,26 +1294,9 @@
             if (idx >= 0) list[idx] = next; else list.push(next);
             const merged = Object.assign({}, remote, { members: list }); // guild / trials / plan 原样保留
             const rec = await encryptRecord(JSON.stringify(merged), key);
-            const headers = { 'Content-Type': 'application/json' };
-            // 上传凭证：优先用设置里填的 Master Key；
-            // KUNPO 成员（共享地址 guild 为默认公会）未填时回退内置混淆 Access Key（仅 Bins Update 权限）。
-            const mk = masterKey()
-                || (cfg.guild === GUILD_DEFAULTS.name ? decodeAccessKey() : '');
-            if (mk) headers['X-Master-Key'] = mk;
             setStatus('正在上传…', 'idle');
-            const put = await httpPut(BIN_BASE + '/' + cfg.binId, JSON.stringify(rec), headers);
-            if (put.status < 200 || put.status >= 300) {
-                if (put.status === 0) {
-                    throw new Error('上传失败：网络层无响应（'
-                        + (put.reason === 'timeout' ? '请求超时，网络过慢或 jsonbin 暂不可达'
-                            : put.reason === 'fetch' ? 'fetch 被跨域拦截，请确认脚本经 Tampermonkey/Violentmonkey 安装且未被禁用'
-                            : '无法连接 api.jsonbin.io，请检查网络/代理/拦截扩展')
-                        + '，详情见控制台）');
-                }
-                throw new Error('上传失败 HTTP ' + put.status
-                    + (put.responseText ? '：' + String(put.responseText).slice(0, 120) : '')
-                    + (mk ? '' : '（若提示无权限，请在「⚙ 设置」里填写 Master Key）'));
-            }
+            await cloudPutRecord(cfg, rec);
+            resetAuraServerCache();   // 云端已更新 → 光环那份缓存作废，下次进队伍页面重新拉
             setStatus('已上传：' + myName + '（' + (me.loadouts || []).length + ' 套配装）', 'good');
             showAssignmentToast('配装已上传到共享空间');
         } catch (e) {
@@ -1422,8 +1422,8 @@
             }
         });
     }
-    // 跨域 GET：优先 GM_xmlhttpRequest，回退 fetch。
-    function httpGet(url) {
+    // 跨域 GET：优先 GM_xmlhttpRequest，回退 fetch。headers 可选（COS 通道需要 X-Auth）。
+    function httpGet(url, headers) {
         return new Promise((resolve) => {
             const finish = (res) => resolve(httpLog('GET', url, res));
             const gm = typeof GM_xmlhttpRequest !== 'undefined' ? GM_xmlhttpRequest : (typeof GM !== 'undefined' && GM.xmlHttpRequest ? GM.xmlHttpRequest : null);
@@ -1431,13 +1431,37 @@
                 gm({
                     method: 'GET',
                     url,
+                    headers: headers || {},
                     timeout: 35000,
                     onload: (r) => finish({ status: r.status, responseText: r.responseText }),
                     onerror: (e) => finish({ status: 0, responseText: '', reason: 'network', detail: (e && e.error) || '' }),
                     ontimeout: () => finish({ status: 0, responseText: '', reason: 'timeout' }),
                 });
             } else {
-                fetch(url).then(r => r.text().then(t => finish({ status: r.status, responseText: t })))
+                fetch(url, { headers: headers || {} }).then(r => r.text().then(t => finish({ status: r.status, responseText: t })))
+                    .catch((e) => finish({ status: 0, responseText: '', reason: 'fetch', detail: (e && e.message) || '' }));
+            }
+        });
+    }
+    // 跨域 POST：优先 GM_xmlhttpRequest，回退 fetch（COS 通道用 POST 写对象）。
+    function httpPost(url, body, headers) {
+        return new Promise((resolve) => {
+            const finish = (res) => resolve(httpLog('POST', url, res));
+            const gm = typeof GM_xmlhttpRequest !== 'undefined' ? GM_xmlhttpRequest : (typeof GM !== 'undefined' && GM.xmlHttpRequest ? GM.xmlHttpRequest : null);
+            if (gm) {
+                gm({
+                    method: 'POST',
+                    url,
+                    headers: headers || {},
+                    data: body,
+                    timeout: 35000,
+                    onload: (r) => finish({ status: r.status, responseText: r.responseText }),
+                    onerror: (e) => finish({ status: 0, responseText: '', reason: 'network', detail: (e && e.error) || '' }),
+                    ontimeout: () => finish({ status: 0, responseText: '', reason: 'timeout' }),
+                });
+            } else {
+                fetch(url, { method: 'POST', headers: headers || {}, body })
+                    .then(r => r.text().then(t => finish({ status: r.status, responseText: t })))
                     .catch((e) => finish({ status: 0, responseText: '', reason: 'fetch', detail: (e && e.message) || '' }));
             }
         });
@@ -1452,26 +1476,115 @@
         if (!binId || !pwd) return null;
         return { guild, binId, password: pwd };
     }
+
+    // ── 统一的云端读写 ─────────────────────────────────────────────────
+    // 上层（上传配装 / 拉取排刀）只调 cloudFetchRecord / cloudPutRecord，
+    // 不关心当前走的是 COS 还是 jsonbin。
+    function cloudNetError(op, resp, cfg) {
+        const host = useCosBackend(cfg) ? COS_API_BASE : 'api.jsonbin.io';
+        return op + '失败：网络层无响应（'
+            + (resp.reason === 'timeout' ? '请求超时，' + host + ' 暂不可达'
+                : resp.reason === 'fetch' ? 'fetch 被跨域拦截，请确认脚本经 Tampermonkey/Violentmonkey 安装且未被禁用'
+                : '无法连接 ' + host + '，请检查网络/代理/拦截扩展')
+            + '，详情见控制台）';
+    }
+    // ── 云端记录缓存（排刀 / 光环 / 上传共用同一份）──────────────────────
+    // 「拉取排刀」拿到的其实是整份记录（含 members），缓存下来后光环那路直接复用，
+    // 不必再发一次请求。上传成功后立即作废，避免读到自己写入前的旧数据。
+    const cloudRecordCache = { data: null, fetchedAt: 0, sig: '', inFlight: null, inFlightSig: '' };
+    function cloudRecordSig(cfg) {
+        return String(cfg.guild || '') + '/' + String(cfg.binId || '');
+    }
+    function invalidateCloudRecordCache() {
+        cloudRecordCache.data = null;
+        cloudRecordCache.fetchedAt = 0;
+        cloudRecordCache.sig = '';
+    }
+    // 读取云端 → 解密 → 返回 JSON.parse 后的对象。
+    // opts.cacheTtl > 0：优先复用缓存（毫秒内）；不传则每次真拉（上传前的读取必须拿最新）。
+    async function cloudFetchRecord(cfg, key, opts) {
+        const ttl = (opts && opts.cacheTtl) || 0;
+        const sig = cloudRecordSig(cfg);
+        if (ttl > 0 && cloudRecordCache.data && cloudRecordCache.sig === sig
+            && Date.now() - cloudRecordCache.fetchedAt < ttl) {
+            return cloudRecordCache.data;
+        }
+        // 同一地址并发时复用同一个请求：启动瞬间排刀与光环同时要数据时只发一次
+        if (cloudRecordCache.inFlight && cloudRecordCache.inFlightSig === sig) {
+            return cloudRecordCache.inFlight;
+        }
+        const p = (async function () {
+            const data = await cloudFetchRecordRaw(cfg, key);
+            cloudRecordCache.data = data;
+            cloudRecordCache.fetchedAt = Date.now();
+            cloudRecordCache.sig = sig;
+            return data;
+        })().finally(function () { cloudRecordCache.inFlight = null; });
+        cloudRecordCache.inFlight = p;
+        cloudRecordCache.inFlightSig = sig;
+        return p;
+    }
+    // 真正的网络读取（不带缓存）
+    async function cloudFetchRecordRaw(cfg, key) {
+        if (useCosBackend(cfg)) {
+            const resp = await httpGet(cosGetUrl(cfg), { 'X-Auth': COS_AUTH_TOKEN });
+            if (resp.status === 404) throw new Error('云端无数据（对象不存在）');
+            if (resp.status !== 200 || !resp.responseText) {
+                if (resp.status === 0) throw new Error(cloudNetError('读取云端', resp, cfg));
+                throw new Error('读取云端失败 HTTP ' + resp.status
+                    + (resp.responseText ? '：' + String(resp.responseText).slice(0, 120) : ''));
+            }
+            let j;
+            try { j = JSON.parse(resp.responseText); } catch (_) { throw new Error('解析失败'); }
+            j = unwrapScfResponse(j);
+            if (!j || !j.record || !j.record.d) throw new Error('云端无数据');
+            return JSON.parse(await decryptRecord(j.record, key));
+        }
+        const resp = await httpGet(BIN_BASE + '/' + cfg.binId + '/latest');
+        if (resp.status !== 200 || !resp.responseText) {
+            if (resp.status === 0) throw new Error(cloudNetError('读取云端', resp, cfg));
+            throw new Error('读取云端失败 HTTP ' + resp.status);
+        }
+        const json = JSON.parse(resp.responseText);
+        if (!json.record || !json.record.d) throw new Error('云端无数据');
+        return JSON.parse(await decryptRecord(json.record, key));
+    }
+    // 写入云端（rec = { d } 密文）
+    async function cloudPutRecord(cfg, rec) {
+        await cloudPutRecordRaw(cfg, rec);
+        invalidateCloudRecordCache();   // 已写入新版本，旧缓存作废
+    }
+    // 真正的网络写入（不带缓存处理）
+    async function cloudPutRecordRaw(cfg, rec) {
+        if (useCosBackend(cfg)) {
+            const body = JSON.stringify({ action: 'put', guild: cfg.guild, bin: cfg.binId, d: rec.d });
+            const put = await httpPost(COS_API_BASE, body, { 'Content-Type': 'application/json', 'X-Auth': COS_AUTH_TOKEN });
+            if (put.status < 200 || put.status >= 300) {
+                if (put.status === 0) throw new Error(cloudNetError('上传', put, cfg));
+                throw new Error('上传失败 HTTP ' + put.status
+                    + (put.responseText ? '：' + String(put.responseText).slice(0, 120) : ''));
+            }
+            return;
+        }
+        const headers = { 'Content-Type': 'application/json' };
+        // 上传凭证：优先用设置里填的 Master Key；
+        // KUNPO 成员（共享地址 guild 为默认公会）未填时回退内置混淆 Access Key（仅 Bins Update 权限）。
+        const mk = masterKey()
+            || (cfg.guild === GUILD_DEFAULTS.name ? decodeAccessKey() : '');
+        if (mk) headers['X-Master-Key'] = mk;
+        const put = await httpPut(BIN_BASE + '/' + cfg.binId, JSON.stringify(rec), headers);
+        if (put.status < 200 || put.status >= 300) {
+            if (put.status === 0) throw new Error(cloudNetError('上传', put, cfg));
+            throw new Error('上传失败 HTTP ' + put.status
+                + (put.responseText ? '：' + String(put.responseText).slice(0, 120) : '')
+                + (mk ? '' : '（若提示无权限，请在「⚙ 设置」里填写 Master Key）'));
+        }
+    }
     async function fetchPlan() {
         const cfg = assignmentConfig();
         if (!cfg) throw new Error('计算器地址缺少 bin/pwd');
         const key = await deriveKey(cfg.password, cfg.guild);
-        const resp = await httpGet(`${BIN_BASE}/${cfg.binId}/latest`);
-        if (resp.status !== 200 || !resp.responseText) {
-            if (resp.status === 0) {
-                throw new Error('网络层无响应（'
-                    + (resp.reason === 'timeout' ? '请求超时'
-                        : resp.reason === 'fetch' ? 'fetch 被跨域拦截'
-                        : '无法连接 api.jsonbin.io')
-                    + '，请检查网络/代理，详情见控制台）');
-            }
-            throw new Error(`HTTP ${resp.status}`);
-        }
-        let json;
-        try { json = JSON.parse(resp.responseText); } catch { throw new Error('解析失败'); }
-        if (!json || !json.record || !json.record.d) throw new Error('云端无数据');
-        const dec = await decryptRecord(json.record, key);
-        const data = JSON.parse(dec);
+        const data = await cloudFetchRecord(cfg, key);
         if (!data || !data.plan) throw new Error('云端无排刀');
         return data.plan;
     }
@@ -1681,11 +1794,9 @@
             assignmentState.rendering = false;
         }
     }
-    function assignmentFresh() {
-        if (!assignmentState.fetchedAt) return false;
-        const ttl = assignmentState.doc ? ASSIGNMENT_CACHE_MS : ASSIGNMENT_POLL_MS;
-        return Date.now() - assignmentState.fetchedAt < ttl;
-    }
+    // 本会话是否已经成功拉过一次排刀。拉过就不再自动拉（不再有 5 分钟 / 2 分钟 TTL 轮询），
+    // 只有手动点「显示排刀」或改设置（force: true）才会再发请求。
+    function assignmentFresh() { return !!assignmentState.fetchedOnce; }
     async function refreshAssignment({ force = false } = {}) {
         if (trialEndState.silenced) return;
         if (guildBlocked()) { announceAssignment('当前公会不是 KUNPO，排刀高亮已停用', force); return; }
@@ -1700,6 +1811,8 @@
         assignmentState.lastCharacterName = name;
         try {
             const plan = await fetchPlan();
+            // 拉取成功即记「已拉过一次」；失败不记，下次进入试炼界面还能重试。
+            assignmentState.fetchedOnce = true;
             // 过期判断（与 index.html 一致）
             const dl = plan && plan.t ? Date.parse(plan.t) : NaN;
             if (!Number.isFinite(dl) || Date.now() > dl) {
@@ -1746,13 +1859,10 @@
     }
     function initAssignment() {
         installAssignmentObserver();
-        // 角色名变化或定时轮询。
-        assignmentState.pollTimer = setInterval(function () {
-            const name = String((state.character && state.character.name) || '').trim();
-            if (name && name !== assignmentState.lastCharacterName) { scheduleAssignmentRefresh(0); return; }
-            if (name && !assignmentFresh()) scheduleAssignmentRefresh(0);
-        }, 5000);
-        // 启动后稍候尝试一次。
+        // 只在两个时机拉取排刀，不做周期轮询：
+        //   ① 脚本启动后 3 秒拉一次；
+        //   ② 打开/进入试炼界面时（MutationObserver → onEnterTrialPage）。
+        // 两者共用 fetchedOnce 标记：本会话谁先触发谁拉，之后都不再自动拉。
         scheduleAssignmentRefresh(3000);
     }
     // 轻量 toast：不依赖面板，3 秒自动消失。
@@ -1873,6 +1983,7 @@
             panel.insertBefore(box, panel.firstChild);
         }
         box.textContent = text;
+        clampPanelToViewport();     // 警告条插入会让面板变高，重新钳制避免底部被截断
     }
     function clearGuildWarning() {
         const box = document.getElementById('kunpo-guild-warning');
@@ -2205,7 +2316,11 @@
         const form = state.settingsForm;
         if (!form) return;
         const willOpen = form.style.display === 'none';
-        if (!willOpen) { form.style.display = 'none'; return; }
+        if (!willOpen) {
+            form.style.display = 'none';
+            clampPanelToViewport();     // 收起后面板变矮，重新钳制
+            return;
+        }
         const ins = state.settingsInputs || {};
         const rows = state.settingsRows || {};
         // 打开设置前先刷新一次公会门控：确保「公会名不一致」判定用的是最新游戏内数据
@@ -2261,6 +2376,13 @@
         // 「取消静默 / 打开静默」按钮按当前状态切换显隐与文案
         updateResumeButton();
         form.style.display = '';
+        // 展开后面板会变高（尤其第一次打开、所有配置行都显示时）：
+        // 下一帧再量一次真实高度并把面板拉回视口内，同时把表单滚到可见区域。
+        clampPanelToViewport();
+        requestAnimationFrame(function () {
+            clampPanelToViewport();
+            try { form.scrollIntoView({ block: 'nearest' }); } catch (_) { /* 老浏览器忽略 */ }
+        });
     }
     function saveGuildSettings(name, idRaw, url, mkRaw, docRaw, hideRaw, countRaw, cnRaw, auraRaw) {
         try {
@@ -2923,36 +3045,37 @@
     // ── 计算器共享空间（jsonbin）上传状态：就绪/未上传以此为准 ──
     // 解密后的记录形如 { members: [{ name, auras: {revive:…, physical:…,…} }], plan, … }
     const auraServer = { byName: null, fetchedAt: 0, inFlight: false };
-    const AURA_SERVER_TTL = 2 * 60 * 1000;
-    // 拉取共享空间 members 并按 name 建索引；失败/未配置时静默，2 分钟后才会重试
+    // 拉取共享空间 members 并按 name 建索引。本会话只拉一次（优先复用「拉取排刀」那次
+    // 已经拿到的整份记录），不再按时间反复刷新；上传成功后 resetAuraServerCache() 会让它重拉一次。
     async function refreshAuraServerData() {
         if (auraServer.inFlight) return;
-        if (auraServer.byName && Date.now() - auraServer.fetchedAt < AURA_SERVER_TTL) return;
+        if (auraServer.byName) return;              // 已拉过 → 不再周期性刷新
         const cfg = assignmentConfig();
-        if (!cfg) { auraServer.fetchedAt = Date.now(); return; }
+        if (!cfg) return;
         auraServer.inFlight = true;
         try {
             const key = await deriveKey(cfg.password, cfg.guild);
-            const resp = await httpGet(BIN_BASE + '/' + cfg.binId + '/latest');
-            if (resp.status === 200 && resp.responseText) {
-                const json = JSON.parse(resp.responseText);
-                if (json && json.record && json.record.d) {
-                    const data = JSON.parse(await decryptRecord(json.record, key));
-                    const list = data && Array.isArray(data.members) ? data.members : [];
-                    const byName = {};
-                    list.forEach(function (m) {
-                        if (m && m.name) byName[String(m.name).trim()] = m;
-                    });
-                    auraServer.byName = byName;
-                    auraServer.fetchedAt = Date.now();
-                }
-            }
+            // cacheTtl: Infinity → 只要共享缓存里有就直接复用，不发请求
+            const data = await cloudFetchRecord(cfg, key, { cacheTtl: Infinity });
+            const list = data && Array.isArray(data.members) ? data.members : [];
+            const byName = {};
+            list.forEach(function (m) {
+                if (m && m.name) byName[String(m.name).trim()] = m;
+            });
+            auraServer.byName = byName;
+            auraServer.fetchedAt = Date.now();
         } catch (_) {
-            auraServer.fetchedAt = Date.now();   // 失败也记时间，避免每次 DOM 变化都重试
+            // 失败不设 byName，下次进入队伍页面会自动重试一次
         } finally {
             auraServer.inFlight = false;
             setTimeout(function () { syncAuraRecoInfo(); }, 0);
         }
+    }
+    // 上传成功后调用：让光环数据下次重新拉一次，避免显示上传前的旧值。
+    // 函数声明会提升，uploadLoadoutsToServer 里可以直接调。
+    function resetAuraServerCache() {
+        auraServer.byName = null;
+        auraServer.fetchedAt = 0;
     }
     // 服务器上该 name 的光环等级（找不到或全 0 → null，视为未上传）
     function serverAuraLevels(name) {
