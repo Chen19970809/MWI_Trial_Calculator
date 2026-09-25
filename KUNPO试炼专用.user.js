@@ -2218,14 +2218,38 @@
     // （CHANGELOG 已集中到文件顶部「用户可配置区」）
     // 弹出更新日志（按版本号从新到旧排列，当前版本有标注）
     // 更新日志弹窗。fromVersion 传入时只显示「比它新的版本」的条目（用于版本升级提示）。
+    // 弹窗贴着 K 图标自适应摆放：默认以图标为中心、顶边对齐；
+    // 面板展开中（占着同一位置）则改放面板左侧，左边放不下换右边；最后钳制进视口。
+    function anchorChangelogBox(box) {
+        const margin = 8;
+        let ax = window.innerWidth - 60, ay = window.innerHeight - 60;   // 无 UI 时退到右下角
+        if (state.uiRoot) {
+            const x = parseFloat(state.uiRoot.style.left), y = parseFloat(state.uiRoot.style.top);
+            if (Number.isFinite(x)) ax = x;
+            if (Number.isFinite(y)) ay = y;
+        }
+        const iconW = (state.iconButton && state.iconButton.offsetWidth) || 46;
+        const rect = box.getBoundingClientRect();
+        let left = ax + iconW / 2 - rect.width / 2;
+        let top = ay;
+        const panelOpen = state.uiRoot && state.uiRoot.dataset && state.uiRoot.dataset.collapsed !== 'true'
+            && state.panelEl && state.panelEl.style.display !== 'none';
+        if (panelOpen && state.panelEl) {
+            const pr = state.panelEl.getBoundingClientRect();
+            left = pr.left - rect.width - margin;
+            if (left < margin) left = pr.right + margin;
+        }
+        const p = clampUiPosition({ x: left, y: top }, rect.width, rect.height);
+        box.style.left = `${p.x}px`;
+        box.style.top = `${p.y}px`;
+        box.style.right = 'auto';
+        box.style.bottom = 'auto';
+    }
     function showChangelog(fromVersion) {
-        document.getElementById('kunpo-changelog-overlay')?.remove();
-        const overlay = document.createElement('div');
-        overlay.id = 'kunpo-changelog-overlay';
-        overlay.style.cssText = 'position:fixed;inset:0;z-index:2147483647;background:rgba(0,0,0,.55);'
-            + 'display:flex;align-items:center;justify-content:center';
+        document.getElementById('kunpo-changelog-box')?.remove();
         const box = document.createElement('div');
-        box.style.cssText = 'position:relative;width:min(420px,calc(100vw - 32px));max-height:70vh;overflow-y:auto;padding:14px;'
+        box.id = 'kunpo-changelog-box';
+        box.style.cssText = 'position:fixed;z-index:2147483647;width:min(420px,calc(100vw - 32px));max-height:70vh;overflow-y:auto;padding:14px;'
             + 'border-radius:12px;border:1px solid #6f9bd8;background:linear-gradient(145deg,#152447,#1d3566);color:#eef3ff;'
             + 'font:12.5px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif;box-shadow:0 10px 28px rgba(3,10,26,.55)';
         const title = document.createElement('strong');
@@ -2236,7 +2260,7 @@
         close.type = 'button'; close.textContent = '×'; close.title = '关闭';
         close.style.cssText = 'position:absolute;top:7px;right:7px;min-width:24px;height:24px;border:0;border-radius:7px;'
             + 'background:#344879;color:#fff;cursor:pointer;font:700 16px/1 system-ui,sans-serif';
-        close.addEventListener('click', () => overlay.remove());
+        close.addEventListener('click', () => box.remove());
         box.appendChild(close);
         let shown = 0;
         Object.keys(CHANGELOG).sort(compareVersions).reverse().forEach(function (v) {
@@ -2255,9 +2279,8 @@
             box.appendChild(item);
         });
         if (!shown) return;   // 没有要显示的条目就不弹
-        overlay.appendChild(box);
-        overlay.addEventListener('click', function (e) { if (e.target === overlay) overlay.remove(); });
-        document.body.appendChild(overlay);
+        document.body.appendChild(box);
+        anchorChangelogBox(box);
     }
 
     // ── 版本升级提示 ───────────────────────────────────────────────────
@@ -2543,12 +2566,16 @@
         };
         fill(ins.name, !kunpoMember && nameCustom, guildConfig.name || '');
         fill(ins.id, !kunpoMember && idCustom, guildConfig.id ? String(guildConfig.id) : '');
-        fill(ins.url, urlCustom, savedCalcUrl());
+        // JSON 获取地址：存的值若与内置默认相同，视为「未自定义」，输入框留空（占位符已说明留空=用默认）
+        const urlStored = savedCalcUrl();
+        fill(ins.url, urlCustom && urlStored !== decodeCalcDefaultUrl(), urlStored);
         fill(ins.mk, mkCustom, masterKey());
         fill(ins.doc, docCustom, savedDocUrl());
-        // COS 凭证：显示当前生效值（本地存的或内置的都算），让用户知道「现在用的到底是什么」
-        if (ins.cosApi) ins.cosApi.value = getCosApiBase();
-        if (ins.cosToken) ins.cosToken.value = getCosToken();
+        // COS 凭证：只有「本地存的值与内置默认不同」才回填；用默认值时留空，避免把内置值亮在输入框里
+        const cosApiStored = String(readCfg(K_COS_API) || '').trim();
+        const cosTokenStored = String(readCfg(K_COS_TOKEN) || '').trim();
+        if (ins.cosApi) ins.cosApi.value = (cosApiStored && cosApiStored !== decodeCosApiBase()) ? cosApiStored : '';
+        if (ins.cosToken) ins.cosToken.value = (cosTokenStored && cosTokenStored !== decodeCosToken()) ? cosTokenStored : '';
         if (ins.hide) ins.hide.checked = needAll ? false : hideIconOnSilence();
         if (ins.count) ins.count.checked = needAll ? false : clickCountEnabled();
         if (ins.cn) ins.cn.checked = needAll ? false : cnDirectEnabled();
