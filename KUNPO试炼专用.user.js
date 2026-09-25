@@ -1551,7 +1551,24 @@
     }
     // 写入云端（rec = { d } 密文）
     async function cloudPutRecord(cfg, rec) {
-        await cloudPutRecordRaw(cfg, rec);
+        const cos = useCosBackend(cfg);
+        // 出错时先让控制台说清楚走的哪条通道、公会判定如何，便于一眼定位 403
+        console.log('[KUNPO] 上传通道=' + (cos ? 'COS' : 'jsonbin')
+            + ' guild=' + cfg.guild + ' bin=' + cfg.binId
+            + ' guildRestricted=' + guildRestricted());
+        try {
+            await cloudPutRecordRaw(cfg, rec);
+        } catch (e) {
+            if (cos) {
+                throw new Error('上传失败（COS 通道）：' + (e && e.message ? e.message : e)
+                    + '\n\n若提示 HTTP 403：云函数拒绝了请求，通常是环境变量 MWI_AUTH 与脚本内置口令不一致，'
+                    + '或函数 URL 的「授权类型」不是「开放」。');
+            }
+            throw new Error('上传失败（jsonbin 旧通道）：' + (e && e.message ? e.message : e)
+                + '\n\n说明公会判定未通过（guildRestricted=' + guildRestricted()
+                + '）才回退到 jsonbin，而 jsonbin 的 Access Key 无权限/额度已用尽。'
+                + '请点「⚙ 设置」确认公会名与游戏内一致。');
+        }
         invalidateCloudRecordCache();   // 已写入新版本，旧缓存作废
     }
     // 真正的网络写入（不带缓存处理）
