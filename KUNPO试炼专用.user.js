@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         KUNPO试炼专用
 // @namespace    https://www.milkywayidle.com/
-// @version      1.0.6
+// @version      1.0.7
 // @description  上传等级、成就、房屋、迷宫配装、神龛到计算器
 // @author       MonsterFC
 // @license      MIT
@@ -24,10 +24,13 @@
 (function () {
     'use strict';
 
-    const SCRIPT_VERSION = '1.0.6';
+    const SCRIPT_VERSION = '1.0.7';
 
     // ── 更新日志：key = 版本号，value = 中文更新内容；发新版本时在顶部加一条即可 ──
     const CHANGELOG = {
+        '1.0.7': '1.减少数据拉取次数\n'
+            + '2. 隐藏手动显示排刀按钮（改自动了）\n'
+            + '3. 本地存储云函数地址和口令，下次更新后隐藏，需要手动填',
         '1.0.6': '1.数据后台迁移到腾讯COS',
         '1.0.5': '1.上传新增默认 Access Key',
         '1.0.4': '1.上传配装中新增光环数据\n'
@@ -71,6 +74,9 @@
     const K_DOC_URL = 'kunpo_doc_url';           // 组队文档地址（《打开组队文档》跳转；留空=用内置默认地址）
     const K_CN_DIRECT = 'kunpo_cn_direct';       // 国内直连（勾选后《打开计算器》改跳 EdgeOne 国内镜像地址）
     const K_AURA_RECO = 'kunpo_aura_reco';       // 光环推荐（勾选后在队伍页面显示《光环优先级》按钮）
+    const K_MANUAL_PLAN = 'kunpo_manual_plan';   // 手动显示排刀（'1' 才在面板上显示《显示排刀》按钮，默认不显示）
+    const K_COS_API = 'kunpo_cos_api';           // 云函数地址（COS 通道；留空则用内置默认值）
+    const K_COS_TOKEN = 'kunpo_cos_token';       // 云函数访问口令 X-Auth（留空则用内置默认值）
     const K_AURA_PRIORITY = 'kunpo_aura_priority'; // 光环优先级（5 个槽位，元素为 AURA_MAP 键或 '' 表示不参与）
     const K_AURA_MANUAL = 'kunpo_aura_manual';     // 光环手动录入（{成员名: {AURA_MAP键: 等级}}，服务器未上传时兜底）
 
@@ -138,8 +144,31 @@
     // 云函数地址本身不是秘密：没有 X-Auth 口令连读都读不到。COS_AUTH_TOKEN 对应
     // 云函数环境变量 MWI_AUTH。公会为 KUNPO（游戏内读到且设置一致）时直接用这两个
     // 内置默认值，成员不需要任何额外配置；其它公会继续走原来的 jsonbin 通道。
-    const COS_API_BASE = 'https://1315858741-5moib0woaa.ap-shanghai.tencentscf.com';
-    const COS_AUTH_TOKEN = 'KUNPO20260925';
+    // 内置默认凭证（混淆存放，防君子不防小人）。
+    // 优先级：本地存储 > 内置常量 > 空（空则需在「⚙ 设置」里手动填）。
+    // ── 以后想让凭证彻底从代码里退役 ──
+    //    等所有成员的本地都有了值之后，把下面两个数组改成空数组 [] 即可：
+    //    decodeXorUrl([]) 返回 ''，于是只剩「读本地」，新装的用户需要到设置里手填。
+    const COS_API_BASE_ENC = Object.freeze([50,46,46,42,41,96,117,117,107,105,107,111,98,111,98,109,110,107,119,111,55,53,51,56,106,45,53,59,59,116,59,42,119,41,50,59,52,61,50,59,51,116,46,63,52,57,63,52,46,41,57,60,116,57,53,55]);
+    const COS_AUTH_TOKEN_ENC = Object.freeze([17,15,20,10,21,104,106,104,108,106,99,104,111]);
+    function decodeCosApiBase() { return decodeXorUrl(COS_API_BASE_ENC); }
+    function decodeCosToken() { return decodeXorUrl(COS_AUTH_TOKEN_ENC); }
+    // 读取：本地存储优先，其次内置常量
+    function getCosApiBase() {
+        try { const v = String(readCfg(K_COS_API) || '').trim(); if (v) return v; } catch (_) {}
+        return decodeCosApiBase();
+    }
+    function getCosToken() {
+        try { const v = String(readCfg(K_COS_TOKEN) || '').trim(); if (v) return v; } catch (_) {}
+        return decodeCosToken();
+    }
+    // 打开游戏后把内置值落盘：为「以后删掉内置常量」铺路
+    function seedCosCredentials() {
+        try {
+            if (!readCfg(K_COS_API)) { const a = decodeCosApiBase(); if (a) writeCfg(K_COS_API, a); }
+            if (!readCfg(K_COS_TOKEN)) { const t = decodeCosToken(); if (t) writeCfg(K_COS_TOKEN, t); }
+        } catch (_) { /* ignore */ }
+    }
     // 是否走 COS：① 游戏内读到的公会是 KUNPO 且未被门控拦截（与「内置默认地址」同口径）
     //             ② 共享地址里的 guild 也是 KUNPO（避免别的公会误写进这个桶）
     function useCosBackend(cfg) {
@@ -147,7 +176,7 @@
         return String((cfg && cfg.guild) || '').trim().toUpperCase() === GUILD_DEFAULTS.name;
     }
     function cosGetUrl(cfg) {
-        return COS_API_BASE + '?guild=' + encodeURIComponent(cfg.guild || 'KUNPO')
+        return getCosApiBase() + '?guild=' + encodeURIComponent(cfg.guild || 'KUNPO')
             + '&bin=' + encodeURIComponent(cfg.binId || '');
     }
     // 函数 URL 可能返回「集成响应」（原生 body）或「透传」（外层再包 statusCode/headers/body）
@@ -559,6 +588,7 @@
         state.calcBtn = calcBtn;
         state.docBtn = docBtn;
         state.actionButtons = [sendBtn, jsonBtn, assignBtn];
+        state.assignBtn = assignBtn;   // 《显示排刀》：是否显示由设置里的「手动显示排刀」开关决定
         state.settingsBtn = setBtn;
         state.settingsForm = settingsForm;
         applyGuildActionVisibility();
@@ -622,6 +652,8 @@
 
         // 默认收起为 K 图标；记住用户上次的展开/收起选择。
         applyCollapsed(localStorage.getItem(UI_COLLAPSED_KEY) !== '0');
+        applyGuildActionVisibility();   // 建完面板立刻按开关决定各按钮显隐（含《显示排刀》）
+        seedCosCredentials();           // 把内置云函数地址/口令落盘，为「以后从代码里移除常量」做准备
         setStatus('等待人物数据');
     }
 
@@ -1481,7 +1513,7 @@
     // 上层（上传配装 / 拉取排刀）只调 cloudFetchRecord / cloudPutRecord，
     // 不关心当前走的是 COS 还是 jsonbin。
     function cloudNetError(op, resp, cfg) {
-        const host = useCosBackend(cfg) ? COS_API_BASE : 'api.jsonbin.io';
+        const host = useCosBackend(cfg) ? getCosApiBase() : 'api.jsonbin.io';
         return op + '失败：网络层无响应（'
             + (resp.reason === 'timeout' ? '请求超时，' + host + ' 暂不可达'
                 : resp.reason === 'fetch' ? 'fetch 被跨域拦截，请确认脚本经 Tampermonkey/Violentmonkey 安装且未被禁用'
@@ -1527,7 +1559,8 @@
     // 真正的网络读取（不带缓存）
     async function cloudFetchRecordRaw(cfg, key) {
         if (useCosBackend(cfg)) {
-            const resp = await httpGet(cosGetUrl(cfg), { 'X-Auth': COS_AUTH_TOKEN });
+            if (!getCosApiBase()) throw new Error('未配置云函数地址：请点「⚙ 设置」填写「云函数地址」');
+            const resp = await httpGet(cosGetUrl(cfg), { 'X-Auth': getCosToken() });
             if (resp.status === 404) throw new Error('云端无数据（对象不存在）');
             if (resp.status !== 200 || !resp.responseText) {
                 if (resp.status === 0) throw new Error(cloudNetError('读取云端', resp, cfg));
@@ -1574,8 +1607,9 @@
     // 真正的网络写入（不带缓存处理）
     async function cloudPutRecordRaw(cfg, rec) {
         if (useCosBackend(cfg)) {
+            if (!getCosApiBase()) throw new Error('未配置云函数地址：请点「⚙ 设置」填写「云函数地址」');
             const body = JSON.stringify({ action: 'put', guild: cfg.guild, bin: cfg.binId, d: rec.d });
-            const put = await httpPost(COS_API_BASE, body, { 'Content-Type': 'application/json', 'X-Auth': COS_AUTH_TOKEN });
+            const put = await httpPost(getCosApiBase(), body, { 'Content-Type': 'application/json', 'X-Auth': getCosToken() });
             if (put.status < 200 || put.status >= 300) {
                 if (put.status === 0) throw new Error(cloudNetError('上传', put, cfg));
                 throw new Error('上传失败 HTTP ' + put.status
@@ -1597,11 +1631,13 @@
                 + (mk ? '' : '（若提示无权限，请在「⚙ 设置」里填写 Master Key）'));
         }
     }
-    async function fetchPlan() {
+    // noCache = true 时强制重新拉取（手动点「显示排刀」/ 改设置）；
+    // 否则优先复用共享缓存——进入组队页面时光环那路已经拉过整份记录，这里就不必再请求一次。
+    async function fetchPlan(noCache) {
         const cfg = assignmentConfig();
         if (!cfg) throw new Error('计算器地址缺少 bin/pwd');
         const key = await deriveKey(cfg.password, cfg.guild);
-        const data = await cloudFetchRecord(cfg, key);
+        const data = await cloudFetchRecord(cfg, key, noCache ? null : { cacheTtl: Infinity });
         if (!data || !data.plan) throw new Error('云端无排刀');
         return data.plan;
     }
@@ -1827,7 +1863,9 @@
         assignmentState.inFlight = true;
         assignmentState.lastCharacterName = name;
         try {
-            const plan = await fetchPlan();
+            // force（手动点「显示排刀」/ 改设置）才绕过缓存重新拉；
+            // 平时若光环那路已经拉过整份记录，这里直接读缓存，不再发请求。
+            const plan = await fetchPlan(force);
             // 拉取成功即记「已拉过一次」；失败不记，下次进入试炼界面还能重试。
             assignmentState.fetchedOnce = true;
             // 过期判断（与 index.html 一致）
@@ -1843,10 +1881,15 @@
             assignmentState.fetchedAt = Date.now();
             renderAssignmentUi({ announce: force });
         } catch (e) {
+            const msg = (e && e.message) ? e.message : String(e);
+            // 「云端无排刀」= 数据确实拉到了，只是会长还没发布 → 记为已拉取，
+            // 命中缓存时不会重复发请求，也不必每次进试炼界面都重复提示。
+            const noPlan = /无排刀/.test(msg);
+            if (noPlan) assignmentState.fetchedOnce = true;
             assignmentState.doc = null;
             assignmentState.fetchedAt = Date.now();
             clearAssignmentUi();
-            announceAssignment('读取排刀失败：' + (e && e.message ? e.message : e), force);
+            announceAssignment(noPlan ? '排刀未发布' : ('读取排刀失败：' + msg), force);
         } finally {
             assignmentState.inFlight = false;
         }
@@ -1876,11 +1919,11 @@
     }
     function initAssignment() {
         installAssignmentObserver();
-        // 只在两个时机拉取排刀，不做周期轮询：
-        //   ① 脚本启动后 3 秒拉一次；
-        //   ② 打开/进入试炼界面时（MutationObserver → onEnterTrialPage）。
-        // 两者共用 fetchedOnce 标记：本会话谁先触发谁拉，之后都不再自动拉。
-        scheduleAssignmentRefresh(3000);
+        // 启动/刷新网页不再拉取，只有用户真正到对应界面才拉：
+        //   ① 首次进入试炼界面（MutationObserver → onEnterTrialPage → refreshAssignment）
+        //   ② 「光环推荐」开启时进入组队页面（syncAuraRecoInfo → refreshAuraServerData）
+        // 两条路都在真正需要时才发请求，且共用 cloudRecordCache：
+        // 谁先拉到，另一个就只读缓存，本会话最多一次网络请求（手动点「显示排刀」除外）。
     }
     // 轻量 toast：不依赖面板，3 秒自动消失。
     let assignmentToastTimer = null;
@@ -2088,6 +2131,7 @@
     function applyGuildActionVisibility() {
         const blocked = guildBlocked() || guildNameMismatch();
         (state.actionButtons || []).forEach(function (b) { if (b) b.style.display = blocked ? 'none' : ''; });
+        syncManualPlanButton();   // 《显示排刀》额外受「手动显示排刀」开关控制
         if (state.calcBtn) state.calcBtn.style.display = blocked ? 'none' : '';
         if (state.docBtn) state.docBtn.style.display = blocked ? 'none' : '';
         const showStaff = isOwnerOrGeneral();
@@ -2169,6 +2213,16 @@
             'https://…/?guild=公会名&bin=…&pwd=…');
         const mkInput = mk('Master Key（仅上传时提示无权限才填）', '');
         const docInput = mk('组队文档地址（《打开组队文档》按钮跳转）', 'https://…');
+        // COS 通道凭证：本地存过就填上；没存过且内置常量也已移除时需要手填
+        const cosApiInput = mk('云函数地址（COS 通道；留空=用内置默认值）', 'https://…tencentscf.com');
+        const cosTokenInput = mk('访问口令 X-Auth（COS 通道；留空=用内置默认值）', '');
+        // 填写即生效并立即持久化（不依赖「保存」按钮）
+        cosApiInput.addEventListener('change', function () {
+            writeCfg(K_COS_API, String(cosApiInput.value || '').trim());
+        });
+        cosTokenInput.addEventListener('change', function () {
+            writeCfg(K_COS_TOKEN, String(cosTokenInput.value || '').trim());
+        });
         // 各输入行（label）引用：简洁界面按「是否自定义过」动态显隐
         state.settingsRows = {
             name: nameInput.parentNode,
@@ -2223,6 +2277,20 @@
         auraRow.appendChild(auraInput);
         auraRow.appendChild(document.createTextNode('启用光环推荐（在队伍页面显示《推荐光环》按钮）'));
         form.appendChild(auraRow);
+        // 手动显示排刀（默认不勾选）：勾选后 K 面板上才出现《显示排刀》按钮
+        const manualPlanRow = document.createElement('label');
+        manualPlanRow.style.cssText = 'display:flex;align-items:center;gap:6px;margin:0 0 6px 0;color:#c3d2f2;font:600 11px/1.4 system-ui,sans-serif;cursor:pointer';
+        const manualPlanInput = document.createElement('input');
+        manualPlanInput.type = 'checkbox';
+        manualPlanInput.checked = manualPlanEnabled();
+        manualPlanInput.addEventListener('change', function () {
+            writeManualPlanFlag(manualPlanInput.checked);
+            syncManualPlanButton();
+            showAssignmentToast(manualPlanInput.checked ? '已显示《显示排刀》按钮' : '已隐藏《显示排刀》按钮', 3000);
+        });
+        manualPlanRow.appendChild(manualPlanInput);
+        manualPlanRow.appendChild(document.createTextNode('手动显示排刀（勾选后在面板显示《显示排刀》按钮，用于手动重新拉取排刀）'));
+        form.appendChild(manualPlanRow);
         const btns = document.createElement('div');
         btns.style.cssText = 'display:flex;gap:6px;margin-top:8px;flex-wrap:wrap';
         const save = document.createElement('button');
@@ -2271,7 +2339,7 @@
         cancel.addEventListener('click', function () { form.style.display = 'none'; });
         btns.append(save, cancel, resume, logBtn);
         form.appendChild(btns);
-        state.settingsInputs = { name: nameInput, id: idInput, url: urlInput, mk: mkInput, doc: docInput, hide: hideInput, count: countInput, cn: cnInput, aura: auraInput };
+        state.settingsInputs = { name: nameInput, id: idInput, url: urlInput, mk: mkInput, doc: docInput, cosApi: cosApiInput, cosToken: cosTokenInput, hide: hideInput, count: countInput, cn: cnInput, aura: auraInput };
         return form;
     }
     // 只返回「用户自己存过的」地址；没存过就是空字符串（不回填脚本默认地址）。
@@ -2377,6 +2445,9 @@
         fill(ins.url, urlCustom, savedCalcUrl());
         fill(ins.mk, mkCustom, masterKey());
         fill(ins.doc, docCustom, savedDocUrl());
+        // COS 凭证：显示当前生效值（本地存的或内置的都算），让用户知道「现在用的到底是什么」
+        if (ins.cosApi) ins.cosApi.value = getCosApiBase();
+        if (ins.cosToken) ins.cosToken.value = getCosToken();
         if (ins.hide) ins.hide.checked = needAll ? false : hideIconOnSilence();
         if (ins.count) ins.count.checked = needAll ? false : clickCountEnabled();
         if (ins.cn) ins.cn.checked = needAll ? false : cnDirectEnabled();
@@ -2744,6 +2815,19 @@
     function writeAuraRecoFlag(on) {
         try { localStorage.setItem(K_AURA_RECO, on ? '1' : '0'); } catch (_) {}
         writeCfg(K_AURA_RECO, on ? '1' : '0');
+    }
+    // ── 「手动显示排刀」开关：默认关闭，关闭时面板上不显示《显示排刀》按钮 ──
+    // 排刀现在只在进入试炼界面时自动拉一次，手动按钮平时用不到，留作按需开启的调试/补拉入口。
+    function manualPlanEnabled() {
+        try { return readCfg(K_MANUAL_PLAN) === '1'; } catch (_) { return false; }
+    }
+    function writeManualPlanFlag(on) {
+        try { localStorage.setItem(K_MANUAL_PLAN, on ? '1' : '0'); } catch (_) {}
+        writeCfg(K_MANUAL_PLAN, on ? '1' : '0');
+    }
+    function syncManualPlanButton() {
+        const blocked = guildBlocked() || guildNameMismatch();
+        if (state.assignBtn) state.assignBtn.style.display = (blocked || !manualPlanEnabled()) ? 'none' : '';
     }
     // 开关打开后启动注入（boot 时调用；Observer 只挂一次，靠 sync 按需增删按钮）
     function addAuraRecoButton() {

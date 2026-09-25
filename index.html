@@ -883,6 +883,7 @@ table.member-table tbody tr:hover td.sticky-l.name-cell { background-color:var(-
     <button class="btn" id="btn-migrate-cos" onclick="migrateJsonbinToCos()" style="display:none" title="">📦 <span id="btn-migrate-cos-label">迁移到腾讯桶</span></button>
     <button class="btn" id="btn-import-backup" onclick="importBackupFile()" title="">📥 <span id="btn-import-backup-label">导入备份</span></button>
     <button class="btn" id="btn-import-json" onclick="importJson()">导入</button>
+    <button class="btn" id="btn-download-backup" onclick="downloadBackup()" title="">💾 <span id="btn-download-backup-label">下载备份</span></button>
     <button class="btn" id="btn-open-team-doc" onclick="openTeamDoc()" title="">打开组队文档</button>
     <button class="btn" id="btn-update-levels" onclick="updateLevelsFromCsv()" style="display:none" title="">更新等级</button>
     <span id="export-script-links" class="export-script-links"></span>
@@ -1146,6 +1147,8 @@ const I18N = {
     cosNeedApi:'请先点「迁移到腾讯桶」或「导入备份」，在弹窗里填好云函数地址并保存',
     cosNoKey:'缺少解密密钥：请用带 pwd 参数的分享链接打开页面', cosPullOk:'已从腾讯云 COS 拉取最新数据',
     cosNoData:'腾讯桶里还没有这份数据（对象不存在）',
+    downloadBackup:'下载备份', downloadBackupTooltip:'把当前公会数据导出成 backup.json（含 guild / members / trials / plan）保存到本地',
+    backupDownloaded:'备份已导出：{name}\n成员 {n} 位',
     importSuccess:'导入成功', importFailed:'未找到有效数据',
     teamWork:'团队工作能力', nextClearNeeds:'下1次还需', pts:'点', perSec:'点/秒',
     targetLevel:'通关目标', estTime:'估算时间', reach:'到达',
@@ -1296,6 +1299,8 @@ const I18N = {
     cosNeedApi:'Fill in and save the Cloud Function URL from the "Migrate to COS" or "Import Backup" dialog first',
     cosNoKey:'Missing decryption key: open the page with a share link that includes the pwd parameter', cosPullOk:'Latest data pulled from Tencent Cloud COS',
     cosNoData:'No such object in the COS bucket yet',
+    downloadBackup:'Download Backup', downloadBackupTooltip:'Export the current guild data to backup.json (guild / members / trials / plan)',
+    backupDownloaded:'Backup exported: {name}\nMembers: {n}',
     importSuccess:'Imported successfully', importFailed:'No valid data found',
     teamWork:'Team Work', nextClearNeeds:'Next clear needs', pts:'pts', perSec:'pts/s',
     targetLevel:'Clear Target', estTime:'Est. Time', reach:'Reach',
@@ -5542,6 +5547,10 @@ function updateStaticText() {
   if (bkLbl) bkLbl.textContent = t('importBackup');
   const bkBtn = document.getElementById('btn-import-backup');
   if (bkBtn) bkBtn.title = t('importBackupTooltip');
+  const dbLbl = document.getElementById('btn-download-backup-label');
+  if (dbLbl) dbLbl.textContent = t('downloadBackup');
+  const dbBtn = document.getElementById('btn-download-backup');
+  if (dbBtn) dbBtn.title = t('downloadBackupTooltip');
   const lvBtn = document.getElementById('btn-update-levels');
   if (lvBtn) {
     lvBtn.textContent = t('updateLevels');
@@ -7408,6 +7417,34 @@ async function runBackupImport(withUpload) {
   }
 }
 
+// 导出当前公会数据为 backup.json（与「导入备份」读取的格式一致：{ guild, members, trials, plan }）
+function downloadBackup() {
+  try {
+    const guild = String(state.guild || 'default').trim() || 'default';
+    const data = {
+      guild: guild,
+      members: state.members || [],
+      trials: state.trials || [],
+      plan: state.plan || null,
+    };
+    const d = new Date();
+    const stamp = d.getFullYear() + String(d.getMonth() + 1).padStart(2, '0') + String(d.getDate()).padStart(2, '0')
+      + '-' + String(d.getHours()).padStart(2, '0') + String(d.getMinutes()).padStart(2, '0');
+    const name = 'backup-' + guild + '-' + stamp + '.json';
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = name;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 2000);
+    alert(t('backupDownloaded').replace('{name}', name).replace('{n}', (state.members || []).length));
+  } catch(e) {
+    console.error('Backup export failed:', e);
+    alert(t('backupFail')+'：'+((e && e.message) ? e.message : String(e)));
+  }
+}
+
 // === Compression (gzip) ===
 // Returns gzipped bytes, or the input unchanged if CompressionStream is unavailable (older browsers).
 async function gzipBytes(bytes) {
@@ -7561,7 +7598,24 @@ function updateConnectionStatus() {
     if (pcBtn) pcBtn.style.display = 'none';
     if (ucBtn) ucBtn.style.display = 'none';
   }
+  applyHiddenButtons();
   updatePullStatus();
+}
+// 界面精简：已全面切到 COS 通道后，以下入口不再日常使用，统一隐藏。
+// 需要临时用某个功能时，把 HIDE_BUTTON_IDS 里对应的 id 删掉即可（或控制台执行
+// document.getElementById('xxx').style.display='' 临时显示）。
+const HIDE_BUTTON_IDS = [
+  'btn-migrate-cos',    // 迁移到腾讯桶（一次性迁移已完成）
+  'btn-import-backup',  // 导入备份（需要恢复时再开）
+  'btn-open-team-doc',  // 打开组队文档
+  'btn-pull',           // 获取（jsonbin）
+  'btn-upload',         // 上传（jsonbin）
+];
+function applyHiddenButtons() {
+  for (const id of HIDE_BUTTON_IDS) {
+    const el = document.getElementById(id);
+    if (el) el.style.display = 'none';
+  }
 }
 
 // 手动从云端拉取最新数据。个人端必须先执行过此函数（或 init 时自动 load 成功）才允许后续上传，
