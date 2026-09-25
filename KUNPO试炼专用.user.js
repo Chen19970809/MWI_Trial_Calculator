@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         KUNPO试炼专用
 // @namespace    https://www.milkywayidle.com/
-// @version      1.0.7
+// @version      1.0.8
 // @description  上传等级、成就、房屋、迷宫配装、神龛到计算器
 // @author       MonsterFC
 // @license      MIT
@@ -24,10 +24,14 @@
 (function () {
     'use strict';
 
-    const SCRIPT_VERSION = '1.0.7';
+    const SCRIPT_VERSION = '1.0.8';
 
     // ── 更新日志：key = 版本号，value = 中文更新内容；发新版本时在顶部加一条即可 ──
     const CHANGELOG = {
+        '1.0.8': '1. 面板显示上次上传配装时间\n'
+            + '2. 每周四显示上传提醒（当天已上传则不提示）\n'
+            + '3. 显示数据拉取状态\n'
+            + '4. 每次更新后显示更新内容',
         '1.0.7': '1.减少数据拉取次数\n'
             + '2. 隐藏手动显示排刀按钮（改自动了）\n'
             + '3. 本地存储云函数地址和口令，下次更新后隐藏，需要手动填',
@@ -75,6 +79,10 @@
     const K_CN_DIRECT = 'kunpo_cn_direct';       // 国内直连（勾选后《打开计算器》改跳 EdgeOne 国内镜像地址）
     const K_AURA_RECO = 'kunpo_aura_reco';       // 光环推荐（勾选后在队伍页面显示《光环优先级》按钮）
     const K_MANUAL_PLAN = 'kunpo_manual_plan';   // 手动显示排刀（'1' 才在面板上显示《显示排刀》按钮，默认不显示）
+    const K_LAST_UPLOAD = 'kunpo_last_upload';   // 上次成功上传配装的时间戳（毫秒），用于面板提示
+    // 上次见过的脚本版本。全局键（所有角色共用，不按角色隔离）。
+    // 游戏启动时：内置版本 > 记录版本 → 弹窗显示区间内的更新内容，并把记录更新为当前版本。
+    const K_LAST_SEEN_VERSION = 'kunpo_last_seen_version';
     const K_COS_API = 'kunpo_cos_api';           // 云函数地址（COS 通道；留空则用内置默认值）
     const K_COS_TOKEN = 'kunpo_cos_token';       // 云函数访问口令 X-Auth（留空则用内置默认值）
     const K_AURA_PRIORITY = 'kunpo_aura_priority'; // 光环优先级（5 个槽位，元素为 AURA_MAP 键或 '' 表示不参与）
@@ -318,6 +326,59 @@
         state.uiRoot.style.top = `${p.y}px`;
     }
 
+    // ── 面板 intro 提示行 ───────────────────────────────────────────────
+    // 显示「上次上传配装时间」（按角色存在本地）；每周四额外显示上传提醒，
+    // 当天已经上传过则不提醒。
+    function uploadedToday() {
+        const ts = Number(readCfg(K_LAST_UPLOAD)) || 0;
+        if (!ts) return false;
+        const a = new Date(ts), b = new Date();
+        return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
+    }
+    // 一次性迁移：本地还没有上传时间时，若本会话已拉到云端数据、且缓存里「自己」这条
+    // 的光环至少有一个 > 0，说明之前上传过 → 把上次上传时间定为 2026-09-25，
+    // 避免老成员因为新功能上线被误判成「从未上传」而在周四被反复提醒。
+    function seedLastUploadFromCache() {
+        try {
+            if (Number(readCfg(K_LAST_UPLOAD)) > 0) return;      // 已有记录，不覆盖
+            if (!cloudRecordCache.data) return;                  // 本会话还没拉到数据
+            const myName = currentCharacterName();
+            if (!myName) return;
+            const list = Array.isArray(cloudRecordCache.data.members) ? cloudRecordCache.data.members : [];
+            const me = list.find(function (m) { return m && String(m.name || '').trim() === myName; });
+            if (!me || !me.auras || typeof me.auras !== 'object') return;
+            const hasAura = Object.keys(AURA_MAP).some(function (k) { return Number(me.auras[k] || 0) > 0; });
+            if (!hasAura) return;
+            writeCfg(K_LAST_UPLOAD, String(new Date(2026, 8, 25).getTime()));   // 2026-09-25 本地零点
+        } catch (_) { /* ignore */ }
+    }
+    function updateIntroLine() {
+        const el = state.introEl;
+        if (!el) return;
+        seedLastUploadFromCache();
+        const ts = Number(readCfg(K_LAST_UPLOAD)) || 0;
+        let text;
+        if (ts > 0) {
+            const d = new Date(ts);
+            const pad = (n) => String(n).padStart(2, '0');
+            text = '上次上传：' + d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate())
+                + ' ' + pad(d.getHours()) + ':' + pad(d.getMinutes());
+        } else {
+            text = '尚未上传过配装';
+        }
+        // 行首的数据状态：本会话是否已经从云端拉到过数据
+        const statusTag = '【' + (cloudRecordCache.data ? '已缓存' : '未拉取') + '】';
+        text = statusTag + text;
+        // getDay()===4 即周四
+        if (new Date().getDay() === 4 && !uploadedToday()) {
+            text += '　📅 今天周四，记得上传本周配装！';
+            el.style.color = '#ffd75e';
+        } else {
+            el.style.color = '#c3d2f2';
+        }
+        el.textContent = text;
+    }
+
     function applyCollapsed(collapsed) {
         const root = state.uiRoot;
         if (!root) return;
@@ -333,6 +394,7 @@
         } else {
             state.iconButton.style.display = 'none';
             state.panelEl.style.display = '';
+            updateIntroLine();   // 每次展开都刷新时间/周四提醒
             // 以 K 按钮的「上边中点」为定位点展开面板：面板水平中心对齐按钮水平中心、
             // 面板顶边对齐按钮顶边（先显示再测量尺寸，再钳制进视口）。
             const iconPos = readUiPosition()
@@ -422,7 +484,6 @@
         });
 
         const intro = document.createElement('p');
-        intro.textContent = '上传等级、成就、房屋、迷宫配装、神龛到试炼计算器。';
         intro.style.cssText = 'margin:0 0 8px 0;color:#c3d2f2';
 
         const status = document.createElement('p');
@@ -581,6 +642,7 @@
         state.signupBtn = signupBtn;
 
         panel.append(collapseBtn, heading, intro, status, clickCountText, actions);
+        state.introEl = intro;   // 提示行：显示上次上传配装时间 / 周四上传提醒
         const settingsForm = buildSettingsForm();
         settingsForm.style.display = 'none';
         panel.appendChild(settingsForm);
@@ -592,6 +654,7 @@
         state.settingsBtn = setBtn;
         state.settingsForm = settingsForm;
         applyGuildActionVisibility();
+        updateIntroLine();   // 面板建好就填上次上传时间 / 周四提醒
         document.body.appendChild(root);
         state.uiRoot = root;
         state.iconButton = icon;
@@ -1331,6 +1394,9 @@
             resetAuraServerCache();   // 云端已更新 → 光环那份缓存作废，下次进队伍页面重新拉
             setStatus('已上传：' + myName + '（' + (me.loadouts || []).length + ' 套配装）', 'good');
             showAssignmentToast('配装已上传到共享空间');
+            // 记录上传时间并刷新面板上的提示行（周四当天上传后提醒自动消失）
+            try { writeCfg(K_LAST_UPLOAD, String(Date.now())); } catch (_) {}
+            updateIntroLine();
         } catch (e) {
             const msg = (e && e.message) ? e.message : String(e);
             setStatus('上传失败：' + msg, 'error');
@@ -1550,6 +1616,9 @@
             cloudRecordCache.data = data;
             cloudRecordCache.fetchedAt = Date.now();
             cloudRecordCache.sig = sig;
+            // 拉到数据后：尝试补齐「上次上传时间」的一次性迁移，并刷新面板提示行
+            // （面板可能一直开着，不主动刷的话「未拉取」会一直挂着）
+            try { seedLastUploadFromCache(); updateIntroLine(); } catch (_) {}
             return data;
         })().finally(function () { cloudRecordCache.inFlight = null; });
         cloudRecordCache.inFlight = p;
@@ -1902,15 +1971,17 @@
         if (assignmentState.observer || !document.body) return;
         assignmentState.observer = new MutationObserver(function () {
             if (assignmentState.rendering) return;
-            if (!assignmentState.doc) return;
+            // 「进入试炼界面」的检测必须放在 doc 判定之前：
+            // 否则首次进入时还没有排刀数据（doc 为空）会被直接忽略，永远不触发拉取。
             const present = trialCardsPresent();
             const opened = present && !assignmentState.cardsPresent; // 刚进入试炼界面
             assignmentState.cardsPresent = present;
             if (!present) { lastAnnouncedText = ''; return; }        // 离开界面 → 下次进入再提示一次
             if (opened) {
-                onEnterTrialPage();                                  // 进入即判定：结束→静默；否则拉排刀高亮
+                onEnterTrialPage();                                  // 进入即判定：结束→静默；否则拉取排刀
                 if (trialEndState.silenced) return;
             }
+            if (!assignmentState.doc) return;                        // 还没有排刀数据 → 只做进入检测，不做渲染
             clearTimeout(assignmentState.timer);
             // 只有「刚进入界面」那一次会提示；界面内的持续刷新一律静默重渲染。
             assignmentState.timer = setTimeout(function () { renderAssignmentUi({ announce: opened }); }, 250);
@@ -2141,7 +2212,8 @@
     }
     // （CHANGELOG 已集中到文件顶部「用户可配置区」）
     // 弹出更新日志（按版本号从新到旧排列，当前版本有标注）
-    function showChangelog() {
+    // 更新日志弹窗。fromVersion 传入时只显示「比它新的版本」的条目（用于版本升级提示）。
+    function showChangelog(fromVersion) {
         document.getElementById('kunpo-changelog-overlay')?.remove();
         const overlay = document.createElement('div');
         overlay.id = 'kunpo-changelog-overlay';
@@ -2152,7 +2224,7 @@
             + 'border-radius:12px;border:1px solid #6f9bd8;background:linear-gradient(145deg,#152447,#1d3566);color:#eef3ff;'
             + 'font:12.5px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif;box-shadow:0 10px 28px rgba(3,10,26,.55)';
         const title = document.createElement('strong');
-        title.textContent = '更新日志';
+        title.textContent = fromVersion ? ('脚本已更新：v' + fromVersion + ' → v' + SCRIPT_VERSION) : '更新日志';
         title.style.cssText = 'display:block;font-size:14px;margin:0 0 8px 0';
         box.appendChild(title);
         const close = document.createElement('button');
@@ -2161,7 +2233,10 @@
             + 'background:#344879;color:#fff;cursor:pointer;font:700 16px/1 system-ui,sans-serif';
         close.addEventListener('click', () => overlay.remove());
         box.appendChild(close);
+        let shown = 0;
         Object.keys(CHANGELOG).sort(compareVersions).reverse().forEach(function (v) {
+            if (fromVersion && compareVersions(v, fromVersion) <= 0) return;   // 只要比 fromVersion 新的
+            shown++;
             const item = document.createElement('div');
             item.style.cssText = 'margin:0 0 10px 0;padding:8px 9px;border:1px solid #45598c;border-radius:8px;'
                 + 'background:rgba(10,20,44,.5)';
@@ -2174,9 +2249,30 @@
             item.append(ver, body);
             box.appendChild(item);
         });
+        if (!shown) return;   // 没有要显示的条目就不弹
         overlay.appendChild(box);
         overlay.addEventListener('click', function (e) { if (e.target === overlay) overlay.remove(); });
         document.body.appendChild(overlay);
+    }
+
+    // ── 版本升级提示 ───────────────────────────────────────────────────
+    // 游戏启动时比较「上次见过的版本」（全局键，所有角色共用）与当前版本：
+    //   内置版本更高 → 弹窗显示区间内的全部更新内容（右上角 × 关闭），并把记录更新为当前版本。
+    //   首次安装（没有记录）不弹窗，直接写入当前版本。
+    function checkLastSeenVersion() {
+        try {
+            const stored = String(localStorage.getItem(K_LAST_SEEN_VERSION) || '').trim();
+            if (!stored) {
+                localStorage.setItem(K_LAST_SEEN_VERSION, SCRIPT_VERSION);
+                return;                                  // 首次安装：不打扰
+            }
+            if (compareVersions(SCRIPT_VERSION, stored) <= 0) return;   // 已是最新或降级，不弹
+            const hasNew = Object.keys(CHANGELOG).some(function (v) {
+                return compareVersions(v, stored) > 0 && compareVersions(v, SCRIPT_VERSION) <= 0;
+            });
+            if (hasNew) showChangelog(stored);           // 右上角 × 关闭（showChangelog 自带）
+            localStorage.setItem(K_LAST_SEEN_VERSION, SCRIPT_VERSION);
+        } catch (e) { console.warn('[KUNPO] 版本提示失败：', e); }
     }
 
     function buildSettingsForm() {
@@ -3869,6 +3965,7 @@
     }
 
     function boot() {
+        checkLastSeenVersion();   // 版本升级弹窗（全局，所有角色共用一条记录）
         mountExportUi();
         initAssignment();
         addAuraRecoButton();
