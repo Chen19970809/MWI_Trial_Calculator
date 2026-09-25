@@ -357,14 +357,19 @@
         if (!el) return;
         seedLastUploadFromCache();
         const ts = Number(readCfg(K_LAST_UPLOAD)) || 0;
+        const cached = !!cloudRecordCache.data;
         let text;
         if (ts > 0) {
             const d = new Date(ts);
             const pad = (n) => String(n).padStart(2, '0');
             text = '上次上传：' + d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate())
                 + ' ' + pad(d.getHours()) + ':' + pad(d.getMinutes());
-        } else {
+        } else if (cached) {
+            // 已拉到数据还没记录 → 这时「尚未上传过配装」才是确定的结论
             text = '尚未上传过配装';
+        } else {
+            // 未拉取时先不下结论：等拉到数据后迁移逻辑可能补出上传时间
+            text = '等待拉取数据…';
         }
         // 行首的数据状态：本会话是否已经从云端拉到过数据
         const statusTag = '【' + (cloudRecordCache.data ? '已缓存' : '未拉取') + '】';
