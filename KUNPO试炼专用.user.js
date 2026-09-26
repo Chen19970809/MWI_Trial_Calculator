@@ -370,10 +370,10 @@
             text = '尚未上传过配装';
         } else {
             // 未拉取时先不下结论：等拉到数据后迁移逻辑可能补出上传时间
-            text = '等待拉取数据…';
+            text = '...';
         }
         // 行首的数据状态：本会话是否已经从云端拉到过数据
-        const statusTag = '【' + (cloudRecordCache.data ? '已缓存' : '未拉取') + '】';
+        const statusTag = '【' + (cloudRecordCache.data ? '已缓存' : '准备就绪') + '】';
         text = statusTag + text;
         // getDay()===4 即周四
         if (new Date().getDay() === 4 && !uploadedToday()) {
@@ -2977,7 +2977,18 @@
     // 开关打开后启动注入（boot 时调用；Observer 只挂一次，靠 sync 按需增删按钮）
     function addAuraRecoButton() {
         if (auraRecoObserver || !document.body) return;
-        auraRecoObserver = new MutationObserver(function () { syncAuraRecoButton(); syncAuraRecoInfo(); });
+        // 观察的是整页 document.body（subtree），游戏页面动画/聊天/计数器等任何变动都会触发回调。
+        // 若每次都同步执行 syncAuraRecoInfo（含大量 querySelectorAll 与 getBoundingClientRect 强制重排），
+        // 主线程会被拖垮导致 CN 站打开组队页面时卡死。这里做 200ms 节流，把一簇变动合并成一次同步。
+        let auraRecoTimer = null;
+        const scheduleAuraReco = function () {
+            if (auraRecoTimer) return;
+            auraRecoTimer = setTimeout(function () {
+                auraRecoTimer = null;
+                try { syncAuraRecoButton(); syncAuraRecoInfo(); } catch (_) {}
+            }, 200);
+        };
+        auraRecoObserver = new MutationObserver(scheduleAuraReco);
         auraRecoObserver.observe(document.body, { childList: true, subtree: true });
         syncAuraRecoButton();
         syncAuraRecoInfo();
@@ -3505,11 +3516,15 @@
                 return;
             }
             const r = root.getBoundingClientRect();
-            if (r.width < 10) { block.style.display = 'none'; return; }
-            block.style.display = '';
-            block.style.left = Math.round(r.left) + 'px';
-            block.style.width = Math.round(r.width) + 'px';
-            block.style.top = Math.round(cnColumnBottom(root) + 4) + 'px';
+            if (r.width < 10) { if (block.style.display !== 'none') block.style.display = 'none'; return; }
+            if (block.style.display !== '') block.style.display = '';
+            // 仅在实际变化时才写样式：避免重复 mutation 反复触发 Observer，也减少无谓重排
+            const left = Math.round(r.left) + 'px';
+            const width = Math.round(r.width) + 'px';
+            const top = Math.round(cnColumnBottom(root) + 4) + 'px';
+            if (block.style.left !== left) block.style.left = left;
+            if (block.style.width !== width) block.style.width = width;
+            if (block.style.top !== top) block.style.top = top;
         });
     }
     let cnAuraPosInstalled = false;
@@ -3569,10 +3584,10 @@
             const x = infos[i];
             let html;
             const showInputs = !x.auraReady || x.auraSource === 'manual';
-            const status1 = x.ready ? '资料已采集' : '等待资料';
+            const status1 = x.ready ? '资料已采集' : '点击玩家角色查看面板';
             const status2 = x.auraReady
                 ? ('光环数据就绪' + (x.auraSource === 'manual' ? '（手动）' : ''))
-                : '光环未上传';
+                : '光环未上传或非本公会';
             if (allReady && allocation && allocation.assign[i]) {
                 const recKey = allocation.assign[i];
                 const st = AURA_STATS[recKey];
