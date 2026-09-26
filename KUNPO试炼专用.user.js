@@ -1932,7 +1932,13 @@
         const name = String((state.character && state.character.name) || '').trim();
         if (!name) { announceAssignment('等待读取游戏角色名', force); return; }
         if (!force && assignmentFresh()) {
-            if (assignmentState.doc && document.querySelector(TRIAL_CARD_SELECTOR)) renderAssignmentUi({ announce: false });
+            // 已拉过（命中缓存）：照常按缓存渲染并提示一次。
+            // announceAssignment 内部会判断「是否在试炼界面」，所以其它场景不会乱弹。
+            if (assignmentState.doc && document.querySelector(TRIAL_CARD_SELECTOR)) {
+                renderAssignmentUi({ announce: true });
+            } else if (!assignmentState.doc) {
+                announceAssignment('排刀未发布', false);
+            }
             return;
         }
         if (assignmentState.inFlight) return;
@@ -2795,6 +2801,9 @@
     //   已完成 → 立即静默；未完成 → 拉排刀并高亮（缓存新鲜则直接用），进入只提示一次。
     function onEnterTrialPage() {
         if (trialEndState.silenced) return;
+        // 每次进入都清空去重标记 → 这一趟允许提示一次。
+        // 以前只在「离开界面」时清空，一旦离开没被 DOM 观察器捕获，后面再进就永远不提示了。
+        lastAnnouncedText = '';
         updateGuildGate(getGameState());
         if (guildBlocked()) { announceAssignment('当前公会不是 ' + guildConfig.name + '，排刀高亮已停用', true); return; }
         checkTrialEnd();
