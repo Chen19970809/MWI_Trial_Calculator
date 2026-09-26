@@ -781,6 +781,9 @@
                 }
                 syncAuraRecoButton();
                 syncAuraRecoInfo();
+                // 面板提示行按「角色名::」隔离读取上次上传时间；启动时角色名尚未就绪，
+                // 会在挂载时误读成全局键而显示「…」，这里名字就绪后补刷一次才能正确显示。
+                updateIntroLine();
             }, 0);
             mergeSkills(obj.characterSkills, true);
             mergeAbilities(obj.characterAbilities, true);
@@ -3097,11 +3100,20 @@
         return list;
     }
     // 队伍页面 DOM 抓成员名：游戏角色名组件类名为 CharacterName_characterName__xxx（hash 可能变，用前缀匹配）
+    // 名字组件是嵌套结构（外层容器与内层文本都命中 characterName），且外层可能把徽章数字
+    // （如奖杯数 75）一起算进 textContent，产生 'Se77enAlpha75' 这类幽灵名。
+    // characterNameLeafEls：只保留「叶子」匹配（不含其它匹配元素的，即最内层文本节点）。
+    function characterNameLeafEls(container) {
+        const els = Array.from(container.querySelectorAll('[class*="characterName" i]'));
+        return els.filter(function (el) {
+            return !els.some(function (other) { return other !== el && el.contains(other); });
+        });
+    }
     function scrapePartyMemberNamesFromDom() {
         try {
             const container = document.querySelector('[class*="Party_page"]') || document.querySelector('[class^="Party_"]');
             if (!container) return [];
-            const els = Array.from(container.querySelectorAll('[class*="characterName" i]'));
+            const els = characterNameLeafEls(container);
             const names = [];
             els.forEach(function (el) {
                 // 文本名字元素（排除只含头像/空节点的），并做相邻去重
@@ -3391,7 +3403,7 @@
     const AURA_INFO_CLASS = 'kunpo-aura-member-info';
     // 队伍页面内成员名字元素（与抓名逻辑一致，连续重复去重）
     function auraNameElements(container) {
-        const els = Array.from(container.querySelectorAll('[class*="characterName" i]'));
+        const els = characterNameLeafEls(container);   // 只取叶子，剔除外层嵌套与徽章数字污染
         const out = [];
         els.forEach(function (el) {
             const t = String(el.textContent || '').trim();
@@ -3575,25 +3587,31 @@
                 auraReady: !!(serverAu || manualAu),
             };
         });
-        const allReady = infos.every(function (x) { return x.ready && x.auraReady; });
+        // 只对「资料+光环都就绪」的成员做唯一性分配（每种光环只给一人，总值最优）。
+        // 以前要求全员就绪才开始推荐：只要一个人没采到资料/没上传光环，全队都看不到推荐。
+        // 现在未就绪成员继续显示等待提示，不再拖累其他人；其数据补齐后会自动重算分配。
+        const readyPos = [];
+        infos.forEach(function (x, i) { if (x.ready && x.auraReady) readyPos.push(i); });
         const recoKeys = auraPriorityKeys(members.length);
-        // 全员就绪 → 全队唯一性分配（每种光环只给一人，总值最优）
-        const allocation = allReady ? assignAurasUnique(infos, recoKeys) : null;
+        const allocation = (readyPos.length && recoKeys.length)
+            ? assignAurasUnique(readyPos.map(function (i) { return infos[i]; }), recoKeys)
+            : null;
         nameEls.forEach(function (el, i) {
             try {
             const x = infos[i];
+            const rp = readyPos.indexOf(i);   // 该成员在「就绪成员分配结果」里的下标（未就绪为 -1）
             let html;
             const showInputs = !x.auraReady || x.auraSource === 'manual';
             const status1 = x.ready ? '资料已采集' : '点击玩家角色查看面板';
             const status2 = x.auraReady
                 ? ('光环数据就绪' + (x.auraSource === 'manual' ? '（手动）' : ''))
                 : '光环未上传或非本公会';
-            if (allReady && allocation && allocation.assign[i]) {
-                const recKey = allocation.assign[i];
+            if (allocation && rp >= 0 && allocation.assign[rp]) {
+                const recKey = allocation.assign[rp];
                 const st = AURA_STATS[recKey];
                 const auraLv = Number(x.au[recKey] || 0);
                 const a = attrToLevelValue(x.lv, st.attr, x.hr);
-                const val = Math.round(allocation.options[i][recKey] * 100) / 100;
+                const val = Math.round(allocation.options[rp][recKey] * 100) / 100;
                 // 三行格式：推荐XX光环：最终值% / 光环等级：XX / 属性 等级+房屋等级
                 const skillText = (a && a.skill !== null && a.skill !== undefined) ? a.skill : '-';
                 const houseText = (a && a.house) ? '+' + a.house : '+0';
@@ -3602,7 +3620,8 @@
                 html = '<div title="' + calc + '">推荐：' + st.label + '：' + val + '%</div>'
                     + '<div>光环等级：' + auraLv + '</div>'
                     + '<div>' + (st.attr || '') + ' ' + skillText + houseText + '</div>';
-            } else if (allReady) {
+            } else if (rp >= 0) {
+                // 就绪但没分到光环（未装备优先级里的任一光环）
                 html = '<div>资料已采集</div><div>无可推荐光环</div>';
             } else {
                 html = '<div>' + status1 + '</div><div>' + status2 + '</div>';
