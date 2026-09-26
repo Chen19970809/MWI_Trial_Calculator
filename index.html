@@ -139,12 +139,21 @@ h2 { font-size:16px; margin:10px 0 8px; color:var(--text-muted); }
 .aura-data-table th { background:var(--table-header); color:var(--text-muted); font-weight:600; }
 .aura-data-table th.aura-data-icon-col { padding:4px 8px; }
 .aura-data-table th.aura-data-icon-col svg { width:26px; height:26px; display:block; margin:0 auto; }
-.aura-data-idx-col, .aura-data-idx { min-width:44px; color:var(--text-muted); }
-.aura-data-table th.aura-data-name-col, .aura-data-table td.aura-data-name { text-align:left; }
-.aura-data-name-col, .aura-data-name { min-width:110px; white-space:nowrap; }
+/* 横向滑动固定首列（序号）+ 第二列（角色名）；纵向滑动固定表头行 */
+.aura-data-table thead th { position:sticky; top:0; z-index:5; box-shadow:0 2px 0 0 var(--border); }
+.aura-data-idx-col, .aura-data-idx { position:sticky; left:0; z-index:3; min-width:44px; color:var(--text-muted); background:var(--surface); }
+.aura-data-table th.aura-data-idx-col { z-index:6; background:var(--table-header); }
+.aura-data-name-col, .aura-data-name { position:sticky; left:44px; z-index:3; min-width:110px; white-space:nowrap; text-align:left; background:var(--surface); }
+.aura-data-table th.aura-data-name-col { z-index:6; background:var(--table-header); text-align:left; }
+/* 冻结单元格分隔阴影，避免内容穿透 */
+.aura-data-idx-col, .aura-data-idx, .aura-data-name-col, .aura-data-name { box-shadow:2px 0 0 0 var(--border); }
 .aura-data-level { min-width:56px; font-variant-numeric:tabular-nums; color:var(--text-faint); }
 .aura-data-level.has-aura { color:var(--text); font-weight:600; }
 .aura-data-empty { color:var(--text-faint); padding:16px; }
+/* 展示分配中职业后缀为「奶」的成员，按战斗归属试炼在光环数据页整行高亮（覆盖包括冻结列在内的所有单元格背景） */
+/* 战斗为试炼1 → 淡紫；试炼2 → 深紫 */
+.aura-data-table tr.aura-row-heal-t1 td { background:rgba(199, 88, 247, 0.315); }
+.aura-data-table tr.aura-row-heal-t2 td { background:rgba(232, 82, 252, 0.575); }
 /* 一行两块；窄屏自动退回一块一行 */
 .skill-config-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px; width:100%; align-content:start; }
 @media (max-width:720px){ .skill-config-grid { grid-template-columns:minmax(0,1fr); } }
@@ -1003,7 +1012,7 @@ table.member-table tbody tr:hover td.sticky-l.name-cell { background-color:var(-
 </div><!-- /#top-config -->
 
 <div class="member-section">
-  <h2 id="h2-member"><button class="btn btn-sm view-tab" id="btn-view-assignment" onclick="setMemberView('assignment')">分配结果</button><button class="btn btn-sm view-tab" id="btn-view-score" onclick="setMemberView('score')">分数估算</button><button class="btn btn-sm view-tab" id="btn-view-members" onclick="setMemberView('members')">成员数据</button><button class="btn btn-sm" id="btn-add-member" onclick="addMember()">+ 添加成员</button><button class="btn btn-sm view-tab" id="btn-view-display" onclick="toggleDisplayMode()">展示分配</button><button class="btn btn-sm view-tab" id="btn-view-skill" onclick="toggleSkillConfigMode()">技能配置</button><button class="btn btn-sm view-tab" id="btn-view-aura" onclick="toggleAuraConfigMode()">光环设置</button><button class="btn btn-sm view-tab" id="btn-view-aura-data" onclick="toggleAuraDataMode()">光环数据</button></h2>
+  <h2 id="h2-member"><button class="btn btn-sm view-tab" id="btn-view-assignment" onclick="setMemberView('assignment')">分配结果</button><button class="btn btn-sm view-tab" id="btn-view-score" onclick="setMemberView('score')">分数估算</button><button class="btn btn-sm view-tab" id="btn-view-members" onclick="setMemberView('members')">成员数据</button><button class="btn btn-sm" id="btn-add-member" onclick="addMember()">+ 添加成员</button><button class="btn btn-sm view-tab" id="btn-view-display" onclick="toggleDisplayMode()">展示分配</button><button class="btn btn-sm view-tab" id="btn-view-skill" onclick="toggleSkillConfigMode()">技能配置</button><button class="btn btn-sm view-tab" id="btn-view-aura" onclick="toggleAuraConfigMode()">光环设置</button><button class="btn btn-sm view-tab" id="btn-view-aura-data" onclick="onAuraDataButtonClick(event)" ondblclick="onAuraDataButtonDblClick(event)" title="单击打开/关闭光环数据；双击下载当前光环数据(CSV)">光环数据</button></h2>
   <div class="table-wrap" id="member-table-wrap">
     <table class="member-table">
       <thead id="member-thead"></thead>
@@ -4200,6 +4209,45 @@ function memberAuraLevel(p, key) {
   const v = auras ? Number(auras[key]) : 0;
   return Number.isFinite(v) && v > 0 ? v : 0; // 值默认为 0
 }
+// 光环数据按钮：单击开/关页面（延迟执行，避免被双击误触发）；双击直接下载当前光环数据(CSV)。
+let auraDataClickTimer = null;
+function onAuraDataButtonClick(ev) {
+  if (auraDataClickTimer) clearTimeout(auraDataClickTimer);
+  auraDataClickTimer = setTimeout(function() {
+    auraDataClickTimer = null;
+    toggleAuraDataMode();
+  }, 250);
+}
+function onAuraDataButtonDblClick(ev) {
+  if (auraDataClickTimer) { clearTimeout(auraDataClickTimer); auraDataClickTimer = null; }
+  downloadAuraDataCSV();
+}
+function downloadAuraDataCSV() {
+  const members = state.members || [];
+  if (!members.length) { alert(t('noMembers')); return; }
+  const escCsv = function(s) {
+    s = String(s == null ? '' : s);
+    if (/[",\n\r]/.test(s)) s = '"' + s.replace(/"/g, '""') + '"';
+    return s;
+  };
+  const head = ['序号', '角色名'].concat(AURA_DATA_COLS.map(function(col) { return combatAbilityName(col.key); }));
+  const lines = [head.map(escCsv).join(',')];
+  members.forEach(function(p, rowIdx) {
+    const row = [rowIdx, p.name || ''].concat(AURA_DATA_COLS.map(function(col) { return memberAuraLevel(p, col.key); }));
+    lines.push(row.map(escCsv).join(','));
+  });
+  // 加 BOM 以便 Excel 正确识别 UTF-8 中文。
+  const blob = new Blob(['\uFEFF' + lines.join('\r\n')], { type: 'text/csv;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  const stamp = (function() {
+    const d = new Date(), p = function(n) { return String(n).padStart(2, '0'); };
+    return d.getFullYear() + p(d.getMonth() + 1) + p(d.getDate()) + '_' + p(d.getHours()) + p(d.getMinutes()) + p(d.getSeconds());
+  })();
+  a.href = url; a.download = '光环数据_' + stamp + '.csv';
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  setTimeout(function() { URL.revokeObjectURL(url); }, 1000);
+}
 function toggleAuraDataMode() {
   // 《光环数据》为只读视图，所有成员可用（不再限会长）。
   state.auraDataMode = !state.auraDataMode;
@@ -4225,7 +4273,18 @@ function renderAuraDataArea() {
       return '<th class="aura-data-icon-col" title="'+escHtml(combatAbilityName(col.key))+'">'+svgIcon(col.icon, 26, 26)+'</th>';
     }).join('');
   const rows = (state.members || []).map(function(p, rowIdx) {
-    return '<tr>'+
+    const prof = typeof displayMemberProfession === 'function' ? displayMemberProfession(p) : '';
+    const isHeal = String(prof || '').endsWith('奶');
+    // 奶成员按「战斗归属的试炼」分色：试炼1=淡紫，试炼2=深紫（取实际战斗图标归属，含均分/单独修改结果）。
+    let healClass = '';
+    if (isHeal) {
+      const icons = typeof displayMemberBattleIcons === 'function' ? displayMemberBattleIcons(p) : [];
+      const ic0 = state.displayBattleTrialIcons[0] || 0;
+      const ic1 = state.displayBattleTrialIcons[1] || 0;
+      if (icons.indexOf(ic1) >= 0) healClass = 'aura-row-heal-t2';
+      else if (icons.indexOf(ic0) >= 0) healClass = 'aura-row-heal-t1';
+    }
+    return '<tr'+(healClass ? ' class="'+healClass+'"' : '')+'>'+
       '<td class="aura-data-idx">'+rowIdx+'</td>'+
       '<td class="aura-data-name">'+escHtml(p.name || '')+'</td>'+
       AURA_DATA_COLS.map(function(col) {
