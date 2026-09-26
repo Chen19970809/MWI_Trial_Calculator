@@ -1398,6 +1398,12 @@
             const rec = await encryptRecord(JSON.stringify(merged), key);
             setStatus('正在上传…', 'idle');
             await cloudPutRecord(cfg, rec);
+            // 上传成功后：本次「GET + 合并本人数据」得到的 merged 即云端当前值。
+            // 写回记录缓存，使提示行数据状态从「未拉取」变为「已缓存」；
+            // 否则 cloudPutRecord 内部的 invalidate 会让缓存为空、状态栏一直显示未拉取。
+            cloudRecordCache.data = merged;
+            cloudRecordCache.fetchedAt = Date.now();
+            cloudRecordCache.sig = cloudRecordSig(cfg);
             resetAuraServerCache();   // 云端已更新 → 光环那份缓存作废，下次进队伍页面重新拉
             setStatus('已上传：' + myName + '（' + (me.loadouts || []).length + ' 套配装）', 'good');
             showAssignmentToast('配装已上传到共享空间');
