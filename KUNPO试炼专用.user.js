@@ -1,9 +1,9 @@
 // ==UserScript==
 // @name         KUNPO试炼专用
 // @namespace    https://www.milkywayidle.com/
-// @version      1.0.8
+// @version      1.0.9
 // @description  上传等级、成就、房屋、迷宫配装、神龛到计算器
-// @author       MonsterFC
+// @author       MonsterFC、MusoAlpha、KUNPO成员测试
 // @license      MIT
 // @match        https://www.milkywayidle.com/*
 // @match        https://www.milkywayidlecn.com/*
@@ -24,10 +24,13 @@
 (function () {
     'use strict';
 
-    const SCRIPT_VERSION = '1.0.8';
+    const SCRIPT_VERSION = '1.0.9';
 
     // ── 更新日志：key = 版本号，value = 中文更新内容；发新版本时在顶部加一条即可 ──
     const CHANGELOG = {
+        '1.0.9': '1. 修复CN网站因排行榜徽章导致的卡死\n'
+            + '2. 折叠老版本更新日志\n'
+            + '3. 作者栏新增成员',
         '1.0.8': '1. 面板显示上次上传配装时间\n'
             + '2. 每周四显示上传提醒（当天已上传则不提示）\n'
             + '3. 显示数据拉取状态\n'
@@ -2279,23 +2282,56 @@
             + 'background:#344879;color:#fff;cursor:pointer;font:700 16px/1 system-ui,sans-serif';
         close.addEventListener('click', () => box.remove());
         box.appendChild(close);
+        const versions = Object.keys(CHANGELOG).sort(compareVersions).reverse();
         let shown = 0;
-        Object.keys(CHANGELOG).sort(compareVersions).reverse().forEach(function (v) {
+        const older = [];   // 第 4 个及更旧的版本：先收起，只显示第一条作为展开入口
+        versions.forEach(function (v) {
             if (fromVersion && compareVersions(v, fromVersion) <= 0) return;   // 只要比 fromVersion 新的
             shown++;
             const item = document.createElement('div');
+            item.className = 'kunpo-cl-item';
             item.style.cssText = 'margin:0 0 10px 0;padding:8px 9px;border:1px solid #45598c;border-radius:8px;'
                 + 'background:rgba(10,20,44,.5)';
             const ver = document.createElement('div');
             ver.textContent = 'v' + v + (v === SCRIPT_VERSION ? '（当前版本）' : '');
             ver.style.cssText = 'font-weight:700;color:#8fc3ff;margin-bottom:4px';
             const body = document.createElement('div');
+            body.className = 'kunpo-cl-body';
             body.textContent = CHANGELOG[v];
             body.style.cssText = 'white-space:pre-wrap;color:#c3d2f2';
             item.append(ver, body);
-            box.appendChild(item);
+            if (shown <= 3) box.appendChild(item);   // 最近 3 个版本：完整展开
+            else older.push(item);                   // 其余：收起，稍后只显示第一条
         });
-        if (!shown) return;   // 没有要显示的条目就不弹
+        // 折叠旧版本：只显示最靠前的一条（第一条），点击展开/收起全部更早版本
+        if (older.length) {
+            const entry = older.shift();
+            const body = entry.querySelector('.kunpo-cl-body');
+            if (body) body.style.display = 'none';   // 折叠入口默认隐藏自身内容，仅留版本号
+            entry.style.cursor = 'pointer';
+            const hint = document.createElement('div');
+            hint.style.cssText = 'color:#8fc3ff;font-size:11.5px;margin-top:4px';
+            const label = function () { return '点击展开 ' + (older.length + 1) + ' 个更早版本 ▸'; };
+            hint.textContent = label();
+            entry.appendChild(hint);
+            entry.addEventListener('click', function () {
+                if (entry.dataset.open === '1') {
+                    older.forEach(function (it) { if (it.parentNode) it.parentNode.removeChild(it); });
+                    if (body) body.style.display = 'none';   // 收起时连入口自身内容一并隐藏
+                    hint.textContent = label();
+                    entry.dataset.open = '0';
+                } else {
+                    if (body) body.style.display = '';   // 展开入口自身（第 4 个版本）的内容
+                    const frag = document.createDocumentFragment();
+                    older.forEach(function (it) { frag.appendChild(it); });
+                    entry.parentNode.insertBefore(frag, entry.nextSibling);   // 一次性顺序插入，保持从新到旧
+                    hint.textContent = '点击收起更早版本 ▾';
+                    entry.dataset.open = '1';
+                }
+            });
+            box.appendChild(entry);
+        }
+        if (!shown) { box.remove(); return; }   // 没有要显示的条目就不弹
         document.body.appendChild(box);
         anchorChangelogBox(box);
     }
@@ -3506,14 +3542,33 @@
         } catch (_) {}
         return bottom;
     }
-    // CN 站「修改队伍」编辑模式检测：编辑面板的槽位配置行含「最低等级/最高等级」字样
+    // CN 站「修改队伍/创建队伍」编辑模式检测：编辑面板的槽位配置行含「最低等级/最高等级」字样。
+    // 配置行可能经 React Portal 渲染在 Party_page 容器之外，容器内查不到时用全文档兜底
+    // （这两个词高度专属槽位配置，误判代价只是信息块暂时隐藏，可接受）。
     function cnPartyEditMode() {
         try {
             const container = document.querySelector('[class*="Party_page"]') || document.querySelector('[class^="Party_"]');
-            if (!container) return false;
-            const text = container.textContent || '';
-            return text.indexOf('最低等级') >= 0 && text.indexOf('最高等级') >= 0;
+            const has = function (t) { return t.indexOf('最低等级') >= 0 && t.indexOf('最高等级') >= 0; };
+            if (container && has(container.textContent || '')) return true;
+            return has(document.body ? (document.body.textContent || '') : '');
         } catch (_) { return false; }
+    }
+    // 跨站点「编辑/创建队伍」模式检测：CN 走文字判断；非 CN 无对应文字，改为结构判断——
+    // 编辑/创建页含槽位配置表单（等级/职业等 <input>/<select>），而成员浏览页通常是只读的。
+    // 扫描时排除本脚本注入的信息块（块内带录入框），避免把自己误判为编辑模式。
+    function partyEditMode() {
+        if (IS_CN_SITE && cnPartyEditMode()) return true;
+        try {
+            const container = document.querySelector('[class*="Party_page"]') || document.querySelector('[class^="Party_"]');
+            if (!container) return false;
+            const ctrls = container.querySelectorAll('input,select,textarea');
+            for (let i = 0; i < ctrls.length; i++) {
+                const c = ctrls[i];
+                if (c.closest && c.closest('.' + AURA_INFO_CLASS)) continue;   // 排除本脚本录入框
+                return true;
+            }
+        } catch (_) {}
+        return false;
     }
     // CN 站信息块重定位：左/宽取列根（整列）矩形，顶部取「列内最大底边」（fixed 不受 overflow 裁剪影响）
     function repositionCnAuraBlocks() {
@@ -3556,9 +3611,9 @@
             removeAuraInfoBlocks(); return;
         }
         void refreshAuraServerData();   // 缓存过期时后台拉取共享空间数据，完成后会再触发一次同步
-        if (IS_CN_SITE && cnPartyEditMode()) {
-            // CN 站「修改队伍」编辑模式：信息块会挡住槽位操作区 → 移除，退出编辑后自动恢复
-            cnAuraLog('编辑模式，隐藏信息块');
+        if (partyEditMode()) {
+            // 编辑/创建队伍模式：信息块会挡住槽位操作区 → 移除，退出编辑后自动恢复
+            if (IS_CN_SITE) cnAuraLog('编辑模式，隐藏信息块');
             removeAuraInfoBlocks(); return;
         }
         const members = collectPartyMemberNames();
@@ -3596,6 +3651,7 @@
         const allocation = (readyPos.length && recoKeys.length)
             ? assignAurasUnique(readyPos.map(function (i) { return infos[i]; }), recoKeys)
             : null;
+        const usedRoots = [];
         nameEls.forEach(function (el, i) {
             try {
             const x = infos[i];
@@ -3630,6 +3686,7 @@
             // 信息块放进成员列根节点内部末尾：撑高根节点，显示在整张卡片下方（不新增网格列）
             const slotRoot = auraSlotRootFor(el, container, nameEls);
             if (!slotRoot || !slotRoot.parentNode) return;
+            if (usedRoots.indexOf(slotRoot) < 0) usedRoots.push(slotRoot);
             let block = null;
             for (let i = 0; i < slotRoot.children.length; i++) {
                 const c = slotRoot.children[slotRoot.children.length - 1 - i];
@@ -3685,6 +3742,14 @@
                 block.dataset.sig = html;
             }
             } catch (e) { if (IS_CN_SITE) try { console.warn('[KUNPO][CN] 渲染异常:', e); } catch (_) {} }
+        });
+        // 清理「孤儿块」：根节点不在本次成员列里的旧块（创建队伍页残留、离开队伍后
+        // 根节点被复用/卸载的块）。两站都会出现（CN 的 fixed 块悬空在中央，非 CN 的块
+        // 卡在错位的列里），必须显式移除；否则要退出队伍页重进才会消失。
+        document.querySelectorAll('.' + AURA_INFO_CLASS).forEach(function (block) {
+            const root = block.__cnSlotRoot || block.parentNode;
+            if (!root) return;
+            if (usedRoots.indexOf(root) < 0 && block.parentNode) block.parentNode.removeChild(block);
         });
         if (IS_CN_SITE) {
             repositionCnAuraBlocks();
