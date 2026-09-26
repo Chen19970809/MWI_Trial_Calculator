@@ -31,7 +31,8 @@
         '1.0.8': '1. 面板显示上次上传配装时间\n'
             + '2. 每周四显示上传提醒（当天已上传则不提示）\n'
             + '3. 显示数据拉取状态\n'
-            + '4. 每次更新后显示更新内容',
+            + '4. 主面板显示当前版本号\n'
+            + '5. 每次更新后显示更新内容',
         '1.0.7': '1.减少数据拉取次数\n'
             + '2. 隐藏手动显示排刀按钮（改自动了）\n'
             + '3. 本地存储云函数地址和口令，下次更新后隐藏，需要手动填',
@@ -467,7 +468,8 @@
         });
 
         const heading = document.createElement('strong');
-        heading.textContent = 'KUNPO 试炼专用';
+        // 标题带上版本号，方便一眼确认成员装的是哪一版（SCRIPT_VERSION 与脚本头部 @version 同步）
+        heading.textContent = 'KUNPO试炼 ' + SCRIPT_VERSION;
         heading.style.cssText = 'display:block;font-size:14px;margin:0 0 6px 0';
 
         const collapseBtn = document.createElement('button');
