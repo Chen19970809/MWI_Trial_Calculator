@@ -6893,7 +6893,9 @@ function slimMemberForUpload(p) {
 // 统一上传入口：按当前通道自动分发。cloudSrc==='cos' → COS（腾讯云函数），
 // 否则 → jsonbin。发布试炼/调整技能/顶栏上传按钮都走它，避免 jsonbin 配额耗尽后写死通道导致全员无法上传。
 async function uploadToServerAuto() {
-  return (state.cloudSrc === 'cos') ? uploadToServerCos() : uploadToServer();
+  const cos = state.cloudSrc === 'cos';
+  console.log('[KUNPO计算器] 上传通道=' + (cos ? 'COS' : 'jsonbin') + ' guild=' + state.guild + ' bin=' + state.binId);
+  return cos ? uploadToServerCos() : uploadToServer();
 }
 // 用户点顶栏"上传"按钮触发的手动同步。个人端未拉取时拒绝，避免覆盖别人。
 async function uploadToServer() {
@@ -6901,6 +6903,7 @@ async function uploadToServer() {
   if (!isGuildLeader() && !state.hasPulled) { alert(t('pullFirstAlert')); return; }
   if (isUploading) { alert(t('uploading')); return; }
   isUploading = true;
+  console.log('[KUNPO计算器] 上传通道=jsonbin guild=' + state.guild + ' bin=' + state.binId);
   const btn = document.getElementById('btn-upload');
   if (btn) { btn.disabled = true; btn.classList.add('busy'); }
   let uploadOk = false;
@@ -7280,6 +7283,7 @@ async function uploadToServerCos() {
   if (!isGuildLeader() && !state.hasPulled) { alert(t('pullFirstAlert')); return; }
   if (isUploading) { alert(t('uploading')); return; }
   isUploading = true;
+  console.log('[KUNPO计算器] 上传通道=COS guild=' + state.guild + ' bin=' + state.binId);
   const btn = document.getElementById('btn-upload-cos');
   if (btn) { btn.disabled = true; btn.classList.add('busy'); }
   let mergeFail = null;
