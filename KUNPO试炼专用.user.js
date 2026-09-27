@@ -1920,8 +1920,16 @@
                     lifeMatched = true;
                 }
             });
-            // 技能面板
-            let skills = (assignmentState.doc && assignmentState.doc.s && prof) ? assignmentState.doc.s[prof] : null;
+            // 技能面板：按「战斗掩码 slug + 职业」联合查询技能配置（s[战斗试炼slug][职业]），
+            // 与网页端按战斗1/战斗2 分别配置一致；兼容旧格式（s[职业] 未按战斗拆分）。
+            let skills = null;
+            if (assignmentState.doc && assignmentState.doc.s && prof) {
+                for (let si = 0; si < slugs.length; si++) {
+                    const byProf = assignmentState.doc.s[slugs[si]];
+                    if (byProf && byProf[prof]) { skills = byProf[prof]; break; }
+                }
+                if (!skills && assignmentState.doc.s[prof]) skills = assignmentState.doc.s[prof];
+            }
             // 光环设置：检测到当前 name 有单独的光环设置 → 光环技能固定为光环设置中的光环（覆盖职业技能配置）
             const myAura = (assignmentState.doc && assignmentState.doc.au) ? assignmentState.doc.au[me.name] : null;
             if (myAura) {

@@ -154,9 +154,10 @@ h2 { font-size:16px; margin:10px 0 8px; color:var(--text-muted); }
 /* 战斗为试炼1 → 淡紫；试炼2 → 深紫 */
 .aura-data-table tr.aura-row-heal-t1 td { background:rgba(199, 88, 247, 0.315); }
 .aura-data-table tr.aura-row-heal-t2 td { background:rgba(232, 82, 252, 0.575); }
-/* 一行两块；窄屏自动退回一块一行 */
-.skill-config-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px; width:100%; align-content:start; }
-@media (max-width:720px){ .skill-config-grid { grid-template-columns:minmax(0,1fr); } }
+/* 技能配置：左栏=战斗1职业，右栏=战斗2职业；左右各自纵向排列，区域 overflow:auto 支持滚动 */
+.skill-config-cols { display:flex; align-items:flex-start; gap:12px; width:100%; }
+.skill-config-col { flex:1 1 0; min-width:300px; display:flex; flex-direction:column; gap:8px; }
+.skill-config-col-head { font-size:13px; font-weight:700; color:var(--text); padding:3px 4px; border-bottom:2px solid var(--accent); margin-bottom:2px; }
 .skill-config-block { display:flex; align-items:center; gap:8px; min-width:0; padding:5px 7px; border:1px solid var(--border); border-radius:6px; background:var(--conn-bg); }
 .skill-config-prof { flex:0 0 auto; max-width:76px; font-size:12px; font-weight:600; line-height:1.2; color:var(--text); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .skill-config-cells { flex:1 1 auto; min-width:0; display:flex; align-items:flex-end; gap:8px; flex-wrap:wrap; }
@@ -1070,7 +1071,7 @@ const I18N = {
     buffGroupTitle:'加成与约束', buffGroupTip:'点击折叠/展开：全局加成、公会建筑、公会神龛、进度约束',
     clearBattleEdit:'清除单独修改', clearBattleEditTip:'清除所有成员的单独指定，战斗结果恢复按「职业是否属于出战职业」自动计算',
     publishPlanBtn:'发布试炼', planDeadline:'截止时间', planDeadlineTip:'把每个人的生活分配、战斗分配、职业选择连同截止时间一起上传。截止前其他人点「获取」会读取该排刀；超过截止时间后不再读取并提示「排刀未发布」。',
-    planNeedDeadline:'请先选择截止时间', planDeadlinePassed:'截止时间已过，请重新选择', planPublished:'排刀已发布并上传（截止 {t}）',
+    planNeedDeadline:'请先选择截止时间', planDeadlinePassed:'请注意，本次发布排刀的截止时间已过。', planPublished:'排刀已发布并上传（截止 {t}）',
     planNotPublished:'排刀未发布', planActive:'排刀生效中，截止 {t}', planExpired:'排刀已过期',
     adjustSkillBtn:'调整技能', adjustSkillTooltip:'仅更新技能设置与光环设置，保留原排刀的成员分配与截止时间，无需重新选截止时间', adjustNeedPlan:'请先发布试炼再调整技能/光环', adjustOk:'技能/光环设置已更新上传',
     planDeadlineDay:'日期', planDeadlineTime:'时间', planDeadlineNextFriday:'下周五', planDeadlineBefore:'前七天', planDeadlineAfter:'后七天', planDeadlineDblclick:'单击展开日期选择（今天前后各七天，单击即生效）', wkShort:'周日,周一,周二,周三,周四,周五,周六',
@@ -3984,29 +3985,29 @@ function skillPlanAvailable() {
   const dl = Date.parse(p.t);
   return Number.isFinite(dl) && Date.now() <= dl;
 }
-// 技能配置显示的职业集合：
-//   有有效排刀时 = 本地出战职业 ∪ 服务器 plan.s 的职业（成员端本地为空 → 即服务器职业）；
-//   无排刀时 = 本地出战职业。顺序沿用《所有职业》下拉（state.professions）。
-function skillConfigProfessions() {
-  // 1. 先判断排刀发布（不管是否过期）：有就统计并去重排刀里每个成员的职业
-  if (state.plan && state.plan.m) {
-    const set = new Set();
-    Object.keys(state.plan.m).forEach(function(name) {
-      const e = state.plan.m[name];
-      if (Array.isArray(e) && e[2]) set.add(e[2]);
-    });
-    if (set.size) return Array.from(set);
-  }
-  // 2. 没有排刀（或排刀里无职业）→ 统计并去重展示分配结果中每个成员的职业
-  const set2 = new Set();
+// 技能配置显示的职业集合（按战斗1/战斗2 分左右两栏）：
+//   数据源 = 当前「展示分配」页面里每个成员实时显示的战斗归属与职业（会长端=正在编辑的排刀，成员端=生效排刀），
+//   而非已发布的 state.plan.m 快照——这样一边调排刀一边调技能时，左右两栏会随展示分配实时变化。
+//   战斗归属取 displayMemberBattleIcons(p)（含单独指定与按职业自动计算），职业取 displayMemberProfession(p)。
+//     展示归属含 displayBattleTrialIcons[0] 位 → 左栏（战斗1）
+//     展示归属含 displayBattleTrialIcons[1] 位 → 右栏（战斗2）
+//   未分配（无战斗图标）或只分配到其它战斗（非战斗1/战斗2）的职业不显示；
+//   同一职业可同时出现在两栏（成员被分到不同战斗时），左右各自去重。
+function skillConfigSides() {
+  const b1 = (state.displayBattleTrialIcons && state.displayBattleTrialIcons[0]) || 0;
+  const b2 = (state.displayBattleTrialIcons && state.displayBattleTrialIcons[1]) || 1;
+  const left = new Set(), right = new Set();
   (state.members || []).forEach(function(p) {
-    if (!p) return;
+    if (!p || !p.name) return;
     const prof = displayMemberProfession(p);
-    if (prof) set2.add(prof);
+    if (!prof) return;
+    const icons = displayMemberBattleIcons(p);
+    let mask = 0;
+    icons.forEach(function(idx) { if (idx >= 0 && idx < BATTLE_TRIAL_ICONS.length) mask |= (1 << idx); });
+    if (mask & (1 << b1)) left.add(prof);
+    if (mask & (1 << b2)) right.add(prof);
   });
-  if (set2.size) return Array.from(set2);
-  // 3. 两者都无数据 → 空列表，渲染时显示「请先排刀」
-  return [];
+  return { left: Array.from(left), right: Array.from(right) };
 }
 // 光环类图标：5 个 *_aura，加上疯狂 / 无敌 / 复活（与游戏内 AURA_MAP 口径一致）。
 function isAuraIcon(id) {
@@ -4020,27 +4021,59 @@ function skillAbilityList(field) {
 function skillAbilityById(id) {
   return COMBAT_ABILITY_ICONS.find(function(ab) { return ab.id === id; }) || null;
 }
-// 把服务器 plan.s[prof] 的 slug 还原为 ability_<slug>。
-function skillConfigFromServer(prof) {
-  if (!skillPlanAvailable() || !state.plan.s || !state.plan.s[prof]) return null;
-  const s = state.plan.s[prof];
+// 侧别（L=战斗1 / R=战斗2）→ 战斗试炼 slug（与 BATTLE_TRIAL_ICONS / 游戏脚本 maskToSlugs 对齐）。
+function battleTrialSlugOfSide(side) {
+  const i = (side === 'L') ? (state.displayBattleTrialIcons && state.displayBattleTrialIcons[0]) : (state.displayBattleTrialIcons && state.displayBattleTrialIcons[1]);
+  return (Number.isInteger(i) && i >= 0 && i < BATTLE_TRIAL_ICONS.length) ? BATTLE_TRIAL_ICONS[i] : null;
+}
+// 把服务器 plan.s[slug][prof] 的 slug 还原为 ability_<slug>。
+function skillConfigFromServer(slug, prof) {
+  if (!skillPlanAvailable() || !state.plan.s || !slug || !prof) return null;
+  const byProf = state.plan.s[slug];
+  const s = byProf && byProf[prof];
+  if (!s) return null;
   const wrap = function(v) { return v ? 'ability_' + v : null; };
   return { aura: wrap(s.a), s1: wrap(s.s1), s2: wrap(s.s2), s3: wrap(s.s3), s4: wrap(s.s4) };
 }
-// 取某职业当前生效的技能配置：本地优先，本地为空的位置继承服务器旧数据。
-function skillConfigOf(prof) {
+// 取某「侧别+职业」当前生效的技能配置：本地优先（key = 侧别|职业），本地为空的位置继承服务器旧数据。
+// 兼容旧格式：本地无侧别 key 时回退到无侧别 key（prof），保证历史数据仍显示。
+function skillConfigOf(side, prof) {
   if (!state.skillConfigByProf) state.skillConfigByProf = {};
-  const local = state.skillConfigByProf[prof] || {};
-  const srv = skillConfigFromServer(prof) || {};
+  const local = state.skillConfigByProf[side + '|' + prof] || state.skillConfigByProf[prof] || {};
+  const slug = battleTrialSlugOfSide(side);
+  const srv = (slug && prof) ? skillConfigFromServer(slug, prof) : null;
   const out = { aura: null, s1: null, s2: null, s3: null, s4: null };
   ['aura', 's1', 's2', 's3', 's4'].forEach(function(k) {
-    out[k] = local[k] || srv[k] || null;
+    out[k] = local[k] || (srv && srv[k]) || null;
   });
   return out;
 }
+// 技能配置上传结构：s[战斗试炼slug][职业] = {a,s1..s4}（slug 与游戏脚本 maskToSlugs 对应，
+// 使其能按成员战斗掩码 + 职业联合查询）。本地 key 为「侧别|职业」，按当前战斗1/战斗2 归属映射到 slug。
+// 旧格式（key = prof，无侧别）无法归属战斗，跳过上传（展示仍走 skillConfigOf 兜底）。
+function buildSkillConfigMap() {
+  const byProf = state.skillConfigByProf || {};
+  const s = {};
+  Object.keys(byProf).forEach(function(key) {
+    const k = String(key);
+    const sep = k.indexOf('|');
+    if (sep < 0) return; // 旧格式无侧别，跳过上传
+    const side = k.slice(0, sep);
+    const prof = k.slice(sep + 1);
+    const cfg = byProf[key];
+    if (!cfg || !cfg.aura) return; // 仅上传光环非空的职业配置
+    const slug = battleTrialSlugOfSide(side);
+    if (!slug) return;
+    if (!s[slug]) s[slug] = {};
+    const slugId = function(v) { return v ? String(v).replace(/^ability_/, '') : ''; };
+    s[slug][prof] = { a: slugId(cfg.aura), s1: slugId(cfg.s1), s2: slugId(cfg.s2), s3: slugId(cfg.s3), s4: slugId(cfg.s4) };
+  });
+  return s;
+}
 // 单个格子：未选 → 虚线空框；已选 → 图标 + ▾，点击展开（光环只列光环、技能只列非光环）。
-function skillCellHtml(blockIdx, field, label, value) {
-  const key = 'sk-' + blockIdx + '-' + field;
+// side: 'L'（左栏/战斗1）或 'R'（右栏/战斗2），与块序号组成唯一 key，避免左右两栏索引冲突。
+function skillCellHtml(side, idx, field, label, value) {
+  const key = 'sk-' + side + '-' + idx + '-' + field;
   const open = openSkillDropdown === key;
   const ab = value ? skillAbilityById(value) : null;
   const list = skillAbilityList(field);
@@ -4066,26 +4099,37 @@ function skillCellHtml(blockIdx, field, label, value) {
 function renderSkillConfigArea() {
   const area = document.getElementById('skill-config-area');
   if (!area) return;
-  const profs = skillConfigProfessions();
-  if (!profs.length) {
+  const sides = skillConfigSides();
+  if (!sides.left.length && !sides.right.length) {
     area.innerHTML = '<span class="skill-config-label">'+escHtml(t('skillConfigNoProf'))+'</span>';
     return;
   }
-  const blocks = profs.map(function(prof, i) {
-    const cfg = skillConfigOf(prof);
-    const cells = [
-      skillCellHtml(i, 'aura', t('skillConfigAura'), cfg.aura),
-      skillCellHtml(i, 's1', t('skillConfigSkill') + '1', cfg.s1),
-      skillCellHtml(i, 's2', t('skillConfigSkill') + '2', cfg.s2),
-      skillCellHtml(i, 's3', t('skillConfigSkill') + '3', cfg.s3),
-      skillCellHtml(i, 's4', t('skillConfigSkill') + '4', cfg.s4),
-    ].join('');
-    return '<div class="skill-config-block">'+
-      '<div class="skill-config-prof" title="'+escHtml(prof)+'">'+escHtml(prof)+'</div>'+
-      '<div class="skill-config-cells">'+cells+'</div>'+
+  function colHtml(title, list, side) {
+    const blocks = list.map(function(prof, i) {
+      const cfg = skillConfigOf(side, prof);
+      const cells = [
+        skillCellHtml(side, i, 'aura', t('skillConfigAura'), cfg.aura),
+        skillCellHtml(side, i, 's1', t('skillConfigSkill') + '1', cfg.s1),
+        skillCellHtml(side, i, 's2', t('skillConfigSkill') + '2', cfg.s2),
+        skillCellHtml(side, i, 's3', t('skillConfigSkill') + '3', cfg.s3),
+        skillCellHtml(side, i, 's4', t('skillConfigSkill') + '4', cfg.s4),
+      ].join('');
+      return '<div class="skill-config-block">'+
+        '<div class="skill-config-prof" title="'+escHtml(prof)+'">'+escHtml(prof)+'</div>'+
+        '<div class="skill-config-cells">'+cells+'</div>'+
+      '</div>';
+    }).join('');
+    return '<div class="skill-config-col">'+
+      '<div class="skill-config-col-head">'+escHtml(title)+'</div>'+
+      blocks+
     '</div>';
-  }).join('');
-  area.innerHTML = '<div class="skill-config-grid">'+blocks+'</div>';
+  }
+  const leftTitle = t('battleTrial') + '1';
+  const rightTitle = t('battleTrial') + '2';
+  area.innerHTML = '<div class="skill-config-cols">'+
+    colHtml(leftTitle, sides.left, 'L') +
+    colHtml(rightTitle, sides.right, 'R') +
+  '</div>';
   positionSkillDropdown();
 }
 function positionSkillDropdown() {
@@ -4306,15 +4350,22 @@ function combatAbilityName(key) {
 }
 function selectSkillIcon(key, iconId, ev) {
   if (ev) ev.stopPropagation();
-  const m = /^sk-(\d+)-(aura|s1|s2|s3|s4)$/.exec(String(key || ''));
+  const m = /^sk-([LR])-(\d+)-(aura|s1|s2|s3|s4)$/.exec(String(key || ''));
   if (!m) return;
-  const profs = skillConfigProfessions();
-  const prof = profs[Number(m[1])];
+  const sides = skillConfigSides();
+  const side = m[1];
+  const list = (side === 'L') ? sides.left : sides.right;
+  const prof = list[Number(m[2])];
   if (!prof) return;
   if (!skillAbilityById(iconId)) return;
   if (!state.skillConfigByProf) state.skillConfigByProf = {};
-  const cfg = Object.assign(skillConfigOf(prof), { [m[2]]: iconId });
-  state.skillConfigByProf[prof] = cfg;
+  const cfg = Object.assign(skillConfigOf(side, prof), { [m[3]]: iconId });
+  state.skillConfigByProf[side + '|' + prof] = cfg;
+  // 不对称复制：在战斗1(L) 里改某职业、且该职业也出现在战斗2(R) 时，自动把配置复制到 R；
+  // 战斗2(R) 编辑不反向复制。注意写副本而非同一对象，否则之后编辑 R 会因对象共享连带改 L。
+  if (side === 'L' && (sides.right.indexOf(prof) >= 0)) {
+    state.skillConfigByProf['R|' + prof] = Object.assign({}, cfg);
+  }
   try { localStorage.setItem('mwi_skill_config_by_prof', JSON.stringify(state.skillConfigByProf)); } catch(e) {}
   openSkillDropdown = null;
   renderSkillConfigArea();
@@ -4455,20 +4506,7 @@ function buildDisplayPlan(deadlineIso) {
     memberBattleIconsRaw(p).forEach(idx => { if (idx >= 0 && idx < BATTLE_TRIAL_ICONS.length) mask |= (1 << idx); });
     m[String(p.name).trim()] = [life, mask, displayMemberProfessionRaw(p) || ''];
   });
-  const s = {};
-  const byProf = state.skillConfigByProf || {};
-  Object.keys(byProf).forEach(function(prof) {
-    const cfg = byProf[prof];
-    if (!cfg || !cfg.aura) return; // 仅上传光环非空的职业配置
-    const slug = id => id ? String(id).replace(/^ability_/, '') : '';
-    s[prof] = {
-      a: slug(cfg.aura),
-      s1: slug(cfg.s1),
-      s2: slug(cfg.s2),
-      s3: slug(cfg.s3),
-      s4: slug(cfg.s4),
-    };
-  });
+  const s = buildSkillConfigMap();
   // k：试炼下标 → 技能下标（SKILL_KEYS 的顺序），供外部脚本把生活试炼 idx 翻成技能名。
   const k = (state.trials || []).map(function(cfg) { return Number(cfg && cfg.skill) || 0; });
   // au：光环设置（name → 光环 slug，如 speed_aura）。战斗试炼1/2 各光环列的成员序号 → 玩家 name。
@@ -4622,15 +4660,8 @@ async function adjustSkillAura() {
   if (!state.isShared || !state.binId || !state.encKey) { alert(t('notShared')); return; }
   if (!state.plan || !state.plan.t) { alert(t('adjustNeedPlan')); return; }
   const base = state.plan;
-  // 技能配置：仅光环非空的职业
-  const s = {};
-  const byProf = state.skillConfigByProf || {};
-  Object.keys(byProf).forEach(function (prof) {
-    const cfg = byProf[prof];
-    if (!cfg || !cfg.aura) return;
-    const slug = id => id ? String(id).replace(/^ability_/, '') : '';
-    s[prof] = { a: slug(cfg.aura), s1: slug(cfg.s1), s2: slug(cfg.s2), s3: slug(cfg.s3), s4: slug(cfg.s4) };
-  });
+  // 技能配置：按战斗1/战斗2 拆分（s[战斗slug][职业]），仅光环非空的职业
+  const s = buildSkillConfigMap();
   // 光环设置：战斗试炼1/2 各光环列的成员序号 → 玩家 name
   const au = {};
   for (let b = 0; b < 2; b++) {
@@ -4661,7 +4692,7 @@ function updatePlanStatusText() {
   }
   updatePlanButtons();
 }
-// 《调整技能》按钮显隐：仅当已是会长且已发布过排刀（plan 存在且有截止时间）时显示。
+// 《调整技能》按钮显隐：已是会长且本地/远端已存在排刀数据（plan 存在且有截止时间）即显示，无论是否过期。
 function updatePlanButtons() {
   const btn = document.getElementById('btn-adjust-skill');
   if (btn) btn.style.display = (isGuildLeader() && state.plan && state.plan.t) ? '' : 'none';
@@ -7813,11 +7844,13 @@ async function pullFromServer(provider) {
   } else {
     clearDirty();
   }
-  // 排刀（plan）：超过截止时间 → 丢弃，不读取分配结果并提醒「排刀未发布」。
+  // 排刀（plan）：超过截止时间 → 提醒「排刀未发布」，但保留排刀数据不丢弃，
+  // 使「调整技能」按钮在已拉取到（即便过期）排刀时始终可见。过期不套用分配结果由
+  // displayPlanActive()/skillPlanAvailable() 的截止时间守卫保证，与初始化加载路径一致。
   let planExpired = false;
   if (state.plan && state.plan.t) {
     const dl = Date.parse(state.plan.t);
-    if (!Number.isFinite(dl) || Date.now() > dl) { state.plan = null; planExpired = true; }
+    if (!Number.isFinite(dl) || Date.now() > dl) { planExpired = true; }
   }
   renderAll();
   if (state.members.length > 0) calculate();
