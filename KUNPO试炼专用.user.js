@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         KUNPO试炼专用
 // @namespace    https://www.milkywayidle.com/
-// @version      1.0.9
+// @version      1.1.0
 // @description  上传等级、成就、房屋、迷宫配装、神龛到计算器
 // @author       MonsterFC、MusoAlpha、KUNPO成员测试
 // @license      MIT
@@ -24,10 +24,12 @@
 (function () {
     'use strict';
 
-    const SCRIPT_VERSION = '1.0.9';
+    const SCRIPT_VERSION = '1.1.0';
 
     // ── 更新日志：key = 版本号，value = 中文更新内容；发新版本时在顶部加一条即可 ──
     const CHANGELOG = {
+        '1.1.0': '1. 实现战斗试炼同职业不同怪物分别配置技能\n'
+            + '2.新增未参加战斗试炼的提示 ',
         '1.0.9': '1. 修复CN网站因排行榜徽章导致的卡死\n'
             + '2. 折叠老版本更新日志\n'
             + '3. 作者栏新增成员\n'
@@ -229,10 +231,70 @@
         // （进入试炼界面 / 轮询都不再触发），只有手动点「显示排刀」或改设置才强制拉。
         doc: null, fetchedAt: 0, fetchedOnce: false, inFlight: false,
         timer: 0, pollTimer: null, observer: null, rendering: false,
+        forceShowExpired: false,  // 用户手动「显示排刀」强制展示过期排刀时置 true；重新进入界面/拉到新排刀时复位
         // 试炼页面是否已打开（页面里有试炼卡片）：用于「刚打开页面的那一次」才提示。
         cardsPresent: false,
         lastCharacterName: '',
     };
+
+    // 调试桥：控制台可排查「排刀拉不到 / 过期」等问题。state 在下方声明，仅在调用时读取，安全。
+    // 注意：脚本 @grant 了 GM_*，运行在隔离世界，脚本内 window 与页面主世界 window 不同；
+    // 必须把桥挂到 unsafeWindow 才能在页面控制台（主世界）访问到。
+    try {
+        const bridge = {
+            get doc() { return assignmentState.doc; },
+            charName() { return String((state.character && state.character.name) || '').trim(); },
+            assignmentConfig() { return assignmentConfig(); },
+            guildRestricted() { return guildRestricted(); },
+            useCosBackend() { return useCosBackend(assignmentConfig()); },
+            async fetchPlan(force) { return fetchPlan(!!force); },
+            async diag() {
+                const cfg = assignmentConfig();
+                console.log('【calculator URL 解析 cfg】', cfg);
+                if (!cfg) { console.log('⚠ cfg 为空：设置里「计算器地址」缺少 bin/pwd 参数（guild 默认 KUNPO）'); return; }
+                console.log('【guildRestricted】', guildRestricted(), '（true=不进 COS，回退 jsonbin → 读不到就无排刀）');
+                console.log('【useCosBackend】', useCosBackend(cfg), '（true=走 COS 读取；false=走 jsonbin）');
+                console.log('【当前角色】', String((state.character && state.character.name) || '').trim() || '(未识别)');
+                try {
+                    const plan = await fetchPlan(true);
+                    console.log('【拉取成功，plan 存在，顶层字段】', plan && Object.keys(plan));
+                } catch (e) {
+                    console.log('【拉取失败 / 无 plan】', e && e.message ? e.message : e);
+                }
+            },
+            // 光环推荐诊断：在组队页面执行 __KUNPO.auraDiag()，打印 syncAuraRecoInfo 的每个判定条件，
+            // 定位信息块被哪个静默分支拦住（开关/容器/编辑模式误判/名字数不齐/槽位根解析失败/服务器数据缺失）。
+            auraDiag() {
+                const c = document.querySelector('[class*="Party_page"]') || document.querySelector('[class^="Party_"]');
+                console.log('【① 容器】', c ? c.className : 'NULL（找不到 Party 容器 → 必然无信息块）');
+                console.log('【② 开关 auraRecoEnabled】', auraRecoEnabled());
+                console.log('【③ partyEditMode()】', partyEditMode(), '（true=判定成编辑/创建页 → 信息块被移除）');
+                try {
+                    const ctrls = c ? Array.from(c.querySelectorAll('input,select,textarea')) : [];
+                    console.log('【④ 容器内表单控件】', ctrls.length, ctrls.slice(0, 6).map(function (e) {
+                        return e.tagName + (e.type ? '[' + e.type + ']' : '') + '.' + String(e.className || '').slice(0, 40);
+                    }));
+                } catch (_) {}
+                try {
+                    const names = collectPartyMemberNames();
+                    const nameEls = c ? auraNameElements(c) : [];
+                    console.log('【⑤ members】', names.length, names);
+                    console.log('【⑥ nameEls】', nameEls.length, '（⑤⑥ 不相等或为 0 → 直接移除信息块）');
+                    if (c && nameEls.length) {
+                        const roots = nameEls.map(function (el) { return auraSlotRootFor(el, c, nameEls); });
+                        console.log('【⑦ slotRoot 解析】', roots.map(function (r) { return r ? 'ok' : 'FAIL'; }),
+                            '（有 FAIL → 对应成员不插信息块）');
+                    }
+                } catch (e) {
+                    console.log('【⑤~⑦ 异常】', e && e.message ? e.message : e);
+                }
+                console.log('【⑧ 服务器光环数据 auraServer.byName】',
+                    auraServer.byName ? (Object.keys(auraServer.byName).length + ' 人') : 'null（本会话还没拉到共享空间数据）');
+            }
+        };
+        if (typeof unsafeWindow !== 'undefined') unsafeWindow.__KUNPO = bridge;
+        window.__KUNPO = bridge;
+    } catch (_) { /* ignore */ }
 
     // 恢复 MessageEvent 原生 getter / 移除 resize 监听时需要这两个引用。
     let originalMessageDataGetter = null;
@@ -548,7 +610,7 @@
             cursor: 'pointer',
             font: '600 12px/1 system-ui, sans-serif',
         });
-        assignBtn.addEventListener('click', () => { void refreshAssignment({ force: true }); });
+        assignBtn.addEventListener('click', () => { void refreshAssignment({ manual: true }); });
         const setBtn = document.createElement('button');
         setBtn.type = 'button';
         setBtn.textContent = '⚙ 设置';
@@ -1814,6 +1876,9 @@
             '.kunpo-aura-holder-note{margin:9px 0 2px;padding:8px 10px;border:1px solid #ffd60a99;border-left:4px solid #ffd60a;border-radius:7px;background:#33290dd9;color:#ffe14d;font:700 12px/1.45 system-ui,sans-serif}' +
             '.kunpo-aura-insanity-note{margin:9px 0 2px;padding:8px 10px;border:1px solid #ffb34099;border-left:4px solid #ffb340;border-radius:7px;background:#33280fdd;color:#ffb340;font:700 12px/1.45 system-ui,sans-serif}' +
             '.kunpo-aura-holder-note + .kunpo-aura-insanity-note{margin-top:6px}' +
+            '.kunpo-skill-panel.kunpo-nobattle-notice{border-color:#ffd60a99;border-left-color:#ffd60a;background:linear-gradient(105deg,#33290dd9,#171a24e8)}' +
+            '.kunpo-skill-panel.kunpo-nobattle-notice strong{color:#ffd60a}' +
+            '.kunpo-nobattle-msg{margin-top:6px;color:#ffe14d;font-size:12.5px;line-height:1.7}' +
             '@media(max-width:760px){.kunpo-skill-grid{gap:3px}.kunpo-skill-chip{padding:5px 2px;font-size:10px}.kunpo-skill-icon{width:28px;height:28px;flex-basis:28px}}';
         document.head.appendChild(style);
     }
@@ -1876,10 +1941,31 @@
         host.insertAdjacentElement('afterend', panel);
         return true;
     }
+    // 生活试炼已分配、但战斗试炼未分派时，在技能配置位置显示联系会长的提示（替代战斗技能面板）。
+    function renderNoBattleNotice(anchorCard, prof) {
+        const anchor = anchorCard && anchorCard.parentElement;
+        const host = anchor && anchor.parentElement;
+        if (!host || !anchor) return false;
+        const panel = document.createElement('section');
+        panel.className = 'kunpo-skill-panel kunpo-nobattle-notice';
+        panel.setAttribute('aria-label', '排刀提示');
+        const heading = document.createElement('div');
+        heading.className = 'kunpo-skill-panel-heading';
+        const title = document.createElement('strong');
+        title.textContent = '排刀提示';
+        heading.appendChild(title);
+        const msg = document.createElement('div');
+        msg.className = 'kunpo-nobattle-msg';
+        msg.textContent = '您当前统计到的职业为：' + (prof || '未知') + '（排刀中读取到的职业），未被分派战斗试炼，若有误或有副职业请联系会长！';
+        panel.append(heading, msg);
+        host.insertAdjacentElement('afterend', panel);
+        return true;
+    }
     // opts.announce：true = 用户手动触发（必定提示）；false/缺省 = 自动重渲染（按节流规则静默）
     function renderAssignmentUi(opts) {
         if (!document.body) return;
         const announce = !!(opts && opts.announce);
+        const expired = !!(opts && opts.expired);
         if (trialEndState.silenced) return;
         assignmentState.rendering = true;
         try {
@@ -1897,6 +1983,7 @@
             const lifeName = lifeTrialName(lifeIdx);
             let firstCard = null;
             let lifeMatched = false;
+            let lifeCard = null;
             cards.forEach(function (card) {
                 const hit = slugs.filter(function (s) { return cardMatchesSlug(card, s); });
                 if (hit.length) {
@@ -1918,6 +2005,7 @@
                     badge.textContent = '请参加·' + lifeName;
                     card.appendChild(badge);
                     lifeMatched = true;
+                    if (!lifeCard) lifeCard = card;
                 }
             });
             // 技能面板：按「战斗掩码 slug + 职业」联合查询技能配置（s[战斗试炼slug][职业]），
@@ -1936,29 +2024,51 @@
                 skills = Object.assign({}, skills || {});
                 skills.a = myAura;
             }
-            if (firstCard && skills && (skills.a || skills.s1 || skills.s2 || skills.s3 || skills.s4)) {
+            // 生活试炼已分配、但战斗试炼未分派 → 在技能配置位置显示提示，不渲染战斗技能面板。
+            const lifeAssigned = Number.isInteger(lifeIdx) && lifeIdx >= 0;
+            if (slugs.length === 0 && lifeAssigned) {
+                const anchorCard = firstCard || lifeCard || cards[0];
+                renderNoBattleNotice(anchorCard, prof);
+            } else if (firstCard && skills && (skills.a || skills.s1 || skills.s2 || skills.s3 || skills.s4)) {
                 renderSkillPanel(firstCard, prof, skills, myAura);
             }
-            announceAssignment('已高亮排刀：' + (slugs.length ? slugs.map(battleTrialName).join('、') : '无战斗') + ' / ' + lifeName + (lifeMatched ? '' : '（未匹配到生活卡片）'), announce);
+            announceAssignment('已高亮排刀：' + (slugs.length ? slugs.map(battleTrialName).join('、') : '无战斗') + ' / ' + lifeName + (lifeMatched ? '' : '（未匹配到生活卡片）') + (expired ? '（排刀已过期，仍按最近一次排刀显示）' : ''), announce);
         } finally {
             assignmentState.rendering = false;
         }
     }
-    // 本会话是否已经成功拉过一次排刀。拉过就不再自动拉（不再有 5 分钟 / 2 分钟 TTL 轮询），
-    // 只有手动点「显示排刀」或改设置（force: true）才会再发请求。
-    function assignmentFresh() { return !!assignmentState.fetchedOnce; }
-    async function refreshAssignment({ force = false } = {}) {
+    // 拉取策略：本会话已缓存过排刀（assignmentState.doc 非空）且非强制重拉时，
+    // 手动点「显示排刀」/ 进入试炼界面都直接读缓存渲染，不再发请求；
+    // 只有本会话还没缓存、或改设置（force: true）时才走网络重新拉取。
+    async function refreshAssignment({ force = false, manual = false } = {}) {
         if (trialEndState.silenced) return;
-        if (guildBlocked()) { announceAssignment('当前公会不是 KUNPO，排刀高亮已停用', force); return; }
+        if (guildBlocked()) { announceAssignment('当前公会不是 KUNPO，排刀高亮已停用', force || manual); return; }
         const name = String((state.character && state.character.name) || '').trim();
-        if (!name) { announceAssignment('等待读取游戏角色名', force); return; }
-        if (!force && assignmentFresh()) {
-            // 已拉过（命中缓存）：照常按缓存渲染并提示一次。
-            // announceAssignment 内部会判断「是否在试炼界面」，所以其它场景不会乱弹。
-            if (assignmentState.doc && document.querySelector(TRIAL_CARD_SELECTOR)) {
-                renderAssignmentUi({ announce: true });
-            } else if (!assignmentState.doc) {
-                announceAssignment('排刀未发布', false);
+        if (!name) { announceAssignment('等待读取游戏角色名', force || manual); return; }
+        // 已有缓存数据且非强制重拉 → 直接读缓存渲染，不再发请求。
+        // （手动点「显示排刀」也走这里：本会话已拉过就别重复请求；只有还没缓存/改了设置才往下发网络请求）
+        if (assignmentState.doc && !force) {
+            if (document.querySelector(TRIAL_CARD_SELECTOR)) {
+                const dl = assignmentState.doc.t ? Date.parse(assignmentState.doc.t) : NaN;
+                const expired = Number.isFinite(dl) && Date.now() > dl;
+                if (expired) {
+                    if (manual) {
+                        // 手动点「显示排刀」：过期排刀仍渲染，并置位让 observer 不清除高亮
+                        assignmentState.forceShowExpired = true;
+                        renderAssignmentUi({ announce: true, expired: true });
+                    } else {
+                        // 自动进入试炼界面：过期排刀不渲染，仅提醒（并清除手动渲染残留的高亮）
+                        assignmentState.forceShowExpired = false;
+                        clearAssignmentUi();
+                        announceAssignment('排刀信息已过期，尚未发布新排刀', false);
+                    }
+                } else {
+                    assignmentState.forceShowExpired = false;
+                    renderAssignmentUi({ announce: true, expired: false });
+                }
+            } else {
+                // 不在试炼界面：仅提示已就绪，不渲染
+                announceAssignment('排刀数据已就绪，进入试炼页面查看高亮', manual);
             }
             return;
         }
@@ -1966,23 +2076,26 @@
         assignmentState.inFlight = true;
         assignmentState.lastCharacterName = name;
         try {
-            // force（手动点「显示排刀」/ 改设置）才绕过缓存重新拉；
-            // 平时若光环那路已经拉过整份记录，这里直接读缓存，不再发请求。
+            // 走到这里说明「还没缓存」或「强制重拉（force，如改设置）」：发网络请求。
+            // force=true 时 fetchPlan 绕过缓存；force=false 且光环那路已拉过整份记录则读缓存。
             const plan = await fetchPlan(force);
             // 拉取成功即记「已拉过一次」；失败不记，下次进入试炼界面还能重试。
             assignmentState.fetchedOnce = true;
-            // 过期判断（与 index.html 一致）
             const dl = plan && plan.t ? Date.parse(plan.t) : NaN;
-            if (!Number.isFinite(dl) || Date.now() > dl) {
-                assignmentState.doc = null;
-                assignmentState.fetchedAt = Date.now();
-                clearAssignmentUi();
-                announceAssignment('排刀未发布', force);
-                return;
-            }
+            const expired = Number.isFinite(dl) && Date.now() > dl;
             assignmentState.doc = plan;
             assignmentState.fetchedAt = Date.now();
-            renderAssignmentUi({ announce: force });
+            if (expired && !force && !manual) {
+                // 自动（进入试炼界面）遇到过期排刀：不渲染，仅提醒；手动点《显示排刀》仍渲染。
+                assignmentState.forceShowExpired = false;
+                clearAssignmentUi();
+                announceAssignment('排刀信息已过期，尚未发布新排刀', force);
+            } else {
+                // 未过期；或「手动点显示排刀（含过期）」；或强制重拉 → 渲染。
+                // 手动展示过期排刀时置位 forceShowExpired，让 observer 不再清空高亮。
+                assignmentState.forceShowExpired = expired;
+                renderAssignmentUi({ announce: force || manual, expired: expired });
+            }
         } catch (e) {
             const msg = (e && e.message) ? e.message : String(e);
             // 「云端无排刀」= 数据确实拉到了，只是会长还没发布 → 记为已拉取，
@@ -1992,7 +2105,7 @@
             assignmentState.doc = null;
             assignmentState.fetchedAt = Date.now();
             clearAssignmentUi();
-            announceAssignment(noPlan ? '排刀未发布' : ('读取排刀失败：' + msg), force);
+            announceAssignment(noPlan ? '排刀未发布' : ('读取排刀失败：' + msg), force || manual);
         } finally {
             assignmentState.inFlight = false;
         }
@@ -2012,11 +2125,21 @@
             assignmentState.cardsPresent = present;
             if (!present) { lastAnnouncedText = ''; return; }        // 离开界面 → 下次进入再提示一次
             if (opened) {
+                assignmentState.forceShowExpired = false;            // 重新进入：取消上次「手动强制显示过期排刀」
                 onEnterTrialPage();                                  // 进入即判定：结束→静默；否则拉取排刀
                 if (trialEndState.silenced) return;
             }
             if (!assignmentState.doc) return;                        // 还没有排刀数据 → 只做进入检测，不做渲染
+            // 过期排刀：界面内持续刷新/DOM 变动不再重绘高亮，仅提示一次「等待新排刀」；
+            // 除非用户手动点「显示排刀」(forceShowExpired=true) 强制展示。
+            const _dl = assignmentState.doc.t ? Date.parse(assignmentState.doc.t) : NaN;
+            const _expired = Number.isFinite(_dl) && Date.now() > _dl;
             clearTimeout(assignmentState.timer);
+            if (_expired && !assignmentState.forceShowExpired) {
+                clearAssignmentUi();
+                announceAssignment('排刀信息已过期，尚未发布新排刀', opened);
+                return;
+            }
             // 只有「刚进入界面」那一次会提示；界面内的持续刷新一律静默重渲染。
             assignmentState.timer = setTimeout(function () { renderAssignmentUi({ announce: opened }); }, 250);
         });
@@ -3056,9 +3179,9 @@
     // 按当前设置与页面状态同步《推荐光环》按钮的注入/移除
     // （静默不影响光环推荐：试炼结束后该功能仍可用）
     function syncAuraRecoButton() {
-        const optionsEl = document.querySelector(IS_CN_SITE
-            ? '[class*="Party_partyOptions"]'   // CN 站无 .Party_partyOptions__3HGXK（hash 不同），用前缀匹配
-            : '.Party_partyOptions__3HGXK');
+        // 两站统一用前缀匹配：游戏重部署后 CSS Modules 的 hash 后缀会变化，
+        // 写死 .Party_partyOptions__3HGXK 会在 .com 站随游戏更新失灵（CN 站此前已改前缀匹配）。
+        const optionsEl = document.querySelector('[class*="Party_partyOptions"]');
         const existing = document.querySelector('.' + AURA_RECO_BTN_CLASS);
         if (!auraRecoEnabled() || !optionsEl) {
             if (existing && existing.parentNode) existing.parentNode.removeChild(existing);
@@ -3574,6 +3697,9 @@
     // 跨站点「编辑/创建队伍」模式检测：CN 走文字判断；非 CN 无对应文字，改为结构判断——
     // 编辑/创建页含槽位配置表单（等级/职业等 <input>/<select>），而成员浏览页通常是只读的。
     // 扫描时排除本脚本注入的信息块（块内带录入框），避免把自己误判为编辑模式。
+    // 还要排除 aria-hidden="true" 的隐藏控件：MUI 下拉框（MuiSelect-nativeInput）会在浏览页
+    // 渲染一个仅供无障碍访问的隐藏 <input type="text">，游戏更新加了这个组件后，
+    // 旧逻辑会把它当成表单控件 → 浏览页被误判成编辑页 → 信息块永久消失（2026-09 实测踩坑）。
     function partyEditMode() {
         if (IS_CN_SITE && cnPartyEditMode()) return true;
         try {
@@ -3583,6 +3709,8 @@
             for (let i = 0; i < ctrls.length; i++) {
                 const c = ctrls[i];
                 if (c.closest && c.closest('.' + AURA_INFO_CLASS)) continue;   // 排除本脚本录入框
+                if (c.getAttribute && c.getAttribute('aria-hidden') === 'true') continue;   // MUI 等组件库的无障碍隐藏 input
+                if (!c.offsetWidth && !c.offsetHeight && !c.clientHeight) continue;         // 完全无布局的隐藏控件
                 return true;
             }
         } catch (_) {}
