@@ -993,6 +993,7 @@ table.member-table tbody tr:hover td.sticky-l.name-cell { background-color:var(-
       </span>
     </label>
     <button class="btn btn-sm btn-primary" id="btn-publish-plan" onclick="publishDisplayPlan()">发布试炼</button>
+    <button class="btn btn-sm" id="btn-adjust-skill" onclick="adjustSkillAura()" style="display:none" title="">调整技能</button>
     <span class="global-buff-label" id="plan-status" style="cursor:default"></span>
   </div>
   <!-- 第二行：战斗试炼1（图标单选下拉 + 出战职业多选下拉） -->
@@ -1071,7 +1072,8 @@ const I18N = {
     publishPlanBtn:'发布试炼', planDeadline:'截止时间', planDeadlineTip:'把每个人的生活分配、战斗分配、职业选择连同截止时间一起上传。截止前其他人点「获取」会读取该排刀；超过截止时间后不再读取并提示「排刀未发布」。',
     planNeedDeadline:'请先选择截止时间', planDeadlinePassed:'截止时间已过，请重新选择', planPublished:'排刀已发布并上传（截止 {t}）',
     planNotPublished:'排刀未发布', planActive:'排刀生效中，截止 {t}', planExpired:'排刀已过期',
-    planDeadlineDay:'日期', planDeadlineTime:'时间', planDeadlineNextFriday:'下周五', planDeadlineDblclick:'单击可选择截止时间（快捷选项单击即生效）',
+    adjustSkillBtn:'调整技能', adjustSkillTooltip:'仅更新技能设置与光环设置，保留原排刀的成员分配与截止时间，无需重新选截止时间', adjustNeedPlan:'请先发布试炼再调整技能/光环', adjustOk:'技能/光环设置已更新上传',
+    planDeadlineDay:'日期', planDeadlineTime:'时间', planDeadlineNextFriday:'下周五', planDeadlineBefore:'前七天', planDeadlineAfter:'后七天', planDeadlineDblclick:'单击展开日期选择（今天前后各七天，单击即生效）', wkShort:'周日,周一,周二,周三,周四,周五,周六',
     signupBookmark:'抓取报名状态', signupBookmarkTip:'把我拖到浏览器书签栏；之后在「公会 > 成员 > 贡献」页面点这个书签，会把全员报名状态复制到剪贴板，切回本页即自动导入',
     signupCompare:'对比报名状态', signupCompareTip:'点一次：提示按 Ctrl+V 粘贴《抓取报名状态》书签抓到的报名数据，并在展示区「分配」「战斗」后各加一列《当前》（红框=与当前结果不一致）；再点一次关闭',
     signupPastePrompt:'请在本页按 Ctrl+V 粘贴报名数据：先在「公会 > 成员 > 贡献」页点击《抓取报名状态》书签，再回到本页按 Ctrl+V。',
@@ -1222,7 +1224,8 @@ const I18N = {
     publishPlanBtn:'Publish Trial', planDeadline:'Deadline', planDeadlineTip:'Upload everyone\'s life assignment, battle assignment and profession with a deadline. Others can pull the plan before the deadline; after it expires it is no longer applied and "plan not published" is shown.',
     planNeedDeadline:'Please pick a deadline first', planDeadlinePassed:'The deadline has already passed, pick a new one', planPublished:'Plan published and uploaded (deadline {t})',
     planNotPublished:'Plan not published', planActive:'Plan active, deadline {t}', planExpired:'Plan expired',
-    planDeadlineDay:'Day', planDeadlineTime:'Time', planDeadlineNextFriday:'Next Friday', planDeadlineDblclick:'Click to pick the deadline (quick options apply on single click)',
+    adjustSkillBtn:'Adjust Skill', adjustSkillTooltip:'Update only skill and aura settings, keeping the existing assignments and deadline', adjustNeedPlan:'Publish the trial first before adjusting skill/aura', adjustOk:'Skill/aura settings updated and uploaded',
+    planDeadlineDay:'Day', planDeadlineTime:'Time', planDeadlineNextFriday:'Next Friday', planDeadlineBefore:'Prev 7d', planDeadlineAfter:'Next 7d', planDeadlineDblclick:'Click to open date picker (7 days before/after today, single click applies)', wkShort:'Sun,Mon,Tue,Wed,Thu,Fri,Sat',
     signupBookmark:'Fetch Signups', signupBookmarkTip:'Drag me to the bookmarks bar; clicking it on Guild > Members > Contributions copies every signup to the clipboard, and this page imports it automatically when you switch back',
     signupCompare:'Compare Signups', signupCompareTip:'Click once to be prompted to paste (Ctrl+V) the signup data captured by the Fetch Signups bookmark, then a Current column is added after Battle and Life (red box = mismatch); click again to turn it off',
     signupPastePrompt:'Press Ctrl+V on this page to paste the signup data: first click the Fetch Signups bookmark on Guild > Members > Contributions, then come back and press Ctrl+V.',
@@ -4375,15 +4378,12 @@ function renderDisplaySettings() {
   if (rowsInput && document.activeElement !== rowsInput) rowsInput.value = state.displayRows;
   const battleEditInput = document.getElementById('display-battle-edit-input');
   if (battleEditInput) battleEditInput.checked = !!state.displayBattleEdit;
-  // 截止时间默认填下周五 08:00（仅首次为空时）。
+  // 截止时间默认填今天 08:00（仅首次为空时；只作初始值，发布前可下拉改为前后七天内的任意一天）。
   const planInput = document.getElementById('display-plan-deadline-input');
   if (planInput && !planInput.value) {
     const d = new Date();
-    d.setDate(d.getDate() + ((5 - d.getDay() + 7) % 7));
     d.setHours(8, 0, 0, 0);
-    if (d.getTime() <= Date.now()) d.setDate(d.getDate() + 7);
-    const p = n => String(n).padStart(2, '0');
-    planInput.value = d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate()) + 'T' + p(d.getHours()) + ':' + p(d.getMinutes());
+    planInput.value = fmtDeadlineInput(d);
   }
   updatePlanDeadlineDisplay();
   updatePlanStatusText();
@@ -4508,12 +4508,25 @@ function renderPlanDeadlineDropdown() {
   const dd = document.getElementById('plan-deadline-dropdown');
   if (!dd) return;
   if (!openPlanDeadlineDropdown) { dd.style.display = 'none'; dd.innerHTML = ''; return; }
-  const dayLabels = [t('planDeadlineNextFriday')];
-  const dayHtml = dayLabels.map((lb, idx) => '<span class="plan-deadline-opt" onclick="pickPlanDeadlineDay(' + idx + ',event)">' + escHtml(lb) + '</span>').join('');
-  const timePresets = ['08:00'];
-  const timeHtml = timePresets.map(tp => '<span class="plan-deadline-opt" onclick="pickPlanDeadlineTime(\'' + tp + '\',event)">' + tp + '</span>').join('');
+  const wk = (t('wkShort') || '').split(',');
+  const fmtDay = d => (d.getMonth() + 1) + '/' + d.getDate() + ' ' + (wk[d.getDay()] || '');
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  // 上排：今天往前 7 天（today-7 … today-1）
+  const before = [];
+  for (let n = -7; n <= -1; n++) {
+    const d = new Date(today); d.setDate(today.getDate() + n);
+    before.push('<span class="plan-deadline-opt" onclick="pickPlanDeadlineDay(' + n + ',event)">' + escHtml(fmtDay(d)) + '</span>');
+  }
+  // 下排：今天往后 7 天（today+1 … today+7）
+  const after = [];
+  for (let n = 1; n <= 7; n++) {
+    const d = new Date(today); d.setDate(today.getDate() + n);
+    after.push('<span class="plan-deadline-opt" onclick="pickPlanDeadlineDay(' + n + ',event)">' + escHtml(fmtDay(d)) + '</span>');
+  }
+  const timeHtml = ['08:00'].map(tp => '<span class="plan-deadline-opt" onclick="pickPlanDeadlineTime(\'' + tp + '\',event)">' + tp + '</span>').join('');
   dd.innerHTML =
-    '<span class="plan-deadline-row"><span class="plan-deadline-label">' + escHtml(t('planDeadlineDay')) + '</span>' + dayHtml + '</span>' +
+    '<span class="plan-deadline-row"><span class="plan-deadline-label">' + escHtml(t('planDeadlineBefore')) + '</span>' + before.join('') + '</span>' +
+    '<span class="plan-deadline-row"><span class="plan-deadline-label">' + escHtml(t('planDeadlineAfter')) + '</span>' + after.join('') + '</span>' +
     '<span class="plan-deadline-row"><span class="plan-deadline-label">' + escHtml(t('planDeadlineTime')) + '</span>' + timeHtml + '</span>';
   dd.style.display = '';
   positionPlanDeadlineDropdown();
@@ -4537,18 +4550,17 @@ function closePlanDeadlineDropdown() {
   openPlanDeadlineDropdown = false;
   renderPlanDeadlineDropdown();
 }
-// 快捷日期：设为下一个周五 08:00（已过则顺延一周）
-function pickPlanDeadlineDay(idx, ev) {
+// 快捷日期：按相对今天的偏移天数设置日期，保留当前已选时分（默认 08:00）。
+// offsetDays 为负=今天之前，为正=今天之后；今天为默认填充值（不在此列表）。
+function pickPlanDeadlineDay(offsetDays, ev) {
   if (ev) ev.stopPropagation();
-  const presets = [{ nextFriday: true }];
-  const cfg = presets[idx];
-  if (!cfg) return;
-  // 下周五 08:00：下一个周五，时间固定 08:00；若该时刻已过则顺延一周。
-  const d = new Date();
-  d.setDate(d.getDate() + ((5 - d.getDay() + 7) % 7));
-  d.setHours(8, 0, 0, 0);
-  if (d.getTime() <= Date.now()) d.setDate(d.getDate() + 7);
-  setPlanDeadlineValue(fmtDeadlineInput(d));
+  const base = new Date();
+  base.setDate(base.getDate() + offsetDays);
+  const cur = parseDeadlineInput(planDeadlineValue());
+  let hh = 8, mm = 0;
+  if (cur) { hh = cur.getHours(); mm = cur.getMinutes(); }
+  base.setHours(hh, mm, 0, 0);
+  setPlanDeadlineValue(fmtDeadlineInput(base));
   renderPlanDeadlineDropdown();
 }
 // 快捷时间：只改时分、保留日期
@@ -4602,6 +4614,37 @@ async function publishDisplayPlan() {
   const ok = await uploadToServer();
   if (ok) alert(t('planPublished').replace('{t}', formatPlanDeadline(state.plan.t)));
 }
+// 《调整技能》：发布试炼后，单独微调技能设置(s)与光环设置(au)并上传，
+// 保留原排刀的截止时间(t)/成员分配(m)/试炼映射(k)，避免重新选截止时间、也不会改动生活/战斗分配。
+async function adjustSkillAura() {
+  if (!isGuildLeader()) { alert(t('leaderOnly')); return; }
+  if (!state.isShared || !state.binId || !state.encKey) { alert(t('notShared')); return; }
+  if (!state.plan || !state.plan.t) { alert(t('adjustNeedPlan')); return; }
+  const base = state.plan;
+  // 技能配置：仅光环非空的职业
+  const s = {};
+  const byProf = state.skillConfigByProf || {};
+  Object.keys(byProf).forEach(function (prof) {
+    const cfg = byProf[prof];
+    if (!cfg || !cfg.aura) return;
+    const slug = id => id ? String(id).replace(/^ability_/, '') : '';
+    s[prof] = { a: slug(cfg.aura), s1: slug(cfg.s1), s2: slug(cfg.s2), s3: slug(cfg.s3), s4: slug(cfg.s4) };
+  });
+  // 光环设置：战斗试炼1/2 各光环列的成员序号 → 玩家 name
+  const au = {};
+  for (let b = 0; b < 2; b++) {
+    const vals = state.auraConfigValues[b] || [];
+    AURA_CONFIG_COLS.forEach(function (col, ci) {
+      const p = auraMemberByIndex(vals[ci]);
+      if (p && p.name) au[String(p.name).trim()] = String(col.icon).replace(/^ability_/, '');
+    });
+  }
+  state.plan = { _ts: Date.now(), t: base.t, m: base.m, s: s, k: base.k, au: au };
+  saveData();
+  renderDisplaySettings();
+  const ok = await uploadToServer();
+  if (ok) alert(t('adjustOk'));
+}
 // 展示设置行的排刀状态文字。
 function updatePlanStatusText() {
   const el = document.getElementById('plan-status');
@@ -4615,6 +4658,12 @@ function updatePlanStatusText() {
   } else {
     el.textContent = '';
   }
+  updatePlanButtons();
+}
+// 《调整技能》按钮显隐：仅当已是会长且已发布过排刀（plan 存在且有截止时间）时显示。
+function updatePlanButtons() {
+  const btn = document.getElementById('btn-adjust-skill');
+  if (btn) btn.style.display = (isGuildLeader() && state.plan && state.plan.t) ? '' : 'none';
 }
 // 战斗试炼 i 的统计：分配总人数（图标命中该试炼的人数），以及其中职业含「奶」「盾」「弓」的人（记数量与名单）。
 function battleTrialStats(i) {
@@ -5459,6 +5508,7 @@ function renderAll() {
   syncProgressMinInput();
   const progressMinSection = document.getElementById('progress-min-section');
   if (progressMinSection) progressMinSection.style.display = isGuildLeader() ? '' : 'none';
+  updatePlanButtons();   // 调整技能按钮显隐（会长且已发布排刀时显示）
 }
 
 // 「加成与约束」分组：一键折叠/展开（全局加成 / 公会建筑 / 公会神龛 / 进度约束）。
@@ -5541,6 +5591,11 @@ function updateStaticText() {
   if (publishBtn) {
     publishBtn.textContent = t('publishPlanBtn');
     publishBtn.title = t('planDeadlineTip');
+  }
+  const adjustBtn = document.getElementById('btn-adjust-skill');
+  if (adjustBtn) {
+    adjustBtn.textContent = t('adjustSkillBtn');
+    adjustBtn.title = t('adjustSkillTooltip');
   }
   renderBattleTrialOptions();
   const docImportBtn = document.getElementById('btn-doc-import');
