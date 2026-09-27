@@ -132,6 +132,8 @@ h2 { font-size:16px; margin:10px 0 8px; color:var(--text-muted); }
 .aura-idx-input { width:64px; text-align:center; padding:2px 4px; border:1px solid var(--border); border-radius:3px; background:var(--input-bg); color:var(--text); font-size:12px; }
 .aura-idx-input:focus { outline:none; border-color:var(--accent); }
 .aura-name-cell { min-width:72px; height:28px; color:var(--text); white-space:nowrap; }
+.aura-level-label { color:var(--text-muted); font-weight:600; white-space:nowrap; }
+.aura-level-cell { color:var(--accent); font-weight:600; }
 /* 光环数据模式：所有成员的光环等级表 */
 #aura-data-area { flex:1 1 auto; min-height:0; max-height:100%; display:flex; align-items:flex-start; padding:10px; background:var(--surface); border:1px solid var(--border); border-radius:8px; overflow:auto; overscroll-behavior:contain; }
 .aura-data-table { border-collapse:collapse; }
@@ -4070,7 +4072,7 @@ function buildSkillConfigMap() {
   });
   return s;
 }
-// 单个格子：未选 → 虚线空框；已选 → 图标 + ▾，点击展开（光环只列光环、技能只列非光环）。
+// 单个格子：未选 → 虚线空框；已选 → 图标，点击展开下拉（光环只列光环、技能只列非光环）。
 // side: 'L'（左栏/战斗1）或 'R'（右栏/战斗2），与块序号组成唯一 key，避免左右两栏索引冲突。
 function skillCellHtml(side, idx, field, label, value) {
   const key = 'sk-' + side + '-' + idx + '-' + field;
@@ -4088,10 +4090,8 @@ function skillCellHtml(side, idx, field, label, value) {
     ? svgIcon(ab.id, 26, 26)
     : '<span class="skill-cell-empty">+</span>';
   return '<span class="skill-cell">'+
-    '<span class="skill-cell-label">'+escHtml(label)+'</span>'+
     '<span class="skill-config-picker'+(ab ? '' : ' empty')+'" id="sk-picker-'+key+'" title="'+escHtml(ab ? ab.name : t('skillConfigTip'))+'" onclick="toggleSkillDropdown(\''+key+'\',event)">'+
       body+
-      '<span class="skill-config-caret">▾</span>'+
       (open ? '<span class="skill-config-dropdown" id="sk-dropdown-'+key+'">'+options+'</span>' : '')+
     '</span>'+
   '</span>';
@@ -4151,16 +4151,36 @@ function toggleSkillDropdown(key, ev) {
 
 // ══ 光环设置模式（展示分配的子模式，与技能配置互斥）══
 // 上方仍是展示设置；下方为战斗试炼1/2 各生成一个块，块内表格 3 行 × 6 列：
-//   第1行（列头）：战斗 | 速度光环 | 暴击光环 | 守护光环 | 物理光环 | 元素光环
+//   第1行（列头）：战斗 | 速度光环 | 暴击光环 | 物理光环 | 元素光环 | 守护光环
 //   第2行：战斗列显示该试炼当前选择的战斗 ICON；光环列为序号输入框（int，对应成员表中的成员序号）
 //   第3行：输入有效序号后显示成员表中该序号玩家的 name（即该光环由谁携带）
+//   第4行：该序号玩家在「光环数据」中对应光环的等级
+// 《光环设置》的 5 个可配置光环列，按「光环数据」(AURA_DATA_COLS) 显示顺序排列：
+// 速度 → 暴击 → 物理 → 元素 → 守护（invincible/revive/insanity 不在此配置）。每项含 key 与 icon。
 const AURA_CONFIG_COLS = [
-  { icon: 'ability_speed_aura' },    // 速度光环
-  { icon: 'ability_critical_aura' }, // 暴击光环
-  { icon: 'ability_guardian_aura' }, // 守护光环
-  { icon: 'ability_fierce_aura' },   // 物理光环
-  { icon: 'ability_mystic_aura' },   // 元素光环
+  { key: 'speed',     icon: 'ability_speed_aura' },    // 速度光环
+  { key: 'critical',  icon: 'ability_critical_aura' }, // 暴击光环
+  { key: 'physical',  icon: 'ability_fierce_aura' },   // 物理光环
+  { key: 'elemental', icon: 'ability_mystic_aura' },   // 元素光环
+  { key: 'guardian',  icon: 'ability_guardian_aura' }, // 守护光环
 ];
+// 旧版列顺序，仅用于迁移已保存的序号数据，避免重排后错位。
+const AURA_CONFIG_COLS_OLD = ['ability_speed_aura','ability_critical_aura','ability_guardian_aura','ability_fierce_aura','ability_mystic_aura'];
+const AURA_CONFIG_ORDER_VER = 'v2';
+// 把旧列序保存的 [块][旧列序] 序号数组，按 icon 对齐重排为新列序，保证历史数据不丢失。
+function remapAuraConfigValues(auraVals) {
+  if (!Array.isArray(auraVals)) return auraVals;
+  const newLen = AURA_CONFIG_COLS.length;
+  return auraVals.map(function (block) {
+    const arr = Array.isArray(block) ? block : [];
+    const out = new Array(newLen).fill(null);
+    for (let np = 0; np < newLen; np++) {
+      const op = AURA_CONFIG_COLS_OLD.indexOf(AURA_CONFIG_COLS[np].icon);
+      if (op >= 0 && op < arr.length) out[np] = arr[op];
+    }
+    return out;
+  });
+}
 function auraColLabel(col) {
   const ab = skillAbilityById(col.icon);
   return ab ? ab.name : col.icon;
@@ -4212,11 +4232,19 @@ function renderAuraConfigArea() {
         const p = auraMemberByIndex(v);
         return '<td class="aura-name-cell" id="aura-name-'+b+'-'+ci+'">'+(p ? escHtml(p.name) : '')+'</td>';
       }).join('');
+    // 第三行：该序号玩家在「光环数据」中对应光环（col.key）的等级。
+    const levelCells = '<td class="aura-level-label">等级</td>'+
+      AURA_CONFIG_COLS.map(function(col, ci) {
+        const v = vals[ci];
+        const p = auraMemberByIndex(v);
+        const lv = p ? memberAuraLevel(p, col.key) : 0;
+        return '<td class="aura-level-cell" id="aura-lv-'+b+'-'+ci+'">'+(lv ? lv : '')+'</td>';
+      }).join('');
     html += '<div class="aura-config-block">'+
       '<div class="aura-config-title">'+escHtml(t('battleTrial'))+' '+(b+1)+'</div>'+
       '<table class="aura-config-table">'+
         '<thead><tr>'+headCells+'</tr></thead>'+
-        '<tbody><tr>'+inputCells+'</tr><tr>'+nameCells+'</tr></tbody>'+
+        '<tbody><tr>'+inputCells+'</tr><tr>'+nameCells+'</tr><tr>'+levelCells+'</tr></tbody>'+
       '</table>'+
     '</div>';
   }
@@ -4234,6 +4262,12 @@ function onAuraInput(b, ci, raw) {
   if (cell) {
     const p = valid ? auraMemberByIndex(n) : null;
     cell.textContent = p ? p.name : '';
+  }
+  const lvCell = document.getElementById('aura-lv-' + b + '-' + ci);
+  if (lvCell) {
+    const p = valid ? auraMemberByIndex(n) : null;
+    const lv = p ? memberAuraLevel(p, AURA_CONFIG_COLS[ci].key) : 0;
+    lvCell.textContent = lv ? String(lv) : '';
   }
 }
 
@@ -6194,8 +6228,16 @@ function loadPrefs() {
     if (auraDataMode === '1') state.auraDataMode = true;
     try {
       const auraVals = JSON.parse(localStorage.getItem('mwi_aura_config_values') || 'null');
+      const auraOrderVer = localStorage.getItem('mwi_aura_config_order');
       if (Array.isArray(auraVals) && auraVals.length === 2 && Array.isArray(auraVals[0]) && Array.isArray(auraVals[1])) {
-        state.auraConfigValues = auraVals;
+        // 旧列序数据按 icon 重排为新列序（仅迁移一次，并重写存储），避免重排后光环错位。
+        if (auraOrderVer !== AURA_CONFIG_ORDER_VER) {
+          state.auraConfigValues = remapAuraConfigValues(auraVals);
+          try { localStorage.setItem('mwi_aura_config_values', JSON.stringify(state.auraConfigValues)); } catch(e) {}
+          try { localStorage.setItem('mwi_aura_config_order', AURA_CONFIG_ORDER_VER); } catch(e) {}
+        } else {
+          state.auraConfigValues = auraVals;
+        }
       }
     } catch(e) {}
     try {
