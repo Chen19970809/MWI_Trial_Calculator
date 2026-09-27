@@ -7288,7 +7288,7 @@ async function uploadToServerCos() {
   if (btn) { btn.disabled = true; btn.classList.add('busy'); }
   let mergeFail = null;
   try {
-    const localData = { guild:state.guild, members:(state.members||[]).map(slimMemberForUpload), trials:state.trials };
+    const localData = { guild:state.guild, members:(state.members||[]).map(slimMemberForUpload), trials:state.trials, plan:(state.plan || null) };
     let merged = localData;
     try {
       const remoteRec = await cosGetRecord();
