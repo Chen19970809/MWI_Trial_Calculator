@@ -1133,7 +1133,7 @@ const I18N = {
     buildingLabels:['挤奶','采摘','伐木','奶酪锻造','制作','缝纫','烹饪','冲泡','炼金','强化','耐力','智力','攻击','防御','近战','远程','魔法'],
     shrinePower:'力量', shrineTempo:'节奏', shrineBuilder:'建造者殿堂',
     shareHint:'会长创建共享空间后，生成分享链接发给成员。成员打开链接即可查看/更新数据，无需注册。',
-    currentUrl:'当前共享链接', createShare:'创建共享', closeBtn:'关闭',
+    currentUrl:'当前共享链接', createShare:'创建共享', closeBtn:'关闭', saveBtn:'保存', cosConfigSaved:'云函数配置已保存',
     shareCreated:'共享空间已创建！复制链接发给公会成员。', linkCopied:'链接已复制',
     enterPassword:'请输入访问密码:', fillAll:'请填写所有字段',
     createFailed:'创建失败，请检查 Master Key', addMembersFirst:'请先添加成员数据',
@@ -1285,7 +1285,7 @@ const I18N = {
     buildingLabels:['Milking','Foraging','Woodcutting','Cheesesmithing','Crafting','Tailoring','Cooking','Brewing','Alchemy','Enhancing','Stamina','Intelligence','Attack','Defense','Melee','Ranged','Magic'],
     shrinePower:'Power', shrineTempo:'Tempo', shrineBuilder:'Builder Hall',
     shareHint:'After the leader creates a shared space, share the link with members. Members can view/update data without registration.',
-    currentUrl:'Current Share URL', createShare:'Create Share', closeBtn:'Close',
+    currentUrl:'Current Share URL', createShare:'Create Share', closeBtn:'Close', saveBtn:'Save', cosConfigSaved:'Cloud function config saved',
     shareCreated:'Share space created! Copy the link to share with guild members.', linkCopied:'Link copied',
     enterPassword:'Enter access password:', fillAll:'Please fill in all fields',
     createFailed:'Creation failed, please check Master Key', addMembersFirst:'Please add member data first',
@@ -5673,10 +5673,12 @@ function updatePullStatus() {
 
 function isGuildLeader() {
   try {
-    const hasMk = !!(localStorage.getItem('mwi_master_key') || '').trim();
+    // 会长身份：COS 共享用 mwi_is_leader 标记（创建共享时写入）；旧 jsonbin 共享仍兼容 mwi_master_key。
+    const isLeader = !!(localStorage.getItem('mwi_is_leader') || '').trim()
+                  || !!(localStorage.getItem('mwi_master_key') || '').trim();
     // 离线模式（未连接共享空间）默认强制为会长端，方便本地管理成员。
     if (!state.isShared) return true;
-    return hasMk;
+    return isLeader;
   }
   catch(e) { return false; }
 }
@@ -7576,17 +7578,22 @@ function openShareDialog() {
   overlay.className = 'modal-overlay';
   overlay.id = 'share-overlay';
   overlay.onclick = (e) => { if (e.target === overlay) closeShareDialog(); };
-  const storedKey = localStorage.getItem('mwi_master_key') || '';
-  overlay.innerHTML = '<div class="modal-dialog" style="max-width:440px">'+
+  const cosApi = getCosApiBase();
+  const cosTok = getCosToken();
+  const shared = !!state.binId;   // 已创建过共享 → 公会名/访问密码只读，仅可改云函数配置
+  overlay.innerHTML = '<div class="modal-dialog" style="max-width:460px">'+
     '<div class="modal-title"><span>'+t('share')+'</span><button class="modal-close" onclick="closeShareDialog()">&times;</button></div>'+
-    '<div class="share-field"><label>'+t('guildName')+'</label><input type="text" id="share-guild" value="'+escHtml(state.guild)+'" placeholder="MWI"></div>'+
-    '<div class="share-field"><label>'+t('password')+'</label><input type="text" id="share-password" placeholder="***"></div>'+
-    '<div class="share-field"><label>'+t('masterKey')+'</label><input type="text" id="share-masterkey" value="'+escHtml(storedKey)+'" placeholder="jsonbin.io"></div>'+
+    '<div class="share-field"><label>'+t('guildName')+'</label><input type="text" id="share-guild" value="'+escHtml(state.guild)+'" placeholder="MWI"'+ (shared?' readonly':'') +'></div>'+
+    '<div class="share-field"><label>'+t('password')+'</label><input type="text" id="share-password" placeholder="***"'+ (shared?' readonly':'') +'></div>'+
+    '<div class="share-field"><label>'+escHtml(t('cosApiBase'))+'</label><input type="text" id="share-cos-api" value="'+escHtml(cosApi)+'" placeholder="https://service-xxxx.gz.apigw.tencentcs.com/release/mwi"></div>'+
+    '<div class="share-field"><label>'+escHtml(t('cosToken'))+'</label><input type="text" id="share-cos-token" value="'+escHtml(cosTok)+'" placeholder=""></div>'+
     '<div style="font-size:11px;color:var(--text-muted);margin:8px 0">'+t('shareHint')+'</div>'+
-    (state.binId ? '<div class="share-field"><label>'+t('currentUrl')+'</label><div class="share-url" onclick="copyShareUrl()">'+escHtml(getShareUrl())+'</div></div>' : '')+
+    (shared ? '<div class="share-field"><label>'+t('currentUrl')+'</label><div class="share-url" onclick="copyShareUrl()">'+escHtml(getShareUrl())+'</div></div>' : '')+
     '<div class="modal-actions">'+
       '<button class="btn" onclick="closeShareDialog()">'+t('closeBtn')+'</button>'+
-      (state.binId ? '' : '<button class="btn btn-primary" onclick="createShare()">'+t('createShare')+'</button>')+
+      (shared
+        ? '<button class="btn btn-primary" onclick="saveShareCosConfig()">'+t('saveBtn')+'</button>'
+        : '<button class="btn btn-primary" onclick="createShare()">'+t('createShare')+'</button>')+
     '</div>'+
   '</div>';
   document.body.appendChild(overlay);
@@ -7610,17 +7617,23 @@ function copyShareUrl() {
 async function createShare() {
   const guild = document.getElementById('share-guild').value.trim();
   const password = document.getElementById('share-password').value.trim();
-  const masterKey = document.getElementById('share-masterkey').value.trim();
-  if (!guild || !password || !masterKey) { alert(t('fillAll')); return; }
+  const apiBase = (document.getElementById('share-cos-api').value.trim() || '').replace(/\/+$/, '');
+  const token = document.getElementById('share-cos-token').value.trim();
+  if (!guild || !password || !apiBase || !token) { alert(t('fillAll')); return; }
   try {
-    localStorage.setItem('mwi_master_key', masterKey);
+    // 保存云函数配置（COS 通道）：地址 + X-Auth 口令
+    localStorage.setItem('mwi_cos_api', apiBase);
+    localStorage.setItem('mwi_cos_token', token);
+    // 标记创建者为会长（COS 共享不再用 jsonbin Master Key 判定身份）
+    try { localStorage.setItem('mwi_is_leader', '1'); } catch(e) {}
     state.guild = guild;
-    const binId = await createBin(guild, password, masterKey);
-    if (!binId) { alert(t('createFailed')); return; }
-    state.binId = binId;
+    // COS 通道没有「创建桶」这一步：binId 本地生成，作为对象路径 mwi/{guild}/{binId}.json 的一部分
+    if (!state.binId) state.binId = 'mwi-' + Math.random().toString(36).slice(2, 10);
+    // 访问密码仍用于派生数据解密密钥（端到端加密，与 X-Auth 口令无关）
     state.encKey = await deriveKey(password, guild);
     state.pwd = password;
     state.isShared = true;
+    state.cloudSrc = 'cos';
     saveData();
     closeShareDialog();
     openShareDialog();
@@ -7628,7 +7641,25 @@ async function createShare() {
     renderExportScriptLinks();
     syncMemberViewTabs();
     alert(t('shareCreated'));
-  } catch(e) { alert(t('createFailed')+': '+e.message); }
+  } catch(e) { alert(t('createFailed')+': '+(e && e.message ? e.message : e)); }
+}
+// 已共享后：仅保存云函数地址 + 口令（公会名/访问密码只读，改了会令已加密数据对不上）
+function saveShareCosConfig() {
+  const apiEl = document.getElementById('share-cos-api');
+  const tokEl = document.getElementById('share-cos-token');
+  const apiBase = (apiEl ? apiEl.value.trim() : '').replace(/\/+$/, '');
+  const token = tokEl ? tokEl.value.trim() : '';
+  try {
+    if (apiBase) localStorage.setItem('mwi_cos_api', apiBase);
+    if (token) localStorage.setItem('mwi_cos_token', token);
+  } catch(e) {}
+  if (apiBase) { state.cloudSrc = 'cos'; try { localStorage.setItem('mwi_cloud_src', 'cos'); } catch(e) {} }
+  saveData();
+  closeShareDialog();
+  openShareDialog();
+  updateConnectionStatus();
+  renderExportScriptLinks();
+  alert(t('cosConfigSaved'));
 }
 // 顶栏连接状态文本。唯一来源，避免 renderAll 与 updateConnectionStatus 两处写法不一致互相覆盖。
 function connStatusText() {

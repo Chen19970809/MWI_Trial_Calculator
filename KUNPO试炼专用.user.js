@@ -30,7 +30,8 @@
     const CHANGELOG = {
         '1.0.9': '1. 修复CN网站因排行榜徽章导致的卡死\n'
             + '2. 折叠老版本更新日志\n'
-            + '3. 作者栏新增成员',
+            + '3. 作者栏新增成员\n'
+            + '4. 删除打开计算器按钮（数据安全问题无法开放使用）',
         '1.0.8': '1. 面板显示上次上传配装时间\n'
             + '2. 每周四显示上传提醒（当天已上传则不提示）\n'
             + '3. 显示数据拉取状态\n'
@@ -2228,7 +2229,8 @@
         const blocked = guildBlocked() || guildNameMismatch();
         (state.actionButtons || []).forEach(function (b) { if (b) b.style.display = blocked ? 'none' : ''; });
         syncManualPlanButton();   // 《显示排刀》额外受「手动显示排刀」开关控制
-        if (state.calcBtn) state.calcBtn.style.display = blocked ? 'none' : '';
+        // 《打开计算器》：仅会长可见（含非 KUNPO 公会 / 公会名不符的 blocked 场景一并隐藏）
+        if (state.calcBtn) state.calcBtn.style.display = (blocked || !isGuildLeader()) ? 'none' : '';
         if (state.docBtn) state.docBtn.style.display = blocked ? 'none' : '';
         const showStaff = isOwnerOrGeneral();
         if (state.meritBtn) state.meritBtn.style.display = blocked ? 'none' : (showStaff ? '' : 'none');
@@ -2974,10 +2976,18 @@
         if (!info.known) return false;
         return info.isOwner || String(info.role).toLowerCase() === 'general';
     }
+    // 仅会长（owner/leader）为 true；职位未知或不是会长（将军/官员/成员）均视为 false
+    function isGuildLeader() {
+        const info = guildRoleInfo();
+        return !!(info && info.known && info.isOwner);
+    }
     function updateMeritButton() {
+        const blocked = guildBlocked();
         const show = isOwnerOrGeneral();
-        if (state.meritBtn) state.meritBtn.style.display = show ? '' : 'none';
-        if (state.signupBtn) state.signupBtn.style.display = show ? '' : 'none';
+        if (state.meritBtn) state.meritBtn.style.display = (blocked || !show) ? 'none' : '';
+        if (state.signupBtn) state.signupBtn.style.display = (blocked || !show) ? 'none' : '';
+        // 《打开计算器》：仅会长可见；职位未知或不是会长（将军/官员/成员）时隐藏
+        if (state.calcBtn) state.calcBtn.style.display = (blocked || !isGuildLeader()) ? 'none' : '';
     }
 
     // ═══════════════════════════════════════════════════════════════════════
