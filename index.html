@@ -885,7 +885,7 @@ table.member-table tbody tr:hover td.sticky-l.name-cell { background-color:var(-
     <button class="btn btn-icon" id="btn-lang" onclick="toggleLang()">中/EN</button>
     <button class="btn btn-icon" id="btn-theme" onclick="toggleTheme()">🌙</button>
     <button class="btn" id="btn-pull" onclick="pullFromServer()" style="display:none" title="">🔄 <span id="btn-pull-label">获取</span></button>
-    <button class="btn" id="btn-upload" onclick="uploadToServer()" style="display:none" title="">☁️ <span id="btn-upload-label">上传</span></button>
+    <button class="btn" id="btn-upload" onclick="uploadToServerAuto()" style="display:none" title="">☁️ <span id="btn-upload-label">上传</span></button>
     <button class="btn" id="btn-pull-cos" onclick="pullFromServer('cos')" style="display:none" title="">🔄 <span id="btn-pull-cos-label">获取(COS)</span></button>
     <button class="btn" id="btn-upload-cos" onclick="uploadToServerCos()" style="display:none" title="">☁️ <span id="btn-upload-cos-label">上传(COS)</span></button>
     <button class="btn" id="btn-share" onclick="openShareDialog()">共享设置</button>
@@ -4605,13 +4605,14 @@ async function publishDisplayPlan() {
   const raw = input ? String(input.value || '').trim() : '';
   const dl = new Date(raw);
   if (!raw || isNaN(dl.getTime())) { alert(t('planNeedDeadline')); return; }
-  if (Date.now() >= dl.getTime()) { alert(t('planDeadlinePassed')); return; }
+  // 截止时间已过仅作提醒，不再强行阻拦（是否继续由会长自行决定）
+  if (Date.now() >= dl.getTime()) { alert(t('planDeadlinePassed')); }
   state.plan = buildDisplayPlan(dl.toISOString());
   saveData();
   renderDisplaySettings();
   renderBattleTrialOptions(); // 统计块切换为排刀数据
   renderDisplayArea();
-  const ok = await uploadToServer();
+  const ok = await uploadToServerAuto();
   if (ok) alert(t('planPublished').replace('{t}', formatPlanDeadline(state.plan.t)));
 }
 // 《调整技能》：发布试炼后，单独微调技能设置(s)与光环设置(au)并上传，
@@ -4642,7 +4643,7 @@ async function adjustSkillAura() {
   state.plan = { _ts: Date.now(), t: base.t, m: base.m, s: s, k: base.k, au: au };
   saveData();
   renderDisplaySettings();
-  const ok = await uploadToServer();
+  const ok = await uploadToServerAuto();
   if (ok) alert(t('adjustOk'));
 }
 // 展示设置行的排刀状态文字。
@@ -6774,7 +6775,7 @@ function tryImportFromHash() {
 
 // === Data Persistence ===
 function getStorageKey() { return 'mwi_trial_'+(state.guild||'default'); }
-// 只负责本地持久化。云端同步不再自动触发，由用户点顶栏"上传"按钮 → uploadToServer() 统一提交。
+// 只负责本地持久化。云端同步不再自动触发，由用户点顶栏"上传"按钮 → uploadToServerAuto()（按通道自动分发）统一提交。
 function saveData() {
   const data = JSON.stringify({ guild:state.guild, members:state.members, trials:state.trials, plan:(state.plan || null) });
   try { localStorage.setItem(getStorageKey(), data); } catch(e) {}
@@ -6816,6 +6817,11 @@ function slimMemberForUpload(p) {
   return np;
 }
 
+// 统一上传入口：按当前通道自动分发。cloudSrc==='cos' → COS（腾讯云函数），
+// 否则 → jsonbin。发布试炼/调整技能/顶栏上传按钮都走它，避免 jsonbin 配额耗尽后写死通道导致全员无法上传。
+async function uploadToServerAuto() {
+  return (state.cloudSrc === 'cos') ? uploadToServerCos() : uploadToServer();
+}
 // 用户点顶栏"上传"按钮触发的手动同步。个人端未拉取时拒绝，避免覆盖别人。
 async function uploadToServer() {
   if (!state.isShared || !state.binId || !state.encKey) { alert(t('notShared')); return; }
