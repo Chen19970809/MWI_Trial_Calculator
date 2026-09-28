@@ -4066,23 +4066,32 @@ function skillConfigOf(side, prof) {
 function buildSkillConfigMap() {
   const byProf = state.skillConfigByProf || {};
   const s = {};
+  const slugId = function(v) { return v ? String(v).replace(/^ability_/, '') : ''; };
+  const put = function(slug, prof, cfg) {
+    if (!slug || !prof || !cfg) return;
+    if (!s[slug]) s[slug] = {};
+    // 侧别 key 优先：同职业已有分侧上传结果时，不被旧格式条目覆盖
+    if (s[slug][prof]) return;
+    s[slug][prof] = { a: slugId(cfg.aura), s1: slugId(cfg.s1), s2: slugId(cfg.s2), s3: slugId(cfg.s3), s4: slugId(cfg.s4) };
+  };
+  // 上传过滤：任一字段非空即上传（原来要求 aura 非空，导致"只配 s1-s4、光环留空"
+  // 的职业整份配置被丢弃，游戏脚本端战斗技能面板因此失效）。
+  const hasAny = function(cfg) { return !!cfg && ['aura', 's1', 's2', 's3', 's4'].some(function(k) { return !!cfg[k]; }); };
   Object.keys(byProf).forEach(function(key) {
     const k = String(key);
-    const sep = k.indexOf('|');
-    if (sep < 0) return; // 旧格式无侧别，跳过上传
-    const side = k.slice(0, sep);
-    const prof = k.slice(sep + 1);
     const cfg = byProf[key];
-    if (!cfg) return;
-    // 上传过滤：任一字段非空即上传（原来要求 aura 非空，导致"只配 s1-s4、光环留空"
-    // 的职业整份配置被丢弃，游戏脚本端战斗技能面板因此失效）。
-    const hasAny = ['aura', 's1', 's2', 's3', 's4'].some(function(k) { return !!cfg[k]; });
-    if (!hasAny) return;
-    const slug = battleTrialSlugOfSide(side);
-    if (!slug) return;
-    if (!s[slug]) s[slug] = {};
-    const slugId = function(v) { return v ? String(v).replace(/^ability_/, '') : ''; };
-    s[slug][prof] = { a: slugId(cfg.aura), s1: slugId(cfg.s1), s2: slugId(cfg.s2), s3: slugId(cfg.s3), s4: slugId(cfg.s4) };
+    if (!hasAny(cfg)) return;
+    const sep = k.indexOf('|');
+    if (sep < 0) {
+      // 旧格式（key = 职业，无侧别，分侧功能上线前保存）：显示端 skillConfigOf
+      // 对两侧都回退生效，上传按同样语义写入当前两个试炼的 slug；
+      // 同职业已存在分侧配置（L|职业 / R|职业）时以分侧为准，跳过旧条目。
+      if (byProf['L|' + k] || byProf['R|' + k]) return;
+      put(battleTrialSlugOfSide('L'), k, cfg);
+      put(battleTrialSlugOfSide('R'), k, cfg);
+      return;
+    }
+    put(battleTrialSlugOfSide(k.slice(0, sep)), k.slice(sep + 1), cfg);
   });
   return s;
 }
