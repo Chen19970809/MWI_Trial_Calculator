@@ -4795,7 +4795,17 @@ function restorePlanToEditor() {
     state.displayProfessions[p.id] = String(e[2] || '');
     want[p.id] = battleIconsFromMask(e[1]);
   });
-  // 出战职业列表：按各试炼当前图标，从位掩码反推该试炼包含的职业（覆盖双图标成员）
+  // 反推两个试炼的图标：快照不记录「试炼↔图标」映射（仅存本地），这里把快照中
+  // 出现过的图标按 BATTLE_TRIAL_ICONS 顺序依次分配给试炼1/2。单图标成员随后由
+  // 「单独修改」精确指定，不受该映射影响；只有双图标成员依赖它。
+  const usedIcons = [];
+  Object.keys(want).forEach(function(id) {
+    (want[id] || []).forEach(function(idx) { if (usedIcons.indexOf(idx) < 0) usedIcons.push(idx); });
+  });
+  usedIcons.sort(function(a, b) { return a - b; });
+  if (usedIcons.length >= 1) state.displayBattleTrialIcons[0] = usedIcons[0];
+  if (usedIcons.length >= 2) state.displayBattleTrialIcons[1] = usedIcons[1];
+  // 出战职业列表：按反推出的试炼图标，从位掩码反推该试炼包含的职业（覆盖双图标成员）
   for (let j = 0; j < 2; j++) {
     const icon = state.displayBattleTrialIcons[j] || 0;
     const profs = [];
@@ -4820,11 +4830,17 @@ function restorePlanToEditor() {
       state.displayBattleManual[p.id] = true;
     }
   });
-  // 平均分配记录与快照无关，清掉以免后续重新均分时覆盖还原结果
-  state.displayEvenSplitProfessions = [];
+  // 平均分配职业：某职业的成员同时出现在两个试炼的出战列表 → 该职业曾被均分，
+  // 据此还原第三处职业下拉的勾选状态（仅还原显示勾选，不自动重跑均分）。
+  const esProfs = [];
+  (state.displayBattleTrialProfessions[0] || []).forEach(function(prof) {
+    if ((state.displayBattleTrialProfessions[1] || []).indexOf(prof) >= 0 && esProfs.indexOf(prof) < 0) esProfs.push(prof);
+  });
+  state.displayEvenSplitProfessions = esProfs;
   state.displayEvenSplitAssigned = {};
   // 持久化（与各手动编辑入口写同一批 localStorage 键，刷新后不丢）
   try { localStorage.setItem('mwi_display_professions', JSON.stringify(state.displayProfessions)); } catch(e) {}
+  try { localStorage.setItem('mwi_display_battle_trial_icons', JSON.stringify(state.displayBattleTrialIcons)); } catch(e) {}
   try { localStorage.setItem('mwi_display_battle_trial_profs', JSON.stringify(state.displayBattleTrialProfessions)); } catch(e) {}
   try { localStorage.setItem('mwi_display_battle_manual', JSON.stringify(state.displayBattleManual)); } catch(e) {}
   try { localStorage.setItem('mwi_display_even_split_profs', JSON.stringify(state.displayEvenSplitProfessions)); } catch(e) {}
