@@ -4073,7 +4073,11 @@ function buildSkillConfigMap() {
     const side = k.slice(0, sep);
     const prof = k.slice(sep + 1);
     const cfg = byProf[key];
-    if (!cfg || !cfg.aura) return; // 仅上传光环非空的职业配置
+    if (!cfg) return;
+    // 上传过滤：任一字段非空即上传（原来要求 aura 非空，导致"只配 s1-s4、光环留空"
+    // 的职业整份配置被丢弃，游戏脚本端战斗技能面板因此失效）。
+    const hasAny = ['aura', 's1', 's2', 's3', 's4'].some(function(k) { return !!cfg[k]; });
+    if (!hasAny) return;
     const slug = battleTrialSlugOfSide(side);
     if (!slug) return;
     if (!s[slug]) s[slug] = {};
@@ -4836,6 +4840,29 @@ function restorePlanToEditor() {
   });
   state.displayEvenSplitProfessions = esProfs;
   state.displayEvenSplitAssigned = {};
+  // 技能配置：plan.s[战斗slug][职业] → 本地 skillConfigByProf（key = 'L|职业'/'R|职业'，
+  // 值带 ability_ 前缀，与 selectSkillIcon 的写入格式一致）。slug ↔ 侧别由反推出的
+  // 试炼图标决定。不还原的话，重新发布的排刀 s 为空，游戏脚本端战斗技能面板
+  // （s1..s4）全部失效（光环走 plan.au 不受影响，这就是"只有光环持有者正常"的原因）。
+  const slugSide = {};
+  for (let j = 0; j < 2; j++) {
+    const icon = state.displayBattleTrialIcons[j] || 0;
+    const slug = (Number.isInteger(icon) && icon >= 0 && icon < BATTLE_TRIAL_ICONS.length) ? BATTLE_TRIAL_ICONS[icon] : null;
+    if (slug) slugSide[slug] = (j === 0) ? 'L' : 'R';
+  }
+  const byProfCfg = state.skillConfigByProf || {};
+  Object.keys(state.plan.s || {}).forEach(function(slug) {
+    const side = slugSide[slug];
+    if (!side) return;
+    const byP = state.plan.s[slug] || {};
+    Object.keys(byP).forEach(function(prof) {
+      const cfg = byP[prof] || {};
+      const wrap = function(v) { return v ? ('ability_' + v) : null; };
+      byProfCfg[side + '|' + prof] = { aura: wrap(cfg.a), s1: wrap(cfg.s1), s2: wrap(cfg.s2), s3: wrap(cfg.s3), s4: wrap(cfg.s4) };
+    });
+  });
+  state.skillConfigByProf = byProfCfg;
+  try { localStorage.setItem('mwi_skill_config_by_prof', JSON.stringify(byProfCfg)); } catch(e) {}
   // 单独修改：先写单图标成员，再基于新状态检查零图标成员是否会被误匹配
   const ov = {}, manual = {};
   (state.members || []).forEach(function(p) {
