@@ -4816,6 +4816,26 @@ function restorePlanToEditor() {
     });
     state.displayBattleTrialProfessions[j] = profs;
   }
+  // 平均分配职业：某职业的成员同时出现在两个试炼的出战列表 → 该职业曾被均分，
+  // 自动勾选到《平均分配职业》，并按原设备的操作习惯把该职业从两个试炼的出战
+  // 职业列表中移除（均分职业靠均分机制分配，挂出战列表会让自动匹配全员重复）。
+  // 保护：该职业下若存在双图标成员（同时参加两个试炼），不移除，否则会丢其第二个图标。
+  const esProfs = [];
+  (state.displayBattleTrialProfessions[0] || []).forEach(function(prof) {
+    if ((state.displayBattleTrialProfessions[1] || []).indexOf(prof) < 0) return;
+    let hasMulti = false;
+    Object.keys(want).forEach(function(id) {
+      if (state.displayProfessions[id] === prof && (want[id] || []).length >= 2) hasMulti = true;
+    });
+    if (!hasMulti && esProfs.indexOf(prof) < 0) esProfs.push(prof);
+  });
+  esProfs.forEach(function(prof) {
+    for (let j = 0; j < 2; j++) {
+      state.displayBattleTrialProfessions[j] = (state.displayBattleTrialProfessions[j] || []).filter(function(x) { return x !== prof; });
+    }
+  });
+  state.displayEvenSplitProfessions = esProfs;
+  state.displayEvenSplitAssigned = {};
   // 单独修改：先写单图标成员，再基于新状态检查零图标成员是否会被误匹配
   const ov = {}, manual = {};
   (state.members || []).forEach(function(p) {
@@ -4830,14 +4850,6 @@ function restorePlanToEditor() {
       state.displayBattleManual[p.id] = true;
     }
   });
-  // 平均分配职业：某职业的成员同时出现在两个试炼的出战列表 → 该职业曾被均分，
-  // 据此还原第三处职业下拉的勾选状态（仅还原显示勾选，不自动重跑均分）。
-  const esProfs = [];
-  (state.displayBattleTrialProfessions[0] || []).forEach(function(prof) {
-    if ((state.displayBattleTrialProfessions[1] || []).indexOf(prof) >= 0 && esProfs.indexOf(prof) < 0) esProfs.push(prof);
-  });
-  state.displayEvenSplitProfessions = esProfs;
-  state.displayEvenSplitAssigned = {};
   // 持久化（与各手动编辑入口写同一批 localStorage 键，刷新后不丢）
   try { localStorage.setItem('mwi_display_professions', JSON.stringify(state.displayProfessions)); } catch(e) {}
   try { localStorage.setItem('mwi_display_battle_trial_icons', JSON.stringify(state.displayBattleTrialIcons)); } catch(e) {}
