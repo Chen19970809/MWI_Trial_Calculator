@@ -996,6 +996,7 @@ table.member-table tbody tr:hover td.sticky-l.name-cell { background-color:var(-
       </span>
     </label>
     <button class="btn btn-sm btn-primary" id="btn-publish-plan" onclick="publishDisplayPlan()">发布试炼</button>
+    <button class="btn btn-sm" id="btn-import-plan" onclick="importPlanForce()" style="display:none">导入试炼</button>
     <button class="btn btn-sm" id="btn-adjust-skill" onclick="adjustSkillAura()" style="display:none" title="">调整技能</button>
     <span class="global-buff-label" id="plan-status" style="cursor:default"></span>
   </div>
@@ -1075,6 +1076,10 @@ const I18N = {
     publishPlanBtn:'发布试炼', planDeadline:'截止时间', planDeadlineTip:'把每个人的生活分配、战斗分配、职业选择连同截止时间一起上传。截止前其他人点「获取」会读取该排刀；超过截止时间后不再读取并提示「排刀未发布」。',
     planNeedDeadline:'请先选择截止时间', planDeadlinePassed:'请注意，本次发布排刀的截止时间已过。', planPublished:'排刀已发布并上传（截止 {t}）',
     planNotPublished:'排刀未发布', planActive:'排刀生效中，截止 {t}', planExpired:'排刀已过期',
+    importPlanBtn:'导入试炼', importPlanTooltip:'把已获取到本地的排刀结果强制套用到显示区（无论是否过期）。再次点击取消强制套用。',
+    importPlanLeaderTip:'把已获取的排刀快照恢复为本地编辑状态（覆盖当前的职业/战斗设置，生活分配按同一成员数据重算），调整后可重新发布',
+    importPlanLeaderConfirm:'将用云端排刀快照覆盖当前的职业选择与战斗分组设置（生活分配按快照同口径重算），继续吗？', importPlanLeaderOk:'排刀快照已恢复为本地编辑状态，可调整后重新发布',
+    importPlanNoData:'本地没有排刀数据，请先点「获取」从云端拉取排刀', importPlanOn:'已强制套用排刀到本地显示（截止 {t}，可能已过期）', importPlanOff:'已取消强制套用，恢复按截止时间判断', planForced:'已强制套用排刀（原截止 {t}，已过期）',
     adjustSkillBtn:'调整技能', adjustSkillTooltip:'仅更新技能设置与光环设置，保留原排刀的成员分配与截止时间，无需重新选截止时间', adjustNeedPlan:'请先发布试炼再调整技能/光环', adjustOk:'技能/光环设置已更新上传',
     planDeadlineDay:'日期', planDeadlineTime:'时间', planDeadlineNextFriday:'下周五', planDeadlineBefore:'前七天', planDeadlineAfter:'后七天', planDeadlineDblclick:'单击展开日期选择（今天前后各七天，单击即生效）', wkShort:'周日,周一,周二,周三,周四,周五,周六',
     signupBookmark:'抓取报名状态', signupBookmarkTip:'把我拖到浏览器书签栏；之后在「公会 > 成员 > 贡献」页面点这个书签，会把全员报名状态复制到剪贴板，切回本页即自动导入',
@@ -1227,6 +1232,10 @@ const I18N = {
     publishPlanBtn:'Publish Trial', planDeadline:'Deadline', planDeadlineTip:'Upload everyone\'s life assignment, battle assignment and profession with a deadline. Others can pull the plan before the deadline; after it expires it is no longer applied and "plan not published" is shown.',
     planNeedDeadline:'Please pick a deadline first', planDeadlinePassed:'The deadline has already passed, pick a new one', planPublished:'Plan published and uploaded (deadline {t})',
     planNotPublished:'Plan not published', planActive:'Plan active, deadline {t}', planExpired:'Plan expired',
+    importPlanBtn:'Import Plan', importPlanTooltip:'Force-apply the locally pulled plan to the display area (regardless of expiry). Click again to cancel.',
+    importPlanLeaderTip:'Restore the pulled plan snapshot as the local editing state (overwrites profession/battle settings; life assignment is recomputed from the same member data), then adjust and re-publish',
+    importPlanLeaderConfirm:'This will overwrite current profession selections and battle grouping with the cloud plan snapshot (life assignment recomputed accordingly). Continue?', importPlanLeaderOk:'Plan snapshot restored as local editing state. Adjust and re-publish when ready.',
+    importPlanNoData:'No plan data locally. Click "Pull" to fetch the plan from the cloud first', importPlanOn:'Plan force-applied to local display (deadline {t}, possibly expired)', importPlanOff:'Force-apply cancelled, back to deadline-based judgement', planForced:'Plan force-applied (original deadline {t}, expired)',
     adjustSkillBtn:'Adjust Skill', adjustSkillTooltip:'Update only skill and aura settings, keeping the existing assignments and deadline', adjustNeedPlan:'Publish the trial first before adjusting skill/aura', adjustOk:'Skill/aura settings updated and uploaded',
     planDeadlineDay:'Day', planDeadlineTime:'Time', planDeadlineNextFriday:'Next Friday', planDeadlineBefore:'Prev 7d', planDeadlineAfter:'Next 7d', planDeadlineDblclick:'Click to open date picker (7 days before/after today, single click applies)', wkShort:'Sun,Mon,Tue,Wed,Thu,Fri,Sat',
     signupBookmark:'Fetch Signups', signupBookmarkTip:'Drag me to the bookmarks bar; clicking it on Guild > Members > Contributions copies every signup to the clipboard, and this page imports it automatically when you switch back',
@@ -3984,6 +3993,7 @@ function toggleSkillConfigMode() {
 function skillPlanAvailable() {
   const p = state.plan;
   if (!p || !p.t) return false;
+  if (planForceOn()) return true;   // 《导入试炼》：强制套用时不看截止时间
   const dl = Date.parse(p.t);
   return Number.isFinite(dl) && Date.now() <= dl;
 }
@@ -4503,11 +4513,16 @@ function memberBattleIconsRaw(p) {
 //   3) 数据量最小：{ _ts, t, m:{ "名字":[生活试炼idx(-1=未分配), 战斗位掩码, "职业"] }, k:[试炼0..n 的技能idx] }，每人 ~15 字节。
 //      k 让外部脚本（游戏内显示分工）能把「生活试炼idx」直接翻成中文技能名（如 强化），而不是 #N。
 // 战斗位掩码：bit i = BATTLE_TRIAL_ICONS[i]（1=刺猬 2=虫群 4=变色龙 8=水母 16=獾）。
+// 《导入试炼》强制套用标志：单独存 localStorage（saveData 只持久化 guild/members/trials/plan）。
+function planForceOn() { try { return localStorage.getItem('mwi_plan_force') === '1'; } catch(e) { return false; } }
+function setPlanForce(on) { try { if (on) localStorage.setItem('mwi_plan_force', '1'); else localStorage.removeItem('mwi_plan_force'); } catch(e) {} }
 function displayPlanActive() {
   // 会长端是排刀的来源：始终按本地编辑实时显示，避免发布后被快照锁死；仅个人端读取生效的排刀。
   if (isGuildLeader()) return false;
   const plan = state.plan;
   if (!plan || !plan.t || !plan.m) return false;
+  // 《导入试炼》：点过按钮后无论是否过期都套用（再点一次按钮取消）
+  if (planForceOn()) return true;
   const dl = Date.parse(plan.t);
   return Number.isFinite(dl) && Date.now() <= dl;
 }
@@ -4680,6 +4695,7 @@ async function publishDisplayPlan() {
   // 截止时间已过仅作提醒，不再强行阻拦（是否继续由会长自行决定）
   if (Date.now() >= dl.getTime()) { alert(t('planDeadlinePassed')); }
   state.plan = buildDisplayPlan(dl.toISOString());
+  setPlanForce(false);   // 发布了新排刀 → 清除旧的强制套用标志（新排刀按截止时间正常生效）
   saveData();
   renderDisplaySettings();
   renderBattleTrialOptions(); // 统计块切换为排刀数据
@@ -4718,9 +4734,10 @@ function updatePlanStatusText() {
   const plan = state.plan;
   if (plan && plan.t) {
     const dl = Date.parse(plan.t);
-    el.textContent = (Number.isFinite(dl) && Date.now() <= dl)
-      ? t('planActive').replace('{t}', formatPlanDeadline(plan.t))
-      : t('planExpired');
+    const active = Number.isFinite(dl) && Date.now() <= dl;
+    if (active) el.textContent = t('planActive').replace('{t}', formatPlanDeadline(plan.t));
+    else if (planForceOn()) el.textContent = t('planForced').replace('{t}', formatPlanDeadline(plan.t));
+    else el.textContent = t('planExpired');
   } else {
     el.textContent = '';
   }
@@ -4730,6 +4747,89 @@ function updatePlanStatusText() {
 function updatePlanButtons() {
   const btn = document.getElementById('btn-adjust-skill');
   if (btn) btn.style.display = (isGuildLeader() && state.plan && state.plan.t) ? '' : 'none';
+  // 《导入试炼》：会长端有排刀快照即显示（换设备后恢复编辑用）；
+  // 个人端在（未生效或已强制套用）时显示，用于把过期排刀强制套用到显示区。
+  const impBtn = document.getElementById('btn-import-plan');
+  if (impBtn) {
+    const leader = isGuildLeader();
+    const hasPlan = state.plan && state.plan.t && state.plan.m;
+    impBtn.style.display = (hasPlan && (leader || !displayPlanActive() || planForceOn())) ? '' : 'none';
+    impBtn.title = leader ? t('importPlanLeaderTip') : t('importPlanTooltip');
+  }
+}
+// 《导入试炼》：把已拉取到本地的排刀（无论是否过期）强制套用到显示区；再点一次取消强制。
+function importPlanForce() {
+  if (!state.plan || !state.plan.t || !state.plan.m) { alert(t('importPlanNoData')); return; }
+  // 会长端：把快照恢复为本地编辑状态（换设备后调整并重新发布用）
+  if (isGuildLeader()) {
+    if (!confirm(t('importPlanLeaderConfirm'))) return;
+    restorePlanToEditor();
+    try { renderAll(); } catch(e) { console.error('renderAll failed:', e); }
+    updatePlanStatusText();
+    alert(t('importPlanLeaderOk'));
+    return;
+  }
+  const next = !planForceOn();
+  setPlanForce(next);
+  try { renderAll(); } catch(e) { console.error('renderAll failed:', e); }
+  updatePlanStatusText();
+  alert(t(next ? 'importPlanOn' : 'importPlanOff').replace('{t}', formatPlanDeadline(state.plan.t)));
+}
+// 会长端《导入试炼》：把云端排刀快照反推为本地编辑状态。
+// 生活分配（state.assignment）是本地算法每次 calculate() 重算的，不可持久化还原；
+// 只要成员/试炼数据与发布时一致（从云端拉取），重算结果即与快照同口径，无需干预。
+// 真正需要还原的是仅存本地的三块：每人职业选择、战斗分组（出战职业+单独修改）、平均分配记录。
+// 战斗还原策略：
+//   单图标成员 → displayBattleOverrides 精确指定（并标记手动，不被后续均分覆盖）；
+//   双图标成员 → 其职业加入两个试炼的出战职业列表（自动匹配出两个图标）；
+//   零图标成员 → 若按新出战职业仍会被自动匹配，则手动清空（override = BATTLE_OVERRIDE_EMPTY）。
+function restorePlanToEditor() {
+  const m = state.plan.m || {};
+  const byName = {};
+  (state.members || []).forEach(function(p) { if (p && p.name) byName[String(p.name).trim()] = p; });
+  const want = {};   // p.id → 图标下标数组（快照位掩码反解）
+  Object.keys(m).forEach(function(name) {
+    const p = byName[name];
+    const e = m[name];
+    if (!p || !Array.isArray(e) || e.length < 3) return;
+    state.displayProfessions[p.id] = String(e[2] || '');
+    want[p.id] = battleIconsFromMask(e[1]);
+  });
+  // 出战职业列表：按各试炼当前图标，从位掩码反推该试炼包含的职业（覆盖双图标成员）
+  for (let j = 0; j < 2; j++) {
+    const icon = state.displayBattleTrialIcons[j] || 0;
+    const profs = [];
+    (state.members || []).forEach(function(p) {
+      if ((want[p.id] || []).indexOf(icon) < 0) return;
+      const prof = state.displayProfessions[p.id];
+      if (prof && profs.indexOf(prof) < 0) profs.push(prof);
+    });
+    state.displayBattleTrialProfessions[j] = profs;
+  }
+  // 单独修改：先写单图标成员，再基于新状态检查零图标成员是否会被误匹配
+  const ov = {}, manual = {};
+  (state.members || []).forEach(function(p) {
+    const set = want[p.id] || [];
+    if (set.length === 1) { ov[p.id] = set[0]; manual[p.id] = true; }
+  });
+  state.displayBattleOverrides = ov;
+  state.displayBattleManual = manual;
+  (state.members || []).forEach(function(p) {
+    if ((want[p.id] || []).length === 0 && memberBattleIconsRaw(p).length > 0) {
+      state.displayBattleOverrides[p.id] = BATTLE_OVERRIDE_EMPTY;
+      state.displayBattleManual[p.id] = true;
+    }
+  });
+  // 平均分配记录与快照无关，清掉以免后续重新均分时覆盖还原结果
+  state.displayEvenSplitProfessions = [];
+  state.displayEvenSplitAssigned = {};
+  // 持久化（与各手动编辑入口写同一批 localStorage 键，刷新后不丢）
+  try { localStorage.setItem('mwi_display_professions', JSON.stringify(state.displayProfessions)); } catch(e) {}
+  try { localStorage.setItem('mwi_display_battle_trial_profs', JSON.stringify(state.displayBattleTrialProfessions)); } catch(e) {}
+  try { localStorage.setItem('mwi_display_battle_manual', JSON.stringify(state.displayBattleManual)); } catch(e) {}
+  try { localStorage.setItem('mwi_display_even_split_profs', JSON.stringify(state.displayEvenSplitProfessions)); } catch(e) {}
+  try { localStorage.removeItem('mwi_display_even_split_assigned'); } catch(e) {}
+  persistDisplayBattleOverrides();
 }
 // 战斗试炼 i 的统计：分配总人数（图标命中该试炼的人数），以及其中职业含「奶」「盾」「弓」的人（记数量与名单）。
 function battleTrialStats(i) {
@@ -5662,6 +5762,11 @@ function updateStaticText() {
   if (adjustBtn) {
     adjustBtn.textContent = t('adjustSkillBtn');
     adjustBtn.title = t('adjustSkillTooltip');
+  }
+  const importPlanBtn = document.getElementById('btn-import-plan');
+  if (importPlanBtn) {
+    importPlanBtn.textContent = t('importPlanBtn');
+    importPlanBtn.title = t('importPlanTooltip');
   }
   renderBattleTrialOptions();
   const docImportBtn = document.getElementById('btn-doc-import');
