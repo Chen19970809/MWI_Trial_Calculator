@@ -1,9 +1,9 @@
 // ==UserScript==
 // @name       工会成员等级更新CSV
 // @namespace    https://www.milkywayidle.com/
-// @version      1.2.1
-// @description  Export your MWI character levels, house room levels and guild shrine levels to a local CSV file (opens in Excel).
-// @description:zh-CN 把你的银河奶牛等级、房屋等级和神龛等级导出到本地 CSV 文件（Excel 可直接打开）。进入公会成员页后会自动通过 /profile 命令采集全部成员数据。
+// @version      1.3.0
+// @description  Export your MWI character levels, house room levels and personal shrine (skilling buff) levels to a local CSV file (opens in Excel).
+// @description:zh-CN 把你的银河奶牛等级、房屋等级和个人神龛（生活部分实际生效等级）导出到本地 CSV 文件（Excel 可直接打开）。进入公会成员页后会自动通过 /profile 命令采集全部成员数据。
 // @author       Guild Tools (modified)
 // @license      MIT
 // @match        https://www.milkywayidle.com/*
@@ -50,8 +50,15 @@
         meditation: '冥想室', auditorium: '礼堂', cauldron: '大锅',
     };
 
+    // 神龛类型 → 中文标签（导出列：神龛_力量 / 神龛_节奏 / ...）
+    const ZH_SHRINE_NAMES = { force: '力量', tempo: '节奏', spirit: '精神', scholar: '学识' };
+    const SHRINE_TYPE_ORDER = ['force', 'scholar', 'spirit', 'tempo'];
+
     const isRoomHrid = (hrid) => /^\/(?:house_)?rooms\//.test(hrid);
     const isShrineHrid = (hrid) => /shrine/i.test(hrid);
+    // 个人神龛（生活部分）：profile.guildBuffLevelMap / characterGuildBuffDict 里的
+    // /guild_buffs/{force|scholar|spirit|tempo}_skilling 条目（战斗 _combat 不导出）
+    const isGuildBuffSkillingHrid = (hrid) => /^\/guild_buffs\/(force|scholar|spirit|tempo)_skilling$/.test(hrid);
 
     // 递归扫描任意结构，收集「hrid + level」数据为 Map。
     // 游戏消息字段名可能随版本变化（characterHouseRooms / houseRoomLevels / ...），
@@ -103,6 +110,7 @@
         abilities: new Map(),
         houseRooms: new Map(),
         guildShrines: new Map(),
+        selfShrines: new Map(),
         profileDumpedOnce: false,
         dataReady: false,
         cachedProfiles: new Map(),
@@ -251,6 +259,8 @@
             mergeItems(obj.characterItems, true);
             mergeAbilities(obj.characterAbilities, true);
             collectHridLevels(obj, isRoomHrid, state.houseRooms);
+            // 自己的神龛（生活部分实际生效等级）：init_character_data 里的 characterGuildBuffDict
+            collectHridLevels(obj, isGuildBuffSkillingHrid, state.selfShrines);
             changed = true;
         } else if (obj.type === 'skills_updated') {
             mergeSkills(obj.endCharacterSkills || obj.characterSkills);
@@ -273,13 +283,13 @@
             collectHridLevels(obj, isRoomHrid, state.houseRooms);
         }
 
-        // 公会相关消息：提取神龛等级（公会全员共享一份）
+        // 公会相关消息：提取神龛等级（公会建筑上限，仅控制台参考；CSV 现按个人神龛导出）
         if (/init|guild|shrine/i.test(String(obj.type))) {
             const found = new Map();
             collectHridLevels(obj, isShrineHrid, found);
             if (found.size > 0) {
                 for (const [hrid, level] of found) state.guildShrines.set(hrid, level);
-                console.log('[MWI Export] 捕获到神龛等级:', Object.fromEntries(found));
+                console.log('[MWI Export] 捕获到公会神龛建筑等级（仅参考）:', Object.fromEntries(found));
             }
         }
 
@@ -307,11 +317,22 @@
                 if (Object.keys(houseRooms).length === 0) {
                     console.warn(`[MWI Export] ${charName} 的 profile 里未发现房屋数据。characterHouseRoomMap 原始内容:`, profile.characterHouseRoomMap);
                 }
+                // 个人神龛（生活部分实际生效等级）：profile.guildBuffLevelMap 里的
+                // /guild_buffs/{type}_skilling 条目，键归一化为 force/scholar/spirit/tempo
+                const shrines = {};
+                {
+                    const found = new Map();
+                    collectHridLevels(profile, isGuildBuffSkillingHrid, found);
+                    for (const [hrid, level] of found) {
+                        shrines[hrid.replace(/^\/guild_buffs\//, '').replace(/_skilling$/, '')] = level;
+                    }
+                }
                 state.cachedProfiles.set(charName, {
                     name: charName,
                     gameMode: profile.sharableCharacter?.gameMode || '',
                     skills,
                     houseRooms,
+                    shrines,
                     capturedAt: new Date().toISOString(),
                 });
                 const total = state.cachedProfiles.size + (state.character ? 1 : 0);
@@ -499,12 +520,19 @@
             houseRooms[hrid.replace(/^\/(?:house_)?rooms\//, '')] = Number(level || 0);
         }
 
+        // 自己的神龛（生活部分实际生效等级），键 = force/scholar/spirit/tempo
+        const shrines = {};
+        for (const [hrid, level] of state.selfShrines.entries()) {
+            shrines[hrid.replace(/^\/guild_buffs\//, '').replace(/_skilling$/, '')] = Number(level || 0);
+        }
+
         return {
             schemaVersion: 2,
             scriptVersion: SCRIPT_VERSION,
             character: { ...state.character },
             skills,
             houseRooms,
+            shrines,
             capturedAt: new Date().toISOString(),
             source: location.hostname,
         };
@@ -551,6 +579,12 @@
         return roomColumns.map(r => (has ? Number(rooms[r] || 0) : ''));
     }
 
+    // 个人神龛列：没采集到该人神龛数据时整段留空（与房屋同口径）
+    function shrineCells(shrines, shrineColumns) {
+        const has = shrines && Object.keys(shrines).length > 0;
+        return shrineColumns.map(t => (has ? Number(shrines[t] || 0) : ''));
+    }
+
     function exportData() {
         const payload = buildPayload();
         if (!payload && state.cachedProfiles.size === 0) {
@@ -572,16 +606,22 @@
             ...[...roomSet].filter(r => !ROOM_ORDER.includes(r)).sort(),
         ];
 
-        // 神龛等级是公会全员共享的，每行填同一份值
-        const shrineColumns = [...state.guildShrines.keys()].sort();
-        const shrineCellValues = shrineColumns.map(h => state.guildShrines.get(h));
+        // 个人神龛列：汇总自己 + 所有成员出现过的神龛类型，按固定顺序排
+        const shrineTypeSet = new Set();
+        const addShrines = (s) => { for (const k of Object.keys(s || {})) shrineTypeSet.add(k); };
+        if (payload) addShrines(payload.shrines);
+        for (const profile of state.cachedProfiles.values()) addShrines(profile.shrines);
+        const shrineColumns = [
+            ...SHRINE_TYPE_ORDER.filter(t => shrineTypeSet.has(t)),
+            ...[...shrineTypeSet].filter(t => !SHRINE_TYPE_ORDER.includes(t)).sort(),
+        ];
 
         const headers = [
             '角色名', '游戏模式',
             ...SKILL_ORDER,
             '总等级',
             ...roomColumns.map(r => `房屋_${roomLabel(r)}`),
-            ...shrineColumns.map(h => `神龛_${h.replace(/^\/(?:guild_)?shrines?\//, '')}`),
+            ...shrineColumns.map(t => `神龛_${ZH_SHRINE_NAMES[t] || t}`),
             '更新时间',
         ];
 
@@ -593,7 +633,7 @@
                 payload.character.gameMode || '',
                 ...skillCells(payload.skills),
                 ...roomCells(payload.houseRooms, roomColumns),
-                ...shrineCellValues,
+                ...shrineCells(payload.shrines, shrineColumns),
                 now,
             ]);
         }
@@ -605,7 +645,7 @@
                 profile.gameMode || '',
                 ...skillCells(profile.skills),
                 ...roomCells(profile.houseRooms, roomColumns),
-                ...shrineCellValues,
+                ...shrineCells(profile.shrines, shrineColumns),
                 new Date(profile.capturedAt).toLocaleString('zh-CN'),
             ]);
         }
@@ -614,7 +654,7 @@
             console.warn('[MWI Export] 未捕获到任何房屋房间数据：自己的数据需刷新页面重新登录获取；成员数据取决于 profile 消息是否包含房屋字段（见控制台警告）');
         }
         if (shrineColumns.length === 0) {
-            console.warn('[MWI Export] 未捕获到神龛等级：请先打开公会面板（成员列表页），等游戏下发公会数据后再导出');
+            console.warn('[MWI Export] 未捕获到个人神龛等级：profile_shared 里没有 guildBuffLevelMap 字段（见控制台警告）');
         }
 
         const filename = rows.length > 1

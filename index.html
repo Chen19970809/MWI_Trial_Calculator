@@ -6854,10 +6854,10 @@ function importJson() {
   input.click();
 }
 
-// === 会长端「更新等级」：导入 CSV，按角色名更新成员等级与房屋等级 ===
+// === 会长端「更新等级」：导入 CSV，按角色名更新成员等级、房屋等级与个人神龛等级 ===
 // CSV 格式来自「银河奶牛工会成员等级更新CSV」导出脚本：
 //   角色名, 游戏模式, milking...magic(17技能), 总等级,
-//   房屋_<中文标签>(17列), 神龛_<中文标签>(5列), 更新时间
+//   房屋_<中文标签>(17列), 神龛_<中文标签>(N列，个人生活神龛实际生效等级), 更新时间
 // 房屋列中文标签 → 房间 hrid（与导出脚本 HOUSE_ROOMS 保持一致）
 const CSV_HOUSE_ROOM_LABEL_MAP = {
   '奶牛棚':   '/house_rooms/dairy_barn',
@@ -6877,6 +6877,14 @@ const CSV_HOUSE_ROOM_LABEL_MAP = {
   '健身房':   '/house_rooms/gym',
   '图书馆':   '/house_rooms/library',
   '神秘书房': '/house_rooms/mystical_study',
+};
+// 神龛列中文标签 → 归一化 hrid（导出脚本只导生活部分实际生效等级）
+// 兼容未在表中的标签：按 '/shrines/<标签原文>' 处理
+const CSV_SHRINE_LABEL_MAP = {
+  '力量': '/shrines/force',
+  '节奏': '/shrines/tempo',
+  '精神': '/shrines/spirit',
+  '学识': '/shrines/scholar',
 };
 const CSV_NAME_HEADERS = ['角色名', 'name', 'Name', '角色'];
 
@@ -6935,6 +6943,13 @@ function applyCsvLevelUpdate(csvText) {
       if (hrid) houseIdx[hrid] = i;
     }
   });
+  const shrineIdx = {};  // 神龛 hrid → 列号（表头 神龛_<标签>）
+  headers.forEach((h, i) => {
+    if (h.indexOf('神龛_') === 0) {
+      const label = h.slice(3);
+      shrineIdx[CSV_SHRINE_LABEL_MAP[label] || ('/shrines/' + label)] = i;
+    }
+  });
 
   const byName = {};
   (state.members || []).forEach(p => { if (p && p.name) byName[String(p.name).trim()] = p; });
@@ -6967,6 +6982,16 @@ function applyCsvLevelUpdate(csvText) {
         if (Number.isFinite(n)) hr[hrid] = n;
       }
       person.houseRoomLevels = hr;
+    }
+
+    // 个人神龛等级（生活部分实际生效等级）：合并进已有 shrines（CSV 缺列/空单元格时保留原值）
+    if (Object.keys(shrineIdx).length > 0) {
+      const sh = Object.assign({}, person.shrines || {});
+      for (const [hrid, i] of Object.entries(shrineIdx)) {
+        const n = Math.max(0, parseInt(cells[i], 10));
+        if (Number.isFinite(n)) sh[hrid] = Math.min(n, 20);
+      }
+      person.shrines = sh;
     }
 
     person._ts = now;
