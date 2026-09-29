@@ -28,8 +28,12 @@
 
     // ── 更新日志：key = 版本号，value = 中文更新内容；发新版本时在顶部加一条即可 ──
     const CHANGELOG = {
+        '1.1.1': '1. 新增DIY插件分享，可以方便的下载群友DIY升级的插件\n'
+            + '2. 上传神龛，后续模拟试炼使用真实神龛数据\n'
+            + '3. TODO 职业',
         '1.1.0': '1. 实现战斗试炼同职业不同怪物分别配置技能\n'
-            + '2.新增未参加战斗试炼的提示 ',
+            + '2. 新增未参加战斗试炼的提示\n'
+            + '3. fix bug 技能配置不显示 ',
         '1.0.9': '1. 修复CN网站因排行榜徽章导致的卡死\n'
             + '2. 折叠老版本更新日志\n'
             + '3. 作者栏新增成员\n'
@@ -70,6 +74,26 @@
             + '3. 游戏内显示排刀高亮：打开公会试炼页面自动显示应参加的项目\n'
             + '4. 技能面板：根据职业显示推荐使用的技能',
     };
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // ══ DIY插件分享：条目全部在下面 DIY_SHARE_ITEMS 中配置 ══════════════════
+    // 每个条目三个变量：
+    //   name    第一行名称（大字体显示，点击名称跳转到 url）
+    //   url     下载链接（新标签页打开）
+    //   content 第二行 DIY 内容（标准字体，支持 \n 换行）
+    // 示例里是三个占位条目，直接改 name / url / content 或增删条目即可。
+    // ═══════════════════════════════════════════════════════════════════════
+    const DIY_SHARE_ITEMS = Object.freeze([
+        {
+            name: '铁牛计算器',
+            url: 'https://raw.githubusercontent.com/RERoger/mwi-calculator/main/dist/mwi-calculator.user.js',
+            content: '-支持点击计算器缺口面板中的物品自动跳转至动作面板，并自动输入数量\n'
+                + '-支持输入本地其他角色UID一键复制物品列表\n'
+                + '-支持输入多个关键词以空格隔开搜索（如超级 咖啡）\n'
+                + '-取消勾选物品颜色区分显示\n'
+                + '-支持整个大类添加物品',
+        },
+    ]);
 
     // ── 公会校验默认值 ──
     const GUILD_DEFAULTS = Object.freeze({ name: 'KUNPO', id: 2515 });
@@ -625,6 +649,22 @@
             font: '600 12px/1 system-ui, sans-serif',
         });
         setBtn.addEventListener('click', () => toggleSettingsForm());
+        // 《DIY插件分享》：与「⚙ 设置」同级的按钮，点击弹出分享窗口。
+        // 分享条目统一在 showDiyShareModal 上方的 DIY_SHARE_ITEMS 数组中配置。
+        const diyBtn = document.createElement('button');
+        diyBtn.type = 'button';
+        diyBtn.textContent = 'DIY插件分享';
+        diyBtn.title = '查看 DIY 插件下载地址与说明';
+        Object.assign(diyBtn.style, {
+            border: '0',
+            borderRadius: '7px',
+            padding: '6px 9px',
+            background: '#344879',
+            color: '#fff',
+            cursor: 'pointer',
+            font: '600 12px/1 system-ui, sans-serif',
+        });
+        diyBtn.addEventListener('click', () => showDiyShareModal());
         // 《检查脚本更新》：手动触发一次远程版本检查（跳过每天一次的静默节流），结果用 toast/横幅反馈
         const updBtn = document.createElement('button');
         updBtn.type = 'button';
@@ -710,7 +750,7 @@
             display: 'none',
         });
         signupBtn.addEventListener('click', () => runSignupCheck());
-        actions.append(sendBtn, jsonBtn, assignBtn, calcBtn, docBtn, meritBtn, signupBtn, setBtn, updBtn);
+        actions.append(sendBtn, jsonBtn, assignBtn, calcBtn, docBtn, meritBtn, signupBtn, setBtn, diyBtn, updBtn);
         state.meritBtn = meritBtn;
         state.signupBtn = signupBtn;
 
@@ -1096,6 +1136,26 @@
         return out;
     }
 
+    // 神龛（仅生活部分）：gameState.characterGuildBuffDict 里每个神龛分
+    // 战斗（/guild_buffs/{type}_combat）与生活（/guild_buffs/{type}_skilling）
+    // 两条，这里只取生活部分的「实际生效等级」；
+    // guildBuildingLevelDict 里的是公会建筑等级（决定上限），不是实际 buff 等级。
+    // 键统一归一化为 /shrines/{force|scholar|spirit|tempo}，等级 0~20。
+    function collectShrines() {
+        const gs = getGameState();
+        if (!gs) return {};
+        const out = {};
+        for (const [rawHrid, buff] of containerEntries(gs.characterGuildBuffDict)) {
+            const m = /^\/guild_buffs\/(force|scholar|spirit|tempo)_skilling$/.test(String(rawHrid || ''))
+                ? String(rawHrid).match(/^\/guild_buffs\/(force|scholar|spirit|tempo)_skilling$/)
+                : null;
+            if (!m) continue;
+            const lv = Math.max(0, Math.floor(Number(buff && buff.level) || 0));
+            out['/shrines/' + m[1]] = Math.min(lv, 20);
+        }
+        return out;
+    }
+
     // 从 characterSetting 里扫全部 labyrinthLoadout* 键，把每一份被迷宫使用的
     // loadout 都拿出来。相同 loadoutId 可能被多个 settingKey 引用（比如两间
     // 房都指向同一套配装），合并归档到 usedBy[]，避免重复导出装备明细。
@@ -1174,6 +1234,7 @@
         const labyrinthLoadouts = collectLabyrinthLoadouts();
         const houseRoomLevels = collectHouseRoomLevels();
         const achievements = collectAchievementCompletion();
+        const shrines = collectShrines();
 
         return {
             schemaVersion: 3,
@@ -1185,6 +1246,7 @@
             labyrinthLoadouts,
             houseRoomLevels,
             achievements,
+            shrines,
             capturedAt: new Date().toISOString(),
             source: location.hostname,
         };
@@ -1366,6 +1428,8 @@
             labyrinthLoadouts: loadouts,
             houseRoomLevels: payload.houseRoomLevels || {},
             achievements: payload.achievements || {},
+            // 神龛（仅生活部分实际生效等级，键 = /shrines/{type}）
+            shrines: payload.shrines || {},
             _source: 'self',
             _capturedAt: payload.capturedAt,
         }];
@@ -1426,6 +1490,8 @@
             loadouts: Array.isArray(profile.labyrinthLoadouts) ? profile.labyrinthLoadouts : [],
             houseRoomLevels: profile.houseRoomLevels || {},
             achievements: profile.achievements || {},
+            // 神龛（仅生活部分实际生效等级，键 = /shrines/{type}）：随上传一并写入云端共享空间
+            shrines: (profile.shrines && typeof profile.shrines === 'object') ? profile.shrines : {},
             // 光环等级（AURA_MAP label → 等级）：随上传一并写入云端共享空间
             auras: (profile.auras && typeof profile.auras === 'object') ? profile.auras : {},
         };
@@ -4165,6 +4231,63 @@
         const res = collectSignupMismatches(gs);
         if (res.error) { showAssignmentToast(res.error); return; }
         showSignupModal(res.lines || []);
+    }
+
+    // DIY插件分享弹窗：Title「DIY插件分享」+ N 个条目
+    // 第一行大字体：序号 + 名称（可点击跳下载链接）；第二行标准字体：DIY内容
+    function showDiyShareModal() {
+        const old = document.getElementById('kunpo-diy-share-modal');
+        if (old && old.parentNode) old.parentNode.removeChild(old);
+        const overlay = document.createElement('div');
+        overlay.id = 'kunpo-diy-share-modal';
+        overlay.style.cssText = 'position:fixed;inset:0;z-index:2147483647;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center';
+        const box = document.createElement('div');
+        box.style.cssText = 'position:relative;width:min(560px,92vw);max-height:80vh;display:flex;flex-direction:column;padding:16px;border-radius:12px;'
+            + 'background:linear-gradient(145deg,#152447,#1d3566);color:#eef3ff;border:1px solid #6f9bd8;box-shadow:0 10px 28px rgba(3,10,26,.55);font:12.5px/1.5 system-ui,sans-serif';
+        const title = document.createElement('div');
+        title.style.cssText = 'font-weight:700;font-size:15px;margin-bottom:10px;color:#8fc3ff';
+        title.textContent = 'DIY插件分享';
+        const close = document.createElement('button');
+        close.type = 'button'; close.textContent = '×';
+        close.style.cssText = 'position:absolute;top:8px;right:12px;background:none;border:0;color:#c3d2f2;font:700 20px/1 system-ui;cursor:pointer';
+        close.addEventListener('click', function () { overlay.remove(); });
+        const list = document.createElement('div');
+        list.style.cssText = 'overflow:auto;padding-right:6px';
+        DIY_SHARE_ITEMS.forEach(function (item, i) {
+            const card = document.createElement('div');
+            card.style.cssText = 'margin:0 0 10px 0;padding:10px 12px;border-radius:10px;'
+                + 'background:rgba(255,255,255,.06);border:1px solid rgba(111,155,216,.35)';
+            // 第一行：大字体 序号 + 名称（点击名称跳下载链接）
+            const head = document.createElement('div');
+            head.style.cssText = 'font-size:16px;font-weight:700;line-height:1.4';
+            const idx = document.createElement('span');
+            idx.textContent = (i + 1) + '. ';
+            const link = document.createElement('a');
+            link.textContent = item.name;
+            link.href = item.url;
+            link.target = '_blank';
+            link.rel = 'noopener';
+            link.title = '点击下载：' + item.url;
+            link.style.cssText = 'color:#8fc3ff;text-decoration:underline;cursor:pointer';
+            head.appendChild(idx);
+            head.appendChild(link);
+            // 第二行：标准字体 DIY内容
+            const body = document.createElement('div');
+            body.style.cssText = 'margin-top:4px;white-space:pre-wrap;word-break:break-word;color:#dbe6fb';
+            body.textContent = item.content;
+            card.appendChild(head);
+            card.appendChild(body);
+            list.appendChild(card);
+        });
+        if (!DIY_SHARE_ITEMS.length) {
+            list.textContent = '暂无分享内容（在代码中 DIY_SHARE_ITEMS 数组里配置条目）。';
+        }
+        box.appendChild(close);
+        box.appendChild(title);
+        box.appendChild(list);
+        overlay.appendChild(box);
+        overlay.addEventListener('click', function (ev) { if (ev.target === overlay) overlay.remove(); });
+        document.body.appendChild(overlay);
     }
 
     // ═══════════════════════════════════════════════════════════════════════
