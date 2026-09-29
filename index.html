@@ -1139,9 +1139,9 @@ const I18N = {
     buffEnhancingSpeed:'强化速度', buffEnhancingSpeedTip:'仅对强化技能的动作速度生效，当前等级 +{pct}%。',
     levelUnit:'级',
     guildBuildings:'公会建筑', guildBuildingsTip:'每级房子为对应技能/属性 +2 有效等级（仅本地保存）。',
-    guildShrines:'公会神龛', guildShrinesTip:'力量每级 +0.5% 效率，节奏每级 +0.5% 行动速度，建造者殿堂每级 +2% 公会代币（仅本地保存）。',
+    guildShrines:'公会神龛', guildShrinesTip:'力量/节奏按每个成员上传的个人神龛等级（生活部分实际生效值）计算，未上传的成员按 0 级，无需手动输入。建造者殿堂每级 +2% 公会代币（仅本地保存）。',
     buildingLabels:['挤奶','采摘','伐木','奶酪锻造','制作','缝纫','烹饪','冲泡','炼金','强化','耐力','智力','攻击','防御','近战','远程','魔法'],
-    shrinePower:'力量', shrineTempo:'节奏', shrineBuilder:'建造者殿堂',
+    shrineBuilder:'建造者殿堂',
     shareHint:'会长创建共享空间后，生成分享链接发给成员。成员打开链接即可查看/更新数据，无需注册。',
     currentUrl:'当前共享链接', createShare:'创建共享', closeBtn:'关闭', saveBtn:'保存', cosConfigSaved:'云函数配置已保存',
     shareCreated:'共享空间已创建！复制链接发给公会成员。', linkCopied:'链接已复制',
@@ -1185,8 +1185,8 @@ const I18N = {
     levelAboveTarget:'等级高于目标', levelBelowTarget:'等级低于目标',
     lvTip:'基础等级 {base}（成员技能等级）\n+ 公会建筑等级加成 {building} 级\n= 有效等级 {eff}\n（装备 {equip} / 成就 {achievement} / Buff 房屋{buffHouse}/全服{buffServer}/其他{buffOther} / 全局 {global} / 神龛 {shrine} 的等级加成已移出，不计入有效等级）',
     srTip:'等级差 = 有效等级 {effLv} − 目标等级 {targetLv} = {delta}（{cmp}，每级 {adjPct}%）\n等级成功率加成 = {delta} × {adjPct}% = {levelAdj}%\n额外成功率加成 = {successBonus}%（装备 {equip}% / 成就 {achievement}% / Buff 房屋{buffHouse}%/全服{buffServer}%/其他{buffOther}% / 全局 {global}% / 建筑 {building}% / 神龛 {shrine}%）\n基础成功率 = {basePct}%\n最终成功率 = {basePct}% × (1 + {levelAdj}% + {successBonus}%) = {rawPct}% → 限制后 {pct}%',
-    wpTip:'有效等级 {effLv} × (1 + 效率加成 {efficiencyBonus}%)\n= {effLv} × {effMult} = {raw}\n向下取整 = {workP}\n效率加成来源：装备 {equip}% / 成就 {achievement}% / 房屋 {buffHouse}% / 全局 {global}% / 建筑 {building}% / 神龛 {shrine}%',
-    speedTip:'单次速度 = 基础时间 {baseSec} 秒 ÷ (1 + 速度加成 {speedBonus}%)\n= {baseSec} ÷ {speedMult} = {actionSeconds} 秒\n速度加成来源：装备 {equip}% / 成就 {achievement}% / 房屋 {buffHouse}% / 全局 {global}% / 建筑 {building}% / 神龛 {shrine}%',
+    wpTip:'有效等级 {effLv} × (1 + 效率加成 {efficiencyBonus}%)\n= {effLv} × {effMult} = {raw}\n向下取整 = {workP}\n效率加成来源：装备 {equip}% / 成就 {achievement}% / 房屋 {buffHouse}% / 全局 {global}% / 建筑 {building}% / 神龛·力量 {shrine}%',
+    speedTip:'单次速度 = 基础时间 {baseSec} 秒 ÷ (1 + 速度加成 {speedBonus}%)\n= {baseSec} ÷ {speedMult} = {actionSeconds} 秒\n速度加成来源：装备 {equip}% / 成就 {achievement}% / 房屋 {buffHouse}% / 全局 {global}% / 建筑 {building}% / 神龛·节奏 {shrine}%',
     dpTip:'双倍概率 = {gatheringBonus}%（装备 {equip}% / 成就 {achievement}% / Buff 房屋{buffHouse}%/全服{buffServer}%/其他{buffOther}% / 全局 {global}% / 建筑 {building}% / 神龛 {shrine}%）\n限制在 0% ~ 100% 之间 = {pct}%',
     trial:'试炼', language:'中/EN', theme:'🌙',
     skillLabels:['挤奶','采摘','伐木','奶酪锻造','制作','缝纫','烹饪','冲泡','炼金','强化'],
@@ -1296,9 +1296,9 @@ const I18N = {
     buffEnhancingSpeed:'Enhancing Spd', buffEnhancingSpeedTip:'Applies only to the Enhancing skill as action speed. Current level +{pct}%.',
     levelUnit:'lv',
     guildBuildings:'Guild Buildings', guildBuildingsTip:'Each house level gives +2 effective levels to its skill/attribute. Stored locally only.',
-    guildShrines:'Guild Shrines', guildShrinesTip:'Power gives +0.5% efficiency per level; Tempo gives +0.5% action speed per level; Builder Hall gives +2% guild tokens per level. Stored locally only.',
+    guildShrines:'Guild Shrines', guildShrinesTip:'Power/Tempo are computed from each member\'s uploaded shrine levels (skilling, actual active values); members without uploaded data count as level 0 — no manual input needed. Builder Hall gives +2% guild tokens per level. Stored locally only.',
     buildingLabels:['Milking','Foraging','Woodcutting','Cheesesmithing','Crafting','Tailoring','Cooking','Brewing','Alchemy','Enhancing','Stamina','Intelligence','Attack','Defense','Melee','Ranged','Magic'],
-    shrinePower:'Power', shrineTempo:'Tempo', shrineBuilder:'Builder Hall',
+    shrineBuilder:'Builder Hall',
     shareHint:'After the leader creates a shared space, share the link with members. Members can view/update data without registration.',
     currentUrl:'Current Share URL', createShare:'Create Share', closeBtn:'Close', saveBtn:'Save', cosConfigSaved:'Cloud function config saved',
     shareCreated:'Share space created! Copy the link to share with guild members.', linkCopied:'Link copied',
@@ -1342,8 +1342,8 @@ const I18N = {
     levelAboveTarget:'level above target', levelBelowTarget:'level below target',
     lvTip:'Base level {base} (member skill level)\n+ Guild building level bonus {building} lv\n= Effective level {eff}\n(Equipment {equip} / achievement {achievement} / buff house{buffHouse}/server{buffServer}/other{buffOther} / global {global} / shrine {shrine} level bonuses are excluded from effective level)',
     srTip:'Level delta = effective level {effLv} − target level {targetLv} = {delta} ({cmp}, {adjPct}% per level)\nLevel success bonus = {delta} × {adjPct}% = {levelAdj}%\nExtra success bonus = {successBonus}% (equipment {equip}% / achievement {achievement}% / buff house{buffHouse}%/server{buffServer}%/other{buffOther}% / global {global}% / building {building}% / shrine {shrine}%)\nBase success rate = {basePct}%\nFinal success rate = {basePct}% × (1 + {levelAdj}% + {successBonus}%) = {rawPct}% → capped {pct}%',
-    wpTip:'Effective level {effLv} × (1 + efficiency bonus {efficiencyBonus}%)\n= {effLv} × {effMult} = {raw}\nfloor = {workP}\nEfficiency sources: equipment {equip}% / achievement {achievement}% / house {buffHouse}% / global {global}% / building {building}% / shrine {shrine}%',
-    speedTip:'Action time = base {baseSec}s ÷ (1 + speed bonus {speedBonus}%)\n= {baseSec} ÷ {speedMult} = {actionSeconds}s\nSpeed sources: equipment {equip}% / achievement {achievement}% / house {buffHouse}% / global {global}% / building {building}% / shrine {shrine}%',
+    wpTip:'Effective level {effLv} × (1 + efficiency bonus {efficiencyBonus}%)\n= {effLv} × {effMult} = {raw}\nfloor = {workP}\nEfficiency sources: equipment {equip}% / achievement {achievement}% / house {buffHouse}% / global {global}% / building {building}% / shrine·Power {shrine}%',
+    speedTip:'Action time = base {baseSec}s ÷ (1 + speed bonus {speedBonus}%)\n= {baseSec} ÷ {speedMult} = {actionSeconds}s\nSpeed sources: equipment {equip}% / achievement {achievement}% / house {buffHouse}% / global {global}% / building {building}% / shrine·Tempo {shrine}%',
     dpTip:'Double chance = {gatheringBonus}% (equipment {equip}% / achievement {achievement}% / buff house{buffHouse}%/server{buffServer}%/other{buffOther}% / global {global}% / building {building}% / shrine {shrine}%)\nClamped to 0% ~ 100% = {pct}%',
     trial:'Trial', language:'中/EN', theme:'☀️',
     skillLabels:['Milking','Foraging','Woodcutting','Cheesesmithing','Crafting','Tailoring','Cooking','Brewing','Alchemy','Enhancing'],
@@ -2275,7 +2275,8 @@ const GUILD_BUILDING_LIFE_KEYS = ['milking','foraging','woodcutting','cheesesmit
 const GUILD_BUILDING_COMBAT_KEYS = ['stamina','intelligence','attack','defense','melee','ranged','magic'];
 const GUILD_BUILDING_MAX_LEVEL = 50;
 // 公会神龛：力量 +0.5% 效率/级，节奏 +0.5% 行动速度/级。建造者殿堂 +2% 公会代币/级。
-const GUILD_SHRINE_KEYS = ['power','tempo','builder'];
+// 公会神龛手动输入：仅剩建造者殿堂（力量/节奏已改为按成员个人上传的神龛等级计算，无手动输入）。
+const GUILD_SHRINE_KEYS = ['builder'];
 const GUILD_SHRINE_MAX_LEVEL = 50;
 
 // === State ===
@@ -2357,8 +2358,8 @@ let state = {
   globalBuffs: { gathering: 0, production: 0, enhancingSpeed: 0 },
   // 公会建筑：每座房子对应一个技能/属性，每级 +2 有效等级。仅本地保存。
   guildBuildings: GUILD_BUILDING_KEYS.reduce((o,k)=>(o[k]=0,o),{}),
-  // 公会神龛：力量 +0.5% 效率/级，节奏 +0.5% 速度/级，建造者殿堂 +2% 公会代币/级。仅本地保存。
-  guildShrines: { power: 0, tempo: 0, builder: 0 },
+  // 公会神龛手动输入：仅建造者殿堂（+2% 公会代币/级）。力量/节奏按成员个人上传的神龛等级计算。仅本地保存。
+  guildShrines: { builder: 0 },
   // 非最低区进度约束阈值（0.10 = 10%）。仅本地保存，会长端可调。
   progressMin: 0.10
 };
@@ -3101,7 +3102,7 @@ function computeSkillBonusesForPerson(person, skillIdx) {
     combined.skillLevelBonus = 0; // 仅公会建筑提供等级加成
     const global = addGlobalBuffsToCombined(combined, skillId);
     const building = applyGuildBuilding(combined, skillId);
-    const shrine = applyGuildShrine(combined);
+    const shrine = applyGuildShrine(combined, person);
     const buffParts = { house: { ...zero }, server: { ...zero }, other: { ...zero } };
     return Object.assign({}, combined, { sources: makeSources(base, buffParts, zero, global, building, shrine) });
   }
@@ -3130,9 +3131,9 @@ function computeSkillBonusesForPerson(person, skillIdx) {
   };
   // (c) 手动输入的全局 buff：按技能分类叠加相应比例
   const global = addGlobalBuffsToCombined(combined, skillId);
-  // (d) 公会建筑 + 神龛
+  // (d) 公会建筑 + 神龛（神龛按成员个人等级计算）
   const building = applyGuildBuilding(combined, skillId);
-  const shrine = applyGuildShrine(combined);
+  const shrine = applyGuildShrine(combined, person);
   return Object.assign({}, combined, { sources: makeSources(equipBonuses, buffParts, achievementBonuses, global, building, shrine) });
 }
 
@@ -3169,16 +3170,26 @@ function applyGuildBuilding(combined, skillId) {
   }
   return out;
 }
-// 公会神龛：力量 +0.5% 效率/级，节奏 +0.5% 速度/级。
-function applyGuildShrine(combined) {
+// 成员个人神龛等级（生活部分实际生效等级，插件上传，键 = /shrines/{force|tempo|...}）。
+// 没有个人数据时返回 0（不回退公会手动值）。
+function personalShrineLevel(person, type) {
+  const s = person && person.shrines;
+  if (s && typeof s === 'object') {
+    const v = Number(s['/shrines/' + type]);
+    if (Number.isFinite(v) && v > 0) return Math.max(0, Math.min(GUILD_SHRINE_MAX_LEVEL, Math.floor(v)));
+  }
+  return 0;
+}
+// 神龛加成：力量 +0.5% 效率/级，节奏 +0.5% 速度/级。
+// 只按成员个人神龛等级计算（每人不同）；未上传神龛数据的成员按 0 级（无加成）。
+function applyGuildShrine(combined, person) {
   const out = { speedBonus:0, efficiencyBonus:0 };
-  const shrines = state.guildShrines || {};
-  const power = Math.max(0, Math.min(GUILD_SHRINE_MAX_LEVEL, Math.floor(Number(shrines.power) || 0)));
+  const power = personalShrineLevel(person, 'force');
   if (power > 0) {
     combined.efficiencyBonus += power * 0.005;
     out.efficiencyBonus = power * 0.005;
   }
-  const tempo = Math.max(0, Math.min(GUILD_SHRINE_MAX_LEVEL, Math.floor(Number(shrines.tempo) || 0)));
+  const tempo = personalShrineLevel(person, 'tempo');
   if (tempo > 0) {
     combined.speedBonus += tempo * 0.005;
     out.speedBonus = tempo * 0.005;
@@ -3767,8 +3778,6 @@ function loadGuildBuffs() {
     if (rawS) {
       const obj = JSON.parse(rawS);
       if (obj && typeof obj === 'object') {
-        state.guildShrines.power = Math.max(0, Math.floor(Number(obj.power) || 0));
-        state.guildShrines.tempo = Math.max(0, Math.floor(Number(obj.tempo) || 0));
         state.guildShrines.builder = Math.max(0, Math.floor(Number(obj.builder) || 0));
       }
     }
