@@ -91,6 +91,12 @@
     // ═══════════════════════════════════════════════════════════════════════
     const DIY_SHARE_ITEMS = Object.freeze([
         {
+            name: 'KUNPO试炼专用极简版',
+            url: 'https://github.com/Chen19970809/MWI_Trial_Calculator/raw/refs/heads/main/KUNPO%E8%AF%95%E7%82%BC%E4%B8%93%E7%94%A8%E6%9E%81%E7%AE%80%E7%89%88.user.js',
+            content: '-2026年9月30号17点34，梦想在QQ群说我把K写的太屎了，所以搞了个极简版\n'
+                + '-除了必须功能外没有多余功能',
+        },
+        {
             name: '铁牛计算器',
             url: 'https://raw.githubusercontent.com/RERoger/mwi-calculator/main/dist/mwi-calculator.user.js',
             content: '-支持点击计算器缺口面板中的物品自动跳转至动作面板，并自动输入数量\n'
