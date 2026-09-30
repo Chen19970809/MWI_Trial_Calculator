@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         KUNPO试炼专用
 // @namespace    https://www.milkywayidle.com/
-// @version      1.1.0
+// @version      1.1.1
 // @description  上传等级、成就、房屋、迷宫配装、神龛到计算器
 // @author       MonsterFC、MusoAlpha、KUNPO成员测试
 // @license      MIT
@@ -24,7 +24,9 @@
 (function () {
     'use strict';
 
-    const SCRIPT_VERSION = '1.1.0';
+    const SCRIPT_VERSION = '1.1.1';
+    // Performance revision for the 1.1.1 release.
+    const PERFORMANCE_REVISION = '2026-09-30.1';
 
     // ── 更新日志：key = 版本号，value = 中文更新内容；发新版本时在顶部加一条即可 ──
     const CHANGELOG = {
@@ -33,7 +35,8 @@
             + '3. 地牢光环推荐支持固定无敌、复活，鼠标悬停可查看角色所有光环等级\n'
             + '4. 新增显示升级时间，技能提示框显示升级所需/具体时间，默认不启用\n'
             + '5. 新增显示动作页面库存，默认不启用\n'
-            + '6. TODO 职业',
+            + '6. TODO 职业\n'
+            + '7. 性能优化：失败请求退避、避免库存与排刀重复刷新、缓存配装与光环定位、降低监听和内存开销',
         '1.1.0': '1. 实现战斗试炼同职业不同怪物分别配置技能\n'
             + '2. 新增未参加战斗试炼的提示\n'
             + '3. fix bug 技能配置不显示 ',
@@ -256,6 +259,81 @@
         taunt: '嘲讽', provoke: '挑衅', toughness: '坚韧', elusiveness: '闪避',
         vampirism: '吸血', retribution: '惩戒', spike_shell: '尖刺防护',
     });
+
+    function isKunpoNode(node) {
+        const el = node && (node.nodeType === 1 ? node : node.parentElement);
+        return !!(el && el.closest && el.closest('[id^="kunpo-"], [class*="kunpo-"]'));
+    }
+    function hasGameMutation(records) {
+        return records.some(function (r) {
+            if (isKunpoNode(r.target)) return false;
+            if (r.type !== 'childList') return true;
+            return [...r.addedNodes, ...r.removedNodes].some(n => !isKunpoNode(n));
+        });
+    }
+    function createScopedUiObserver(selector, callback, options) {
+        let roots = [];
+        let stopped = false;
+        const content = new MutationObserver(function (records) {
+            if (!stopped && hasGameMutation(records)) callback(records);
+        });
+        const relevantNode = function (n) {
+            return n.nodeType === 1 && !isKunpoNode(n) &&
+                (n.matches(selector) || !!n.querySelector(selector));
+        };
+        const bind = function () {
+            content.disconnect();
+            roots = Array.from(document.querySelectorAll(selector));
+            roots.forEach(r => content.observe(r, options || { childList: true, subtree: true }));
+        };
+        const lifecycle = new MutationObserver(function (records) {
+            if (stopped) return;
+            const changed = records.some(r => !isKunpoNode(r.target) &&
+                [...r.addedNodes, ...r.removedNodes].some(relevantNode));
+            if (!changed) return;
+            bind();
+            callback(records);
+        });
+        bind();
+        lifecycle.observe(document.body, { childList: true, subtree: true });
+        return { disconnect() { stopped = true; content.disconnect(); lifecycle.disconnect(); roots = []; } };
+    }
+    const jsonReadCache = new Map();
+    function readJsonCached(key, fallback) {
+        try {
+            const raw = localStorage.getItem(key);
+            const hit = jsonReadCache.get(key);
+            if (hit && hit.raw === raw) return hit.value;
+            const value = raw ? JSON.parse(raw) : fallback;
+            if (jsonReadCache.size >= 12 && !jsonReadCache.has(key)) jsonReadCache.delete(jsonReadCache.keys().next().value);
+            jsonReadCache.set(key, { raw, value });
+            return value;
+        } catch (_) { return fallback; }
+    }
+    const loadoutCache = { gs: null, settings: null, dict: null, items: null, revision: -1, at: 0, data: null };
+    let inventoryRevision = 0;
+    let loadoutStatusTimer = 0;
+    function scheduleLoadoutStatus() {
+        if (loadoutStatusTimer) return;
+        loadoutStatusTimer = setTimeout(function () { loadoutStatusTimer = 0; refreshLoadoutStatus(); }, 100);
+    }
+    const assignmentRenderCache = { sig: '', cards: [], nodes: [], message: '' };
+    function trialGameText(card) {
+        const walker = document.createTreeWalker(card, NodeFilter.SHOW_TEXT);
+        let node, text = '';
+        while ((node = walker.nextNode())) if (!isKunpoNode(node)) text += node.textContent;
+        return text;
+    }
+    function assignmentInputsUnchanged(cards, opts) {
+        const sig = JSON.stringify([assignmentState.doc, currentCharacterName(), !!(opts && opts.expired),
+            cards.map(c => [c.getAttribute('data-trial-hrid'), trialGameText(c),
+                Array.from(c.querySelectorAll('use')).map(u => u.getAttribute('href') || u.getAttribute('xlink:href'))])]);
+        const unchanged = sig === assignmentRenderCache.sig && cards.length === assignmentRenderCache.cards.length &&
+            cards.every((c, i) => c === assignmentRenderCache.cards[i]) &&
+            assignmentRenderCache.nodes.every(n => n.isConnected) && !!document.getElementById('kunpo-assignment-style');
+        return { sig, unchanged };
+    }
+
     const assignmentState = {
         // fetchedOnce：本会话已经成功拉过一次排刀。此后不再自动拉取
         // （进入试炼界面 / 轮询都不再触发），只有手动点「显示排刀」或改设置才强制拉。
@@ -362,8 +440,9 @@
 
     function setStatus(text, kind = 'idle') {
         if (state.statusText) {
-            state.statusText.textContent = text;
-            state.statusText.style.color = STATUS_KIND_COLORS[kind] || STATUS_KIND_COLORS.idle;
+            if (state.statusText.textContent !== text) state.statusText.textContent = text;
+            const color = STATUS_KIND_COLORS[kind] || STATUS_KIND_COLORS.idle;
+            if (state.statusText.dataset.kind !== kind) { state.statusText.style.color = color; state.statusText.dataset.kind = kind; }
         }
         if (state.iconButton) {
             state.iconButton.title = `KUNPO 试炼专用：${text}\n拖动移动位置；点击展开面板`;
@@ -899,7 +978,7 @@
             }, 0);
             mergeSkills(obj.characterSkills, true);
             mergeAbilities(obj.characterAbilities, true);
-            mergeStockItems(obj.characterItems);   // 模块①库存显示：全量背包快照
+            mergeStockItems(obj.characterItems, true);   // 模块①库存显示：全量背包快照
             changed = true;
         } else if (obj.type === 'party_updated') {
             // 进出队伍/队伍变动时服务端推送（字段名兼容 partyInfo / party 两种形态）
@@ -926,12 +1005,14 @@
 
         if (changed && state.character) {
             state.dataReady = true;
-            state.loadoutDataSeen = false;
-            state.loadoutCheckStartTime = Date.now();
-            if (!state.statusPollInterval) {
-                state.statusPollInterval = setInterval(refreshLoadoutStatus, 1000);
+            if (obj.type === 'init_character_data') {
+                state.loadoutDataSeen = false;
+                state.loadoutCheckStartTime = Date.now();
             }
-            refreshLoadoutStatus();
+            if (!state.statusPollInterval) {
+                state.statusPollInterval = setInterval(refreshLoadoutStatus, 5000);
+            }
+            scheduleLoadoutStatus();
             updateGuildGate(getGameState());   // 读到人物数据后校验公会
         }
     }
@@ -986,9 +1067,9 @@
         if (!rootFiber || typeof rootFiber !== 'object') return null;
         const queue = [rootFiber];
         const visited = new Set();
-        let steps = 0;
-        while (queue.length > 0 && steps < 20000) {
-            const fiber = queue.shift();
+        let steps = 0, cursor = 0;
+        while (cursor < queue.length && steps < 20000) {
+            const fiber = queue[cursor++];
             if (!fiber || typeof fiber !== 'object' || visited.has(fiber)) continue;
             visited.add(fiber);
             steps += 1;
@@ -1169,12 +1250,16 @@
     // 从 characterSetting 里扫全部 labyrinthLoadout* 键，把每一份被迷宫使用的
     // loadout 都拿出来。相同 loadoutId 可能被多个 settingKey 引用（比如两间
     // 房都指向同一套配装），合并归档到 usedBy[]，避免重复导出装备明细。
-    function collectLabyrinthLoadouts() {
-        const gs = getGameState();
+    function collectLabyrinthLoadouts(force = false, gameState) {
+        const gs = gameState || getGameState();
         if (!gs) return [];
         const settings = gs.characterSetting;
         const dict = gs.characterLoadoutDict;
         if (!settings || !dict) return [];
+        const now = Date.now();
+        if (!force && loadoutCache.data && loadoutCache.gs === gs && loadoutCache.settings === settings &&
+            loadoutCache.dict === dict && loadoutCache.items === gs.characterItemMap &&
+            loadoutCache.revision === inventoryRevision && now - loadoutCache.at < 5000) return loadoutCache.data;
         const settingEntries = settings instanceof Map
             ? [...settings.entries()]
             : Object.entries(settings);
@@ -1213,7 +1298,9 @@
         }
 
         // 稳定输出顺序：按 loadoutId 升序
-        return [...byId.values()].sort((a, b) => a.loadoutId - b.loadoutId);
+        const data = [...byId.values()].sort((a, b) => a.loadoutId - b.loadoutId);
+        Object.assign(loadoutCache, { gs, settings, dict, items: gs.characterItemMap, revision: inventoryRevision, at: now, data });
+        return data;
     }
 
     // ═══════════════════════════════════════════════════════════════════════
@@ -1241,7 +1328,7 @@
             auras[label] = Number(state.abilities.get(hrid)?.level || 0);
         }
 
-        const labyrinthLoadouts = collectLabyrinthLoadouts();
+        const labyrinthLoadouts = collectLabyrinthLoadouts(true); // export/upload always takes a fresh snapshot
         const houseRoomLevels = collectHouseRoomLevels();
         const achievements = collectAchievementCompletion();
         const shrines = collectShrines();
@@ -1392,7 +1479,7 @@
             setStatus('等待游戏状态', 'idle');
             return [];
         }
-        const loadouts = collectLabyrinthLoadouts();
+        const loadouts = collectLabyrinthLoadouts(false, gs);
         if (loadouts.length > 0) {
             state.loadoutDataSeen = true;
         }
@@ -1572,6 +1659,7 @@
     hookWebSocketMessages();
 
     function cleanupStatusPolling() {
+        clearTimeout(loadoutStatusTimer); loadoutStatusTimer = 0;
         if (state.statusPollInterval) {
             clearInterval(state.statusPollInterval);
             state.statusPollInterval = null;
@@ -1582,10 +1670,19 @@
     }
 
     // ── 排刀：加密/解密（与 index.html 完全一致）──────────────────────
-    async function deriveKey(password, salt) {
+    const derivedKeyCache = { sig: null, promise: null };
+    async function deriveKeyUncached(password, salt) {
         const enc = new TextEncoder();
         const keyMaterial = await crypto.subtle.importKey('raw', enc.encode(password), 'PBKDF2', false, ['deriveKey']);
         return crypto.subtle.deriveKey({ name: 'PBKDF2', salt: enc.encode(salt), iterations: 100000, hash: 'SHA-256' }, keyMaterial, { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
+    }
+    function deriveKey(password, salt) {
+        const sig = JSON.stringify([password, salt]);
+        if (derivedKeyCache.sig === sig && derivedKeyCache.promise) return derivedKeyCache.promise;
+        const promise = deriveKeyUncached(password, salt);
+        derivedKeyCache.sig = sig; derivedKeyCache.promise = promise;
+        promise.catch(function () { if (derivedKeyCache.promise === promise) { derivedKeyCache.sig = null; derivedKeyCache.promise = null; } });
+        return promise;
     }
     function bytesToBase64(bytes) {
         let bin = '';
@@ -1959,6 +2056,7 @@
         document.head.appendChild(style);
     }
     function clearAssignmentUi() {
+        assignmentRenderCache.sig = ''; assignmentRenderCache.cards = []; assignmentRenderCache.nodes = [];
         document.querySelectorAll('[data-kunpo-assignment="combat"],[data-kunpo-assignment="life"]').forEach(n => delete n.dataset.kunpoAssignment);
         document.querySelectorAll('.kunpo-assignment-badge,.kunpo-skill-panel').forEach(n => n.remove());
     }
@@ -2043,12 +2141,18 @@
         const announce = !!(opts && opts.announce);
         const expired = !!(opts && opts.expired);
         if (trialEndState.silenced) return;
+        const currentCards = [...document.querySelectorAll(TRIAL_CARD_SELECTOR)];
+        const inputs = assignmentInputsUnchanged(currentCards, opts);
+        if (inputs.unchanged) {
+            if (announce) announceAssignment(assignmentRenderCache.message, true);
+            return;
+        }
         assignmentState.rendering = true;
         try {
             injectAssignmentStyle();
             clearAssignmentUi();
             const me = memberEntry();
-            const cards = [...document.querySelectorAll(TRIAL_CARD_SELECTOR)];
+            const cards = currentCards;
             if (!me || !me.entry) {
                 if (cards.length) announceAssignment('本周排刀里没有找到你的战斗试炼', announce);
                 return;
@@ -2108,7 +2212,10 @@
             } else if (firstCard && skills && (skills.a || skills.s1 || skills.s2 || skills.s3 || skills.s4)) {
                 renderSkillPanel(firstCard, prof, skills, myAura);
             }
-            announceAssignment('已高亮排刀：' + (slugs.length ? slugs.map(battleTrialName).join('、') : '无战斗') + ' / ' + lifeName + (lifeMatched ? '' : '（未匹配到生活卡片）') + (expired ? '（排刀已过期，仍按最近一次排刀显示）' : ''), announce);
+            const message = '已高亮排刀：' + (slugs.length ? slugs.map(battleTrialName).join('、') : '无战斗') + ' / ' + lifeName + (lifeMatched ? '' : '（未匹配到生活卡片）') + (expired ? '（排刀已过期，仍按最近一次排刀显示）' : '');
+            Object.assign(assignmentRenderCache, { sig: inputs.sig, cards: cards.slice(),
+                nodes: Array.from(document.querySelectorAll('.kunpo-assignment-badge,.kunpo-skill-panel')), message });
+            announceAssignment(message, announce);
         } finally {
             assignmentState.rendering = false;
         }
@@ -2192,7 +2299,7 @@
     }
     function installAssignmentObserver() {
         if (assignmentState.observer || !document.body) return;
-        assignmentState.observer = new MutationObserver(function () {
+        assignmentState.observer = createScopedUiObserver(TRIAL_CARD_SELECTOR, function () {
             if (assignmentState.rendering) return;
             // 「进入试炼界面」的检测必须放在 doc 判定之前：
             // 否则首次进入时还没有排刀数据（doc 为空）会被直接忽略，永远不触发拉取。
@@ -2218,8 +2325,8 @@
             }
             // 只有「刚进入界面」那一次会提示；界面内的持续刷新一律静默重渲染。
             assignmentState.timer = setTimeout(function () { renderAssignmentUi({ announce: opened }); }, 250);
-        });
-        assignmentState.observer.observe(document.body, { childList: true, subtree: true });
+        }, { childList: true, subtree: true, attributes: true, attributeFilter: ['href', 'xlink:href', 'data-trial-hrid'] });
+        // Content observation is confined to trial cards; lifecycle watches mounts only.
     }
     function initAssignment() {
         installAssignmentObserver();
@@ -2610,6 +2717,19 @@
     let stockItemCountByHrid = {};      // hrid → 强化0数量
     let stockCountByHridEnh = {};       // hrid → { 强化等级: 数量 }（装备多强化档显示用）
     let stockItemNameByHrid = {};
+    let stockDirty = true;
+    let stockRefreshTimer = 0;
+    let stockInitialTimer = 0;
+    let stockNameRetryAt = 0;
+    let stockReverseNames = { source: null, map: {} };
+    function scheduleStockRefresh() {
+        if (!stockObserver || stockRefreshTimer) return;
+        stockRefreshTimer = setTimeout(function () {
+            stockRefreshTimer = 0;
+            if (!stockObserver || trialEndState.silenced) return;
+            tryLoadStockNames(); renderActionStockOverlays();
+        }, 150);
+    }
     let stockObserver = null;   // 库存显示的 MutationObserver（未声明会导致 strict 模式下 ReferenceError）
     // 取 GamePage 的 React fiber stateNode（.state = gameState，.props 可能挂 i18n）
     function getGameRootNode() {
@@ -2631,17 +2751,17 @@
         if (it.hash) return 'hash:' + it.hash;
         return 'loc:' + (it.itemLocationHrid || '') + ':' + it.itemHrid + ':' + Number(it.enhancementLevel || 0);
     }
-    function mergeStockItems(items) {
+    function mergeStockItems(items, replace = false) {
         if (!Array.isArray(items)) return;
+        if (replace) Object.keys(stockRawByItem).forEach(k => delete stockRawByItem[k]);
         for (const it of items) {
             if (!it || !it.itemHrid) continue;
             const key = stockItemKey(it);
-            const c = Number(it.count || 0);
-            if (c > 0) stockRawByItem[key] = it; else delete stockRawByItem[key];
+            if (Number(it.count || 0) > 0) stockRawByItem[key] = it; else delete stockRawByItem[key];
         }
-        rebuildStockCounts();
-        // init_character_data 常在 boot 之后才到达 → 数据到位后主动刷一次角标
-        if (stockObserver) setTimeout(renderActionStockOverlays, 0);
+        inventoryRevision++;
+        stockDirty = true;
+        scheduleStockRefresh();
     }
     function rebuildStockCounts() {
         const result = {};          // hrid → 强化0数量（兼容旧逻辑/图标兜底判断）
@@ -2656,6 +2776,7 @@
         }
         stockItemCountByHrid = result;
         stockCountByHridEnh = byEnh;
+        stockDirty = false;
     }
     // 物品中文名表（hrid → 中文名）：从 React fiber 根做全树 BFS，找挂载 i18n 实例的
     // 组件（I18nextProvider 的 memoizedProps.i18n）。找到后 itemNames 全量可用，
@@ -2691,9 +2812,9 @@
         // 全树 BFS 找 memoizedProps.i18n
         for (const root of roots) {
             const q = [root], seen = new Set();
-            let n = 0;
-            while (q.length && n++ < 60000) {
-                const f = q.shift();
+            let n = 0, cursor = 0;
+            while (cursor < q.length && n++ < 60000) {
+                const f = q[cursor++];
                 if (!f || typeof f !== 'object' || seen.has(f)) continue;
                 seen.add(f);
                 const mp = f.memoizedProps;
@@ -2707,6 +2828,8 @@
     }
     function tryLoadStockNames() {
         if (Object.keys(stockItemNameByHrid).length > 0) return true;
+        if (Date.now() < stockNameRetryAt) return false;
+        stockNameRetryAt = Date.now() + 5000;
         const names = findI18nItemNames();
         if (names && typeof names === 'object') {
             stockItemNameByHrid = Object.assign({}, names);
@@ -2735,16 +2858,18 @@
     const SEL_ACTION_NAME = '[class^="SkillAction_name"]';
     function renderActionStockOverlays() {
         if (trialEndState.silenced) return;
-        removeAllStockOverlays();
+        if (stockDirty) rebuildStockCounts();
         const actions = document.querySelectorAll(SEL_ACTION_GRID + ' ' + SEL_ACTION_ITEM);
-        if (!actions || actions.length === 0) return;
-        const hridByName = {};
-        for (const hrid in stockItemNameByHrid) {
+        if (!actions || actions.length === 0) { removeAllStockOverlays(); return; }
+        const hridByName = stockReverseNames.source === stockItemNameByHrid ? stockReverseNames.map : {};
+        if (stockReverseNames.source !== stockItemNameByHrid) for (const hrid in stockItemNameByHrid) {
             if (Object.prototype.hasOwnProperty.call(stockItemNameByHrid, hrid)) {
                 hridByName[stockItemNameByHrid[hrid]] = hrid;
             }
         }
+        stockReverseNames = { source: stockItemNameByHrid, map: hridByName };
         actions.forEach(function (skill) {
+            const existing = skill.querySelector('.' + ACTION_STOCK_OVERLAY_CLASS);
             const nameElem = skill.querySelector(SEL_ACTION_NAME);
             if (!nameElem) return;
             const actionName = nameElem.textContent.trim();
@@ -2765,13 +2890,13 @@
                     if (stockItemCountByHrid[guess]) matchedHrid = guess;
                 }
             }
-            if (!matchedHrid) return;
+            if (!matchedHrid) { if (existing) existing.remove(); return; }
             const enhMap = stockCountByHridEnh[matchedHrid] || null;
-            if (!enhMap) return;
+            if (!enhMap) { if (existing) existing.remove(); return; }
             // 强化等级从高到低；只有强化0时保持单行纯数字（消耗品原样），
             // 装备存在多个强化档时逐行显示「+N 数量」
             const levels = Object.keys(enhMap).map(Number).sort(function (a, b) { return b - a; });
-            if (levels.length === 0) return;
+            if (levels.length === 0) { if (existing) existing.remove(); return; }
             let text;
             if (levels.length === 1 && levels[0] === 0) {
                 text = formatStockCount(enhMap[0]);
@@ -2782,10 +2907,18 @@
                     return e > 0 ? '<span style="color:#ffd700">+' + e + '</span> ' + cnt : cnt;
                 }).join('\n');
             }
+            if (existing) {
+                if (existing.dataset.sig !== text) {
+                    existing.innerHTML = '<span style="display:block;white-space:pre;text-align:right">' + text + '</span>';
+                    existing.dataset.sig = text;
+                }
+                return;
+            }
             skill.style.position = skill.style.position || 'relative';
             skill.style.overflow = 'visible';
             const div = document.createElement('div');
             div.className = ACTION_STOCK_OVERLAY_CLASS;
+            div.dataset.sig = text;
             // 关键：外层是 display:flex，直接放多个节点会被当成多个 flex 子项横向排开；
             // 必须包一层块级元素，让多行文本作为单一子项整体渲染（\n 由 white-space:pre 保留）
             div.innerHTML = '<span style="display:block;white-space:pre;text-align:right">' + text + '</span>';
@@ -2801,27 +2934,15 @@
     }
     function startActionStockObserver() {
         if (stockObserver) return;
-        // 通用防抖刷新：任何 DOM 变化（背包数量/动作面板开合）都延迟重刷一次。
-        // 动作面板不在 DOM 时 renderActionStockOverlays 会自然清空，无需精确匹配节点。
-        let timer = 0;
-        const schedule = function () {
-            if (timer) return;
-            timer = setTimeout(function () {
-                timer = 0;
-                if (!document.querySelector(SEL_ACTION_GRID)) { removeAllStockOverlays(); return; }
-                tryLoadStockNames();
-                renderActionStockOverlays();
-            }, 150);
-        };
-        stockObserver = new MutationObserver(schedule);
-        stockObserver.observe(document.body, { childList: true, subtree: true });
-        // 启用后立即刷一次（等一拍让面板渲染完），并打印诊断信息方便排查
-        setTimeout(function () {
-            tryLoadStockNames();
-            renderActionStockOverlays();
+        stockObserver = createScopedUiObserver(SEL_ACTION_GRID, scheduleStockRefresh);
+        scheduleStockRefresh();
+        stockInitialTimer = setTimeout(function () {
+            stockInitialTimer = 0; scheduleStockRefresh();
         }, 1000);
     }
     function stopActionStockObserver() {
+        clearTimeout(stockRefreshTimer); stockRefreshTimer = 0;
+        clearTimeout(stockInitialTimer); stockInitialTimer = 0;
         if (stockObserver) { stockObserver.disconnect(); stockObserver = null; }
         removeAllStockOverlays();
     }
@@ -2843,7 +2964,7 @@
     const UPGRADE_SKILL_REVERSE = Object.freeze(Object.fromEntries(
         Object.entries(UPGRADE_SKILL_MAP).map(function (e) { return [e[1], e[0]]; })
     ));
-    const processedUpgradeTooltips = new Set();
+    let processedUpgradeTooltips = new WeakSet();
     let upgradeTimeObserver = null;   // 升级时间的 MutationObserver（未声明会导致 strict 模式下 ReferenceError）
     // 专用 gameState 获取（与原升级时间脚本同款直查逻辑，不走 KUNPO 共用的
     // getGameState —— 后者直查失败会走 #root BFS 兜底，可能返回缺
@@ -2944,22 +3065,22 @@
             if (tipMatch(root)) handleUpgradeTooltip(root);
             if (root.querySelectorAll) root.querySelectorAll(UPGRADE_TIP_SEL).forEach(handleUpgradeTooltip);
         };
-        upgradeTimeObserver = new MutationObserver(function (mutations) {
+        upgradeTimeObserver = createScopedUiObserver(UPGRADE_TIP_SEL, function (mutations) {
             mutations.forEach(function (mutation) {
                 mutation.addedNodes.forEach(function (node) {
-                    if (node.nodeType === 1) scanTree(node);
+                    if (node.nodeType === 1 && !isKunpoNode(node)) scanTree(node);
                 });
-                if (mutation.type === 'attributes' && mutation.target.nodeType === 1) scanTree(mutation.target);
+                if (mutation.type === 'attributes' && mutation.target.nodeType === 1 && !isKunpoNode(mutation.target)) scanTree(mutation.target);
             });
-        });
-        upgradeTimeObserver.observe(document.body, {
+        }, {
             childList: true, subtree: true,
             attributes: true, attributeFilter: ['class', 'style', 'data-popper-placement'],
         });
+        document.querySelectorAll(UPGRADE_TIP_SEL).forEach(handleUpgradeTooltip);
     }
     function stopUpgradeTimeObserver() {
         if (upgradeTimeObserver) { upgradeTimeObserver.disconnect(); upgradeTimeObserver = null; }
-        processedUpgradeTooltips.clear();
+        processedUpgradeTooltips = new WeakSet();
         document.querySelectorAll('.' + UPGRADE_TIME_CLASS).forEach(function (n) { n.remove(); });
     }
     function applyUpgradeTimeFeature(on) {
@@ -3539,6 +3660,7 @@
         trialEndState.reason = reason || '';
         try {
             stopTrialEndWatch();
+            stopActionStockObserver(); stopUpgradeTimeObserver();
             cleanupStatusPolling();                       // 1 秒一次的行业/配装轮询
             if (assignmentState.pollTimer) { clearInterval(assignmentState.pollTimer); assignmentState.pollTimer = null; }
             clearTimeout(assignmentState.timer); assignmentState.timer = 0;
@@ -3691,8 +3813,10 @@
                 try { syncAuraRecoButton(); syncAuraRecoInfo(); } catch (_) {}
             }, 200);
         };
-        auraRecoObserver = new MutationObserver(scheduleAuraReco);
-        auraRecoObserver.observe(document.body, { childList: true, subtree: true });
+        auraRecoObserver = createScopedUiObserver('[class*="Party_page"], [class^="Party_"]', function () {
+            auraGeometryCache = new WeakMap(); auraHover.layout = null;
+            scheduleAuraReco();
+        });
         syncAuraRecoButton();
         syncAuraRecoInfo();
     }
@@ -3765,7 +3889,7 @@
         const slotMap = (state.partyInfo && state.partyInfo.partySlotMap) || {};
         const myId = state.character ? String(state.character.id) : '';
         let profiles = [];
-        try { profiles = JSON.parse(localStorage.getItem('profile_export_list') || '[]') || []; } catch (_) {}
+        try { profiles = readJsonCached('profile_export_list', []) || []; } catch (_) {}
         const nameCache = readPartyNameCache();
         const ids = [];
         for (const member of Object.values(slotMap)) {
@@ -3828,7 +3952,7 @@
     // 成员 id → name 本地缓存（全局共享，队伍页面抓到一次后永久可用）
     const PARTY_NAME_CACHE_KEY = 'kunpo_party_name_map';
     function readPartyNameCache() {
-        try { return JSON.parse(localStorage.getItem(PARTY_NAME_CACHE_KEY) || '{}') || {}; } catch (_) { return {}; }
+        try { return readJsonCached(PARTY_NAME_CACHE_KEY, {}) || {}; } catch (_) { return {}; }
     }
     function writePartyNameCache(map) {
         try { localStorage.setItem(PARTY_NAME_CACHE_KEY, JSON.stringify(map)); } catch (_) {}
@@ -3836,7 +3960,7 @@
     // ── 队友资料缓存：点开其资料页时 WS 推送 profile_shared，存五项战斗等级 ──
     const PARTY_PROFILE_KEY = 'kunpo_profile_map';
     function readPartyProfileMap() {
-        try { return JSON.parse(localStorage.getItem(PARTY_PROFILE_KEY) || '{}') || {}; } catch (_) { return {}; }
+        try { return readJsonCached(PARTY_PROFILE_KEY, {}) || {}; } catch (_) { return {}; }
     }
     function writePartyProfileMap(map) {
         try { localStorage.setItem(PARTY_PROFILE_KEY, JSON.stringify(map)); } catch (_) {}
@@ -3944,7 +4068,7 @@
     const AURA_PRIORITY_DEFAULT = ['speed', 'critical', 'physical', '', ''];
     function auraPriorityList() {
         let arr = null;
-        try { arr = JSON.parse(localStorage.getItem(K_AURA_PRIORITY) || 'null'); } catch (_) {}
+        try { arr = readJsonCached(K_AURA_PRIORITY, null); } catch (_) {}
         if (!Array.isArray(arr)) arr = AURA_PRIORITY_DEFAULT;
         return auraPriorityListFromArray(arr);
     }
@@ -4013,7 +4137,8 @@
     }
     // ── 计算器共享空间（jsonbin）上传状态：就绪/未上传以此为准 ──
     // 解密后的记录形如 { members: [{ name, auras: {revive:…, physical:…,…} }], plan, … }
-    const auraServer = { byName: null, fetchedAt: 0, inFlight: false };
+    const auraServer = { byName: null, fetchedAt: 0, inFlight: false, failures: 0,
+        nextRetryAt: 0, retryTimer: 0, generation: 0 };
     // 拉取共享空间 members 并按 name 建索引。本会话只拉一次（优先复用「拉取排刀」那次
     // 已经拿到的整份记录），不再按时间反复刷新；上传成功后 resetAuraServerCache() 会让它重拉一次。
     async function refreshAuraServerData() {
@@ -4021,6 +4146,9 @@
         if (auraServer.byName) return;              // 已拉过 → 不再周期性刷新
         const cfg = assignmentConfig();
         if (!cfg) return;
+        if (auraServer.failures >= 5 || Date.now() < auraServer.nextRetryAt) return;
+        const generation = auraServer.generation;
+        let succeeded = false;
         auraServer.inFlight = true;
         try {
             const key = await deriveKey(cfg.password, cfg.guild);
@@ -4031,18 +4159,35 @@
             list.forEach(function (m) {
                 if (m && m.name) byName[String(m.name).trim()] = m;
             });
+            if (generation !== auraServer.generation) return;
             auraServer.byName = byName;
+            auraServer.failures = 0; auraServer.nextRetryAt = 0;
+            clearTimeout(auraServer.retryTimer); auraServer.retryTimer = 0;
+            succeeded = true;
             auraServer.fetchedAt = Date.now();
         } catch (_) {
-            // 失败不设 byName，下次进入队伍页面会自动重试一次
+            if (generation !== auraServer.generation) return;
+            auraServer.failures++;
+            const delay = Math.min(30000, 1000 * Math.pow(2, auraServer.failures - 1));
+            auraServer.nextRetryAt = auraServer.failures >= 5 ? Infinity : Date.now() + delay;
+            if (auraServer.failures < 5) {
+                clearTimeout(auraServer.retryTimer);
+                auraServer.retryTimer = setTimeout(function () {
+                    auraServer.retryTimer = 0;
+                    if (auraRecoEnabled() && document.querySelector('[class*="Party_page"], [class^="Party_"]')) void refreshAuraServerData();
+                }, delay);
+            }
         } finally {
             auraServer.inFlight = false;
-            setTimeout(function () { syncAuraRecoInfo(); }, 0);
+            if (succeeded) setTimeout(function () { syncAuraRecoInfo(); }, 0);
         }
     }
     // 上传成功后调用：让光环数据下次重新拉一次，避免显示上传前的旧值。
     // 函数声明会提升，uploadLoadoutsToServer 里可以直接调。
     function resetAuraServerCache() {
+        clearTimeout(auraServer.retryTimer); auraServer.retryTimer = 0;
+        auraServer.failures = 0; auraServer.nextRetryAt = 0; auraServer.generation++;
+        auraGeometryCache = new WeakMap();
         auraServer.byName = null;
         auraServer.fetchedAt = 0;
     }
@@ -4062,7 +4207,7 @@
     }
     // ── 手动录入兜底：服务器找不到或全 0 时，在信息块里直接填八个光环等级 ──
     function readAuraManual() {
-        try { return JSON.parse(localStorage.getItem(K_AURA_MANUAL) || '{}') || {}; } catch (_) { return {}; }
+        try { return readJsonCached(K_AURA_MANUAL, {}) || {}; } catch (_) { return {}; }
     }
     function writeAuraManual(map) {
         try { localStorage.setItem(K_AURA_MANUAL, JSON.stringify(map)); } catch (_) {}
@@ -4085,7 +4230,7 @@
     // 由信息块里的勾选框手动指定携带者：每人最多勾一个（存储值是单值，天然互斥），
     // 每种能力全队最多一人（写入时清理其他成员的同键勾选）。
     function readAuraFixed() {
-        try { return JSON.parse(localStorage.getItem(K_AURA_FIXED) || '{}') || {}; } catch (_) { return {}; }
+        try { return readJsonCached(K_AURA_FIXED, {}) || {}; } catch (_) { return {}; }
     }
     function writeAuraFixed(map) {
         try { localStorage.setItem(K_AURA_FIXED, JSON.stringify(map)); } catch (_) {}
@@ -4161,7 +4306,18 @@
     // 最后一个「只含本人名字元素」的祖先即成员槽根 → 信息块插到它后面（整张卡片下方）。
     // 注意：必须按已收集的名字元素身份计数（node.contains），不能用类名子串重新查询——
     // 角色名组件是嵌套结构，内层元素类名同样含 "characterName" 子串，会误判成多个成员。
+    let auraGeometryCache = new WeakMap();
     function auraSlotRootFor(nameEl, container, nameEls) {
+        const cached = auraGeometryCache.get(nameEl);
+        if (cached && cached.container === container && cached.root.isConnected && (!cached.card || cached.card.isConnected)) {
+            if (cached.card) nameEl.__cnCard = cached.card;
+            return cached.root;
+        }
+        const root = findAuraSlotRoot(nameEl, container, nameEls);
+        if (root) auraGeometryCache.set(nameEl, { container, root, card: nameEl.__cnCard || null });
+        return root;
+    }
+    function findAuraSlotRoot(nameEl, container, nameEls) {
         if (IS_CN_SITE) {
             // CN 站：卡片是绝对定位（不在文档流），列高只到名字行，宽度估算也不可靠——
             // 直接按「X 与名字中心对齐 + 位于名字下方 + 含精灵图」找到本成员的卡片元素，
@@ -4277,56 +4433,63 @@
     }
     // CN 站信息块重定位：左/宽取列根（整列）矩形，顶部取「列内最大底边」（fixed 不受 overflow 裁剪影响）
     function repositionCnAuraBlocks() {
-        if (cnPartyEditMode()) {   // 编辑模式：块会挡住槽位操作区 → 隐藏
-            document.querySelectorAll('.' + AURA_INFO_CLASS).forEach(function (b) { b.style.display = 'none'; });
-            return;
-        }
-        document.querySelectorAll('.' + AURA_INFO_CLASS).forEach(function (block) {
+        const blocks = Array.from(document.querySelectorAll('.' + AURA_INFO_CLASS));
+        if (cnPartyEditMode()) { blocks.forEach(b => { if (b.style.display !== 'none') b.style.display = 'none'; }); return; }
+        // Read every layout before writing any position.
+        const positions = blocks.map(function (block) {
             const root = block.__cnSlotRoot;
-            if (!root || !root.isConnected) {
-                if (block.parentNode) block.parentNode.removeChild(block);
-                return;
-            }
+            if (!root || !root.isConnected) return { block, remove: true };
             const r = root.getBoundingClientRect();
-            if (r.width < 10) { if (block.style.display !== 'none') block.style.display = 'none'; return; }
-            if (block.style.display !== '') block.style.display = '';
-            // 仅在实际变化时才写样式：避免重复 mutation 反复触发 Observer，也减少无谓重排
-            const left = Math.round(r.left) + 'px';
-            const width = Math.round(r.width) + 'px';
-            const top = Math.round(cnColumnBottom(root) + 4) + 'px';
-            if (block.style.left !== left) block.style.left = left;
-            if (block.style.width !== width) block.style.width = width;
-            if (block.style.top !== top) block.style.top = top;
+            return { block, hidden: r.width < 10, left: Math.round(r.left) + 'px', width: Math.round(r.width) + 'px',
+                top: Math.round(cnColumnBottom(root) + 4) + 'px' };
+        });
+        positions.forEach(function (p) {
+            const b = p.block;
+            if (p.remove) { b.remove(); return; }
+            const display = p.hidden ? 'none' : '';
+            if (b.style.display !== display) b.style.display = display;
+            if (p.hidden) return;
+            ['left', 'width', 'top'].forEach(k => { if (b.style[k] !== p[k]) b.style[k] = p[k]; });
         });
     }
     let cnAuraPosInstalled = false;
+    let cnAuraPositionFrame = 0;
+    function scheduleCnAuraPosition() {
+        auraHover.layout = null;
+        if (cnAuraPositionFrame) return;
+        cnAuraPositionFrame = requestAnimationFrame(function () { cnAuraPositionFrame = 0; repositionCnAuraBlocks(); });
+    }
     function ensureCnAuraPosListeners() {
         if (cnAuraPosInstalled) return;
         cnAuraPosInstalled = true;
-        window.addEventListener('scroll', repositionCnAuraBlocks, true);   // capture：捕获内部滚动容器
-        window.addEventListener('resize', repositionCnAuraBlocks);
+        window.addEventListener('scroll', scheduleCnAuraPosition, true);   // capture：捕获内部滚动容器
+        window.addEventListener('resize', function () { auraGeometryCache = new WeakMap(); scheduleCnAuraPosition(); });
     }
     // ── 成员卡片悬停提示：显示该成员全部光环等级（仅启用光环推荐时生效）──
     // 用自定义浮动 div 跟随鼠标，而不是原生 title —— title 是悬停期间动态
     // 设置时浏览器不会弹出，必须移开再悬停才有。
-    const auraHover = { installed: false, el: null, raf: 0 };
+    const auraHover = { installed: false, el: null, raf: 0, layout: null, x: 0, y: 0 };
     // 光标所在成员：遍历成员名字元素，定位各自卡片区域，命中光标的即目标
     function auraHoverMemberAt(container, mx, my) {
-        const nameEls = auraNameElements(container);
-        for (let i = 0; i < nameEls.length; i++) {
-            const el = nameEls[i];
-            try {
-                const root = auraSlotRootFor(el, container, nameEls);
-                if (!root) continue;
-                // CN 站：卡片是绝对定位的精灵图区域（auraSlotRootFor 顺带定位好 __cnCard）；
-                // 非 CN 站：成员列根（含名字行+卡片）
-                const rectEl = (IS_CN_SITE && el.__cnCard) ? el.__cnCard : root;
-                const r = rectEl.getBoundingClientRect();
-                if (r.width < 10 || r.height < 10) continue;
-                if (mx >= r.left && mx <= r.right && my >= r.top && my <= r.bottom) {
-                    return { index: i, name: String(el.textContent || '').trim() };
-                }
-            } catch (_) {}
+        const now = Date.now();
+        let layout = auraHover.layout;
+        if (!layout || layout.container !== container || now - layout.at > 100 || layout.entries.some(x => !x.el.isConnected)) {
+            const nameEls = auraNameElements(container);
+            const entries = [];
+            nameEls.forEach(function (el, index) {
+                try {
+                    const root = auraSlotRootFor(el, container, nameEls);
+                    const rectEl = (IS_CN_SITE && el.__cnCard) ? el.__cnCard : root;
+                    if (!rectEl) return;
+                    entries.push({ el: rectEl, rect: rectEl.getBoundingClientRect(), index, name: String(el.textContent || '').trim() });
+                } catch (_) {}
+            });
+            layout = auraHover.layout = { container, at: now, entries };
+        }
+        for (const entry of layout.entries) {
+            const r = entry.rect;
+            if (r.width >= 10 && r.height >= 10 && mx >= r.left && mx <= r.right && my >= r.top && my <= r.bottom)
+                return { index: entry.index, name: entry.name };
         }
         return null;
     }
@@ -4360,10 +4523,11 @@
             + 'color:#eef3ff;font:600 11px/1.7 system-ui,sans-serif;white-space:pre;box-shadow:0 6px 18px rgba(0,0,0,.45)';
         const hide = function () { if (tip.style.display !== 'none') tip.style.display = 'none'; };
         document.addEventListener('mousemove', function (e) {
+            auraHover.x = e.clientX; auraHover.y = e.clientY;
             if (auraHover.raf) return;
-            const mx = e.clientX, my = e.clientY;
             auraHover.raf = requestAnimationFrame(function () {
                 auraHover.raf = 0;
+                const mx = auraHover.x, my = auraHover.y;
                 try {
                     if (!auraRecoEnabled()) { hide(); return; }   // 仅启用光环推荐时显示
                     const container = document.querySelector('[class*="Party_page"]') || document.querySelector('[class^="Party_"]');
@@ -4373,8 +4537,8 @@
                     if (!hit) { hide(); return; }
                     const text = auraHoverTipText(hit.index, hit.name);
                     if (!text) { hide(); return; }
-                    tip.textContent = text;
-                    tip.style.display = 'block';
+                    if (tip.textContent !== text) tip.textContent = text;
+                    if (tip.style.display !== 'block') tip.style.display = 'block';
                     const r = tip.getBoundingClientRect();
                     let x = mx + 14, y = my + 14;
                     if (x + r.width > window.innerWidth - 8) x = mx - r.width - 10;
@@ -4384,6 +4548,8 @@
                 } catch (_) { hide(); }
             });
         }, true);
+        window.addEventListener('scroll', function () { auraHover.layout = null; }, true);
+        window.addEventListener('resize', function () { auraHover.layout = null; auraGeometryCache = new WeakMap(); });
         document.body.appendChild(tip);
         auraHover.el = tip;
     }
@@ -4643,6 +4809,7 @@
         // 清除缓存：删掉本功能生成的成员信息缓存（队友资料 + 成员名映射），信息块回到「等待资料」
         const clearCache = mkBtn('清除缓存', '#b45309');
         clearCache.addEventListener('click', function () {
+            resetAuraServerCache();
             [PARTY_PROFILE_KEY, PARTY_NAME_CACHE_KEY].forEach(function (k) {
                 try { localStorage.removeItem(k); } catch (_) {}
             });
