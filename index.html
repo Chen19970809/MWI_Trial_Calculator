@@ -2317,11 +2317,15 @@ let state = {
   auraDataMode: false,
   // 展示设置第二行：战斗试炼1/2 各自勾选的出战职业（值为《所有职业》列表中的字符串）。仅本地保存。
   displayBattleTrialProfessions: [[], []],
-  // 职业列表：从《文档》按钮导入的 xlsx 中读取并去重的所有「职业_」列值（会话级，不持久化）。
+  // 职业列表：从《文档》按钮导入的 xlsx 中读取并去重的所有「职业_」列值。
+  // 已由 profs（云端同步）接管；这两个变量保留作为旧会话/未上云时的回退数据源。
   professions: [],
-  // 角色名 → 该角色的职业列表（同一份 xlsx 解析而来，会话级）。展示区域《职业》下拉的数据源。
+  // 角色名 → 该角色的职业列表（同一份 xlsx 解析而来）。profs.byName 的本地回退。
   professionsByName: {},
-  // 展示区域每行选中的职业：memberId → 职业（仅本地保存）。
+  // 云端职业数据：{ _ts, list:[职业合集], byName:{角色名:[职业...]}, sel:{角色名:当前出战职业} }。
+  // 随 saveData 本地保存、随上传整体上云（mergeState 按 _ts 新者胜）；个人端拉取即得，无需再导入 xlsx。
+  profs: { _ts: 0, list: [], byName: {}, sel: {} },
+  // 展示区域每行选中的职业：memberId → 职业（仅本地保存）。profs.sel（按角色名）的本地回退。
   displayProfessions: {},
   // 第四行《平均分配》勾选的职业：这些职业对应的成员会被平均分配到战斗试炼1/2。仅本地保存。
   displayEvenSplitProfessions: [],
@@ -4814,7 +4818,9 @@ function restorePlanToEditor() {
     const p = byName[name];
     const e = m[name];
     if (!p || !Array.isArray(e) || e.length < 3) return;
-    state.displayProfessions[p.id] = String(e[2] || '');
+    const prof = String(e[2] || '');
+    state.displayProfessions[p.id] = prof;                    // 本地回退（memberId 键）
+    profsState().sel[String(name).trim()] = prof;             // 云端职业数据（角色名键）
     want[p.id] = battleIconsFromMask(e[1]);
   });
   // 反推两个试炼的图标：快照不记录「试炼↔图标」映射（仅存本地），这里把快照中
@@ -4903,6 +4909,7 @@ function restorePlanToEditor() {
   try { localStorage.setItem('mwi_display_even_split_profs', JSON.stringify(state.displayEvenSplitProfessions)); } catch(e) {}
   try { localStorage.removeItem('mwi_display_even_split_assigned'); } catch(e) {}
   persistDisplayBattleOverrides();
+  saveData(); // 职业选择已写回 profs.sel（云端数据），持久化并标记红点
 }
 // 战斗试炼 i 的统计：分配总人数（图标命中该试炼的人数），以及其中职业含「奶」「盾」「弓」的人（记数量与名单）。
 function battleTrialStats(i) {
@@ -4952,7 +4959,7 @@ function battleProfessionSummary(i) {
 }
 function renderBattleTrialOptions() {
   const names = battleTrialIconNames();
-  const profs = state.professions || [];
+  const profs = professionList();
   // 战斗试炼1 → 第二行容器，战斗试炼2 → 第三行容器。
   [0, 1].forEach(function(i) {
     const box = document.getElementById('ds-battle-trial-options-' + i);
@@ -5003,7 +5010,7 @@ function evenSplitSummary() {
 function renderEvenSplitOptions() {
   const box = document.getElementById('ds-even-split-options');
   if (!box) return;
-  const profs = state.professions || [];
+  const profs = professionList();
   const sel = state.displayEvenSplitProfessions || [];
   const key = 'esplit';
   const options = profs.length
@@ -5028,7 +5035,7 @@ function renderEvenSplitOptions() {
 // 勾选/取消一个职业后重新均分；下拉保持展开。
 function toggleEvenSplitProfession(pIdx, ev) {
   if (ev) ev.stopPropagation();
-  const profs = state.professions || [];
+  const profs = professionList();
   const name = profs[pIdx];
   if (name === undefined) return;
   const sel = (state.displayEvenSplitProfessions || []).slice();
@@ -5072,7 +5079,7 @@ function applyEvenSplit() {
     groups.get(prof).push(id);
   });
   // 分组顺序沿用《所有职业》的顺序；奇偶组交替「哪一半给试炼1」，避免总人数都往试炼1 偏。
-  const orderedProfs = (state.professions || []).filter(function(pf) { return groups.has(pf); });
+  const orderedProfs = professionList().filter(function(pf) { return groups.has(pf); });
   groups.forEach(function(_, pf) { if (orderedProfs.indexOf(pf) < 0) orderedProfs.push(pf); });
   orderedProfs.forEach(function(pf, g) {
     const ids = groups.get(pf);
@@ -5127,7 +5134,7 @@ function selectBattleTrialIcon(i, kIdx, ev) {
 function toggleBattleProfession(i, pIdx, ev) {
   if (ev) ev.stopPropagation();
   if (i !== 0 && i !== 1) return;
-  const profs = state.professions || [];
+  const profs = professionList();
   const name = profs[pIdx];
   if (name === undefined) return;
   const sel = (state.displayBattleTrialProfessions[i] || []).slice();
@@ -5218,6 +5225,36 @@ function renderDisplayArea() {
   }).join('');
   positionBattleDropdown();
 }
+// === 云端职业数据（state.profs）读取辅助 ===
+// 结构：{ _ts, list:[职业合集], byName:{角色名:[职业...]}, sel:{角色名:当前出战职业} }
+// 会长端「文档」导入 xlsx 时生成，随上传整体上云；个人端拉取即得，无需再导入。
+function profsState() {
+  if (!state.profs || typeof state.profs !== 'object' || Array.isArray(state.profs)) {
+    state.profs = { _ts: 0, list: [], byName: {}, sel: {} };
+  }
+  if (!Array.isArray(state.profs.list)) state.profs.list = [];
+  if (!state.profs.byName || typeof state.profs.byName !== 'object' || Array.isArray(state.profs.byName)) state.profs.byName = {};
+  if (!state.profs.sel || typeof state.profs.sel !== 'object' || Array.isArray(state.profs.sel)) state.profs.sel = {};
+  return state.profs;
+}
+// 职业合集：云端 profs.list 优先，为空（旧会话/未上云）回退到本次导入的 state.professions。
+function professionList() {
+  const pr = profsState();
+  return pr.list.length ? pr.list : (state.professions || []);
+}
+// 某角色的所有职业：profs.byName 优先，回退 professionsByName（同一份 xlsx 解析结果）。
+function profListByName(name) {
+  const nm = String(name == null ? '' : name).trim();
+  const pr = profsState();
+  if (nm && Array.isArray(pr.byName[nm]) && pr.byName[nm].length) return pr.byName[nm];
+  return (state.professionsByName && state.professionsByName[nm]) || [];
+}
+// 某角色的当前出战职业（角色名 → 职业；未设置返回 undefined）。
+function profSelByName(name) {
+  const nm = String(name == null ? '' : name).trim();
+  const pr = profsState();
+  return Object.prototype.hasOwnProperty.call(pr.sel, nm) ? pr.sel[nm] : undefined;
+}
 // 成员当前生效的职业：未手动选择过（或原选择已不在当前职业列表中）时取职业列表第一个（原始顺序）；手动选空则为空。
 // 成员当前生效的职业：排刀（plan）优先；否则未手动选择时取职业列表第一个，手动选空则为空。
 function displayMemberProfession(p) {
@@ -5226,15 +5263,18 @@ function displayMemberProfession(p) {
   return displayMemberProfessionRaw(p);
 }
 function displayMemberProfessionRaw(p) {
-  const storedProf = state.displayProfessions[String(p.id)];
-  const profList = (state.professionsByName && state.professionsByName[p.name]) || [];
+  const nm = String((p && p.name) || '').trim();
+  // 云端 profs.sel（按角色名）优先，回退本地 displayProfessions（按 memberId，历史本地数据）
+  const selProf = profSelByName(nm);
+  const storedProf = (selProf !== undefined) ? selProf : state.displayProfessions[String(p.id)];
+  const profList = profListByName(nm);
   if (storedProf === undefined) return profList.length ? profList[0] : '';
   if (storedProf && profList.length && profList.indexOf(storedProf) < 0) return profList[0];
   return storedProf || '';
 }
 // 展示区域每行的《职业》下拉：选项为该成员在表格中「角色名 == p.name」那一行的职业。
 function displayProfessionSelectHtml(p, selected) {
-  const list = (state.professionsByName && state.professionsByName[p.name]) || [];
+  const list = profListByName(p.name);
   const id = String(p.id).replace(/["'\\]/g, '');
   const opts = ['<option value=""'+(selected ? '' : ' selected')+'>'+escHtml(t('profEmptyOption'))+'</option>']
     .concat(list.map(v => '<option value="'+escHtml(v)+'"'+(v === selected ? ' selected' : '')+'>'+escHtml(v)+'</option>'));
@@ -5263,6 +5303,14 @@ function onDisplayProfessionChange(id, v) {
   state.displayProfessions[String(id)] = v || '';
   // 手动改动仅对本次会话生效；下次导入文档一律重置为职业列表的第一个值。
   try { localStorage.setItem('mwi_display_professions', JSON.stringify(state.displayProfessions)); } catch(e) {}
+  // 同步写云端职业数据（按角色名），随下次「上传」分发给全员。
+  const pr = profsState();
+  const person = (state.members || []).find(function(p) { return p && String(p.id) === String(id); });
+  if (person && person.name) {
+    pr.sel[String(person.name).trim()] = v || '';
+    pr._ts = Date.now();
+    saveData();
+  }
   // 改职业后，平均分配的成员范围可能变化，重新均分一次。
   if ((state.displayEvenSplitProfessions || []).length) applyEvenSplit();
   renderBattleTrialOptions(); // 右侧人数/奶/盾统计随职业变化
@@ -5477,17 +5525,28 @@ function importDocFile(input) {
     const profs = (res && res.professions) || [];
     state.professions = profs;
     state.professionsByName = (res && res.byName) || {};
+    // 写入云端职业数据（list=职业合集，byName=每角色所有职业），随下次「上传」分发给全员。
+    const pr = profsState();
+    pr._ts = Date.now();
+    pr.list = profs.slice();
+    pr.byName = {};
+    Object.keys(state.professionsByName).forEach(nm => { pr.byName[nm] = (state.professionsByName[nm] || []).slice(); });
     // 《平均分配》中已不存在的职业去掉。
     state.displayEvenSplitProfessions = (state.displayEvenSplitProfessions || []).filter(p => profs.indexOf(p) >= 0);
     try { localStorage.setItem('mwi_display_even_split_profs', JSON.stringify(state.displayEvenSplitProfessions)); } catch(e) {}
     // 导入后不记忆上次结果：每位成员一律选中其职业列表（原始读取顺序）的第一个值。
+    pr.sel = {};
+    state.displayProfessions = {};
     state.members.forEach(p => {
+      const nm = String(p.name || '').trim();
       const id = String(p.id);
       const list = state.professionsByName[p.name] || [];
-      if (list.length) state.displayProfessions[id] = list[0];
-      else state.displayProfessions[id] = '';
+      const first = list.length ? list[0] : '';
+      state.displayProfessions[id] = first;      // 本地回退（memberId 键）
+      pr.sel[nm] = first;                        // 云端数据（角色名键）
     });
     try { localStorage.setItem('mwi_display_professions', JSON.stringify(state.displayProfessions)); } catch(e) {}
+    saveData(); // 持久化 profs 并标记红点，提醒会长点击「上传」分发给成员
     // 成员职业重置后重新均分（没选职业时即为撤销上一次平均分配）。
     applyEvenSplit();
     renderProfessionSelect();
@@ -5514,7 +5573,7 @@ function onProfessionSelect(v) {
 function renderProfessionSelect() {
   const sel = document.getElementById('display-profession-select');
   if (!sel) return;
-  const profs = state.professions || [];
+  const profs = professionList();
   sel.innerHTML = profs.length
     ? profs.map(p => '<option value="'+escHtml(p)+'">'+escHtml(p)+'</option>').join('')
     : '<option value="">'+t('profNone')+'</option>';
@@ -7053,7 +7112,7 @@ function tryImportFromHash() {
 function getStorageKey() { return 'mwi_trial_'+(state.guild||'default'); }
 // 只负责本地持久化。云端同步不再自动触发，由用户点顶栏"上传"按钮 → uploadToServerAuto()（按通道自动分发）统一提交。
 function saveData() {
-  const data = JSON.stringify({ guild:state.guild, members:state.members, trials:state.trials, plan:(state.plan || null) });
+  const data = JSON.stringify({ guild:state.guild, members:state.members, trials:state.trials, plan:(state.plan || null), profs:(state.profs || null) });
   try { localStorage.setItem(getStorageKey(), data); } catch(e) {}
   markDirty();
 }
@@ -7112,7 +7171,7 @@ async function uploadToServer() {
   let uploadOk = false;
   let mergeFail = null; // 记录拉取远端合并这一步的失败信息，便于排查 401/403。
   try {
-    const localData = { guild:state.guild, members:(state.members||[]).map(slimMemberForUpload), trials:state.trials, plan:(state.plan || null) };
+    const localData = { guild:state.guild, members:(state.members||[]).map(slimMemberForUpload), trials:state.trials, plan:(state.plan || null), profs:(state.profs || null) };
     const mk = localStorage.getItem('mwi_master_key') || '';
     // Fetch latest 做 merge（会长端下 mergeState 会强推本地，其他人走 name+_ts 合并）
     let merged = localData;
@@ -7279,7 +7338,8 @@ function mergeState(local, remote) {
       guild: local.guild || remote.guild,
       members: (local.members || []).slice(),
       trials: (local.trials || []).slice(),
-      plan: local.plan || null
+      plan: local.plan || null,
+      profs: local.profs || null
     };
   }
   const selfName = ((state.selfName || '') + '').trim();
@@ -7339,7 +7399,11 @@ function mergeState(local, remote) {
   // 排刀（plan）：会长一次性发布的只读快照，个人端不产生 plan → 远端优先（_ts 新者胜）。
   const rp = remote.plan, lp = local.plan;
   const mergedPlan = (rp && (!lp || Number(rp._ts || 0) >= Number(lp._ts || 0))) ? rp : (lp || null);
-  return { guild: local.guild || remote.guild, members: mergedMembers, trials: mergedTrials, plan: mergedPlan };
+  // 职业数据（profs）：会长端维护（导入 xlsx / 改出战职业），个人端拉取即得；同样按 _ts 新者胜，
+  // 兼容旧云端数据无 profs 字段（undefined 视为远端没有 → 保留本地）。
+  const lp2 = local.profs, rp2 = remote.profs;
+  const mergedProfs = (rp2 && (!lp2 || Number(rp2._ts || 0) >= Number(lp2._ts || 0))) ? rp2 : (lp2 || null);
+  return { guild: local.guild || remote.guild, members: mergedMembers, trials: mergedTrials, plan: mergedPlan, profs: mergedProfs };
 }
 async function loadFromBin() {
   try {
@@ -7374,7 +7438,7 @@ async function loadFromBin() {
 }
 async function createBin(guild, password, masterKey) {
   const encKey = await deriveKey(password, guild);
-  const data = JSON.stringify({ guild, members:(state.members||[]).map(slimMemberForUpload), trials:state.trials, plan:(state.plan || null) });
+  const data = JSON.stringify({ guild, members:(state.members||[]).map(slimMemberForUpload), trials:state.trials, plan:(state.plan || null), profs:(state.profs || null) });
   const rec = await encryptRecord(data, encKey);
   const resp = await fetch(BIN_BASE, {
     method:'POST',
@@ -7491,7 +7555,7 @@ async function uploadToServerCos() {
   if (btn) { btn.disabled = true; btn.classList.add('busy'); }
   let mergeFail = null;
   try {
-    const localData = { guild:state.guild, members:(state.members||[]).map(slimMemberForUpload), trials:state.trials, plan:(state.plan || null) };
+    const localData = { guild:state.guild, members:(state.members||[]).map(slimMemberForUpload), trials:state.trials, plan:(state.plan || null), profs:(state.profs || null) };
     let merged = localData;
     try {
       const remoteRec = await cosGetRecord();
@@ -7758,6 +7822,8 @@ function applyBackupToState(mode) {
   if (d.guild) state.guild = d.guild;
   // 老备份只有 {guild,members,trials}；带 plan 的备份（saveData 输出）才恢复排刀，避免误清空当前排刀
   if (Object.prototype.hasOwnProperty.call(d, 'plan')) state.plan = d.plan || null;
+  // 同理：老备份无 profs 字段时保留当前职业数据，不清空
+  if (Object.prototype.hasOwnProperty.call(d, 'profs')) state.profs = d.profs || null;
   try { renderAll(); } catch(e) { console.error('renderAll failed:', e); }
   saveData();
   return true;
@@ -7789,7 +7855,7 @@ async function runBackupImport(withUpload) {
       state.guild = guild;
       state.binId = bin;
       applyBackupToState(mode);
-      const payload = JSON.stringify({ guild:state.guild, members:(state.members||[]).map(slimMemberForUpload), trials:state.trials, plan:(state.plan || null) });
+      const payload = JSON.stringify({ guild:state.guild, members:(state.members||[]).map(slimMemberForUpload), trials:state.trials, plan:(state.plan || null), profs:(state.profs || null) });
       const rec = await encryptRecord(payload, key);
       const resp = await fetch(apiBase, {
         method:'POST',
@@ -7828,6 +7894,7 @@ function downloadBackup() {
       members: state.members || [],
       trials: state.trials || [],
       plan: state.plan || null,
+      profs: state.profs || null,
     };
     const d = new Date();
     const stamp = d.getFullYear() + String(d.getMonth() + 1).padStart(2, '0') + String(d.getDate()).padStart(2, '0')
