@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         KUNPO试炼专用
 // @namespace    https://www.milkywayidle.com/
-// @version      1.1.1
+// @version      1.1.2
 // @description  上传等级、成就、房屋、迷宫配装、神龛到计算器
 // @author       MonsterFC、MusoAlpha、KUNPO成员测试
 // @license      MIT
@@ -24,19 +24,20 @@
 (function () {
     'use strict';
 
-    const SCRIPT_VERSION = '1.1.1';
+    const SCRIPT_VERSION = '1.1.2';
     // Performance revision for the 1.1.1 release.
     const PERFORMANCE_REVISION = '2026-09-30.1';
 
     // ── 更新日志：key = 版本号，value = 中文更新内容；发新版本时在顶部加一条即可 ──
     const CHANGELOG = {
+        '1.1.2': '1. DIY插件新增极简版，不喜欢过多功能或者游戏卡顿或者（屁事多的）梦想可以前往下载了！\n'
+            + '2. TODO 职业\n',
         '1.1.1': '1. 新增DIY插件分享，可以方便的下载群友DIY升级的插件\n'
             + '2. 上传神龛，后续模拟试炼使用真实神龛数据\n'
             + '3. 地牢光环推荐支持固定无敌、复活，鼠标悬停可查看角色所有光环等级\n'
             + '4. 新增显示升级时间，技能提示框显示升级所需/具体时间，默认不启用\n'
             + '5. 新增显示动作页面库存，默认不启用\n'
-            + '6. TODO 职业\n'
-            + '7. 性能优化：失败请求退避、避免库存与排刀重复刷新、缓存配装与光环定位、降低监听和内存开销',
+            + '6. 性能优化：失败请求退避、避免库存与排刀重复刷新、缓存配装与光环定位、降低监听和内存开销',
         '1.1.0': '1. 实现战斗试炼同职业不同怪物分别配置技能\n'
             + '2. 新增未参加战斗试炼的提示\n'
             + '3. fix bug 技能配置不显示 ',
