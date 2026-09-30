@@ -30,7 +30,10 @@
     const CHANGELOG = {
         '1.1.1': '1. 新增DIY插件分享，可以方便的下载群友DIY升级的插件\n'
             + '2. 上传神龛，后续模拟试炼使用真实神龛数据\n'
-            + '3. TODO 职业',
+            + '3. 地牢光环推荐支持固定无敌、复活，鼠标悬停可查看角色所有光环等级\n'
+            + '4. 新增显示升级时间，技能提示框显示升级所需/具体时间，默认不启用\n'
+            + '5. 新增显示动作页面库存，默认不启用\n'
+            + '6. TODO 职业',
         '1.1.0': '1. 实现战斗试炼同职业不同怪物分别配置技能\n'
             + '2. 新增未参加战斗试炼的提示\n'
             + '3. fix bug 技能配置不显示 ',
@@ -110,6 +113,8 @@
     const K_CN_DIRECT = 'kunpo_cn_direct';       // 国内直连（勾选后《打开计算器》改跳 EdgeOne 国内镜像地址）
     const K_AURA_RECO = 'kunpo_aura_reco';       // 光环推荐（勾选后在队伍页面显示《光环优先级》按钮）
     const K_MANUAL_PLAN = 'kunpo_manual_plan';   // 手动显示排刀（'1' 才在面板上显示《显示排刀》按钮，默认不显示）
+    const K_SHOW_UPGRADE_TIME = 'kunpo_show_upgrade_time'; // 显示升级时间（'1' 启用：技能提示框显示升级所需/具体时间，默认不启用）
+    const K_SHOW_ACTION_STOCK = 'kunpo_show_action_stock'; // 动作页面显示库存（'1' 启用：动作按钮右下角显示对应物品库存，默认不启用）
     const K_LAST_UPLOAD = 'kunpo_last_upload';   // 上次成功上传配装的时间戳（毫秒），用于面板提示
     // 上次见过的脚本版本。全局键（所有角色共用，不按角色隔离）。
     // 游戏启动时：内置版本 > 记录版本 → 弹窗显示区间内的更新内容，并把记录更新为当前版本。
@@ -118,6 +123,7 @@
     const K_COS_TOKEN = 'kunpo_cos_token';       // 云函数访问口令 X-Auth（留空则用内置默认值）
     const K_AURA_PRIORITY = 'kunpo_aura_priority'; // 光环优先级（5 个槽位，元素为 AURA_MAP 键或 '' 表示不参与）
     const K_AURA_MANUAL = 'kunpo_aura_manual';     // 光环手动录入（{成员名: {AURA_MAP键: 等级}}，服务器未上传时兜底）
+    const K_AURA_FIXED = 'kunpo_aura_fixed';       // 复活/无敌固定勾选（{成员名: 'revive'|'invincible'}，每人最多一个）
 
 
     const CALC_URL_STORAGE_KEY = 'mwi_trial_calc_url';
@@ -893,6 +899,7 @@
             }, 0);
             mergeSkills(obj.characterSkills, true);
             mergeAbilities(obj.characterAbilities, true);
+            mergeStockItems(obj.characterItems);   // 模块①库存显示：全量背包快照
             changed = true;
         } else if (obj.type === 'party_updated') {
             // 进出队伍/队伍变动时服务端推送（字段名兼容 partyInfo / party 两种形态）
@@ -908,9 +915,12 @@
         } else if (obj.type === 'abilities_updated') {
             mergeAbilities(obj.endCharacterAbilities || obj.characterAbilities);
             changed = true;
+        } else if (obj.type === 'items_updated') {
+            mergeStockItems(obj.endCharacterItems || obj.characterItems);   // 模块①库存显示：物品变动
         } else if (obj.type === 'action_completed') {
             if (obj.endCharacterSkills) mergeSkills(obj.endCharacterSkills);
             if (obj.endCharacterAbilities) mergeAbilities(obj.endCharacterAbilities);
+            if (obj.endCharacterItems) mergeStockItems(obj.endCharacterItems);   // 模块①库存显示
             changed = Boolean(obj.endCharacterSkills || obj.endCharacterAbilities);
         }
 
@@ -2555,6 +2565,413 @@
         } catch (e) { console.warn('[KUNPO] 版本提示失败：', e); }
     }
 
+    // ═══════════════════════════════════════════════════════════════════════
+    // ▼ 可选功能模块（设置里勾选启用，默认全关；静默期间自动不生效）
+    //   模块①：动作页面显示库存 —— 并入自「[银河奶牛]动作界面显示库存-1.3」
+    //   模块②：显示升级时间   —— 并入自「[银河奶牛]显示战斗升级所需时间-1.4」
+    // ═══════════════════════════════════════════════════════════════════════
+
+    // ── 开关读写（按角色隔离，'1' = 启用）──
+    function showActionStockEnabled() {
+        try { return readCfg(K_SHOW_ACTION_STOCK) === '1'; } catch (_) { return false; }
+    }
+    function writeShowActionStockFlag(on) {
+        try { localStorage.setItem(K_SHOW_ACTION_STOCK, on ? '1' : '0'); } catch (_) {}
+        writeCfg(K_SHOW_ACTION_STOCK, on ? '1' : '0');
+    }
+    function showUpgradeTimeEnabled() {
+        try { return readCfg(K_SHOW_UPGRADE_TIME) === '1'; } catch (_) { return false; }
+    }
+    function writeShowUpgradeTimeFlag(on) {
+        try { localStorage.setItem(K_SHOW_UPGRADE_TIME, on ? '1' : '0'); } catch (_) {}
+        writeCfg(K_SHOW_UPGRADE_TIME, on ? '1' : '0');
+    }
+
+    // ═══ 模块①：动作页面显示库存 ═══
+    // 在动作面板每个动作按钮右下角叠加显示背包里对应物品的数量。
+    const ACTION_STOCK_OVERLAY_CLASS = 'kunpo-stock-overlay';
+    // 动作名与物品中文名映射（仅在动作名 ≠ 物品名时手动补充）
+    const STOCK_NAME_MAP = Object.freeze({
+        '奶牛': '牛奶', '翠绿奶牛': '翠绿牛奶', '蔚蓝奶牛': '蔚蓝牛奶', '深紫奶牛': '深紫牛奶',
+        '绛红奶牛': '绛红牛奶', '彩虹奶牛': '彩虹牛奶', '神圣奶牛': '神圣牛奶',
+        '树': '原木', '桦树': '白桦原木', '雪松树': '雪松原木', '紫心树': '紫心原木',
+        '银杏树': '银杏原木', '红杉树': '红杉原木', '奥秘树': '神秘原木',
+    });
+    // 物品中文名 → hrid 静态表（插件环境取不到 i18n 时的兜底；i18n 命中时优先用 i18n）。
+    // 若某项 hrid 猜错，该动作只是不显示角标（需背包里确有对应物品才显示）。
+    const STOCK_ITEM_HRID_ZH = Object.freeze({
+        '牛奶': '/items/milk', '翠绿牛奶': '/items/green_milk', '蔚蓝牛奶': '/items/blue_milk',
+        '深紫牛奶': '/items/purple_milk', '绛红牛奶': '/items/crimson_milk',
+        '彩虹牛奶': '/items/rainbow_milk', '神圣牛奶': '/items/holy_milk',
+        '原木': '/items/log', '白桦原木': '/items/birch_log', '雪松原木': '/items/cedar_log',
+        '紫心原木': '/items/purpleheart_log', '银杏原木': '/items/ginkgo_log',
+        '红杉原木': '/items/redwood_log', '神秘原木': '/items/arcane_log',
+    });
+    let stockItemCountByHrid = {};      // hrid → 强化0数量
+    let stockCountByHridEnh = {};       // hrid → { 强化等级: 数量 }（装备多强化档显示用）
+    let stockItemNameByHrid = {};
+    let stockObserver = null;   // 库存显示的 MutationObserver（未声明会导致 strict 模式下 ReferenceError）
+    // 取 GamePage 的 React fiber stateNode（.state = gameState，.props 可能挂 i18n）
+    function getGameRootNode() {
+        const gamePageEl = document.querySelector('[class^="GamePage"]');
+        if (!gamePageEl) return null;
+        const key = Object.keys(gamePageEl).find(k => k.startsWith('__reactFiber$'));
+        if (!key) return null;
+        const fiber = gamePageEl[key];
+        return (fiber && fiber.return && fiber.return.stateNode) || null;
+    }
+    // ── 数据来源：WebSocket 消息里的背包（不依赖 React —— 诊断证实 GamePage 上
+    //    取不到 fiber 键，原「读 gameState.characterItemMap」路线在该环境不可用）。
+    //    handleGameMessage 在 init_character_data / items_updated / action_completed
+    //    时调用 mergeStockItems；按物品唯一键（id/hash/位置）保存原始条目，
+    //    汇总时只统计强化等级 0 的物品。
+    const stockRawByItem = {};   // 唯一键 → { itemHrid, count, enhancementLevel, ... }
+    function stockItemKey(it) {
+        if (it.id !== undefined && it.id !== null) return 'id:' + it.id;
+        if (it.hash) return 'hash:' + it.hash;
+        return 'loc:' + (it.itemLocationHrid || '') + ':' + it.itemHrid + ':' + Number(it.enhancementLevel || 0);
+    }
+    function mergeStockItems(items) {
+        if (!Array.isArray(items)) return;
+        for (const it of items) {
+            if (!it || !it.itemHrid) continue;
+            const key = stockItemKey(it);
+            const c = Number(it.count || 0);
+            if (c > 0) stockRawByItem[key] = it; else delete stockRawByItem[key];
+        }
+        rebuildStockCounts();
+        // init_character_data 常在 boot 之后才到达 → 数据到位后主动刷一次角标
+        if (stockObserver) setTimeout(renderActionStockOverlays, 0);
+    }
+    function rebuildStockCounts() {
+        const result = {};          // hrid → 强化0数量（兼容旧逻辑/图标兜底判断）
+        const byEnh = {};           // hrid → { 强化等级: 数量 }（装备分强化显示用）
+        for (const key in stockRawByItem) {
+            const it = stockRawByItem[key];
+            const enh = Number(it.enhancementLevel || 0);
+            const hrid = it.itemHrid;
+            byEnh[hrid] = byEnh[hrid] || {};
+            byEnh[hrid][enh] = (byEnh[hrid][enh] || 0) + Number(it.count || 0);
+            if (enh === 0) result[hrid] = (result[hrid] || 0) + Number(it.count || 0);
+        }
+        stockItemCountByHrid = result;
+        stockCountByHridEnh = byEnh;
+    }
+    // 物品中文名表（hrid → 中文名）：从 React fiber 根做全树 BFS，找挂载 i18n 实例的
+    // 组件（I18nextProvider 的 memoizedProps.i18n）。找到后 itemNames 全量可用，
+    // 动作名=物品名的动作（生产类）无需任何映射即可匹配。
+    // i18next 的 options.resources / services.resourceStore 两种形态都试。
+    function findI18nItemNames() {
+        const pick = function (i18n) {
+            if (!i18n) return null;
+            const a = i18n.options && i18n.options.resources && i18n.options.resources.zh
+                && i18n.options.resources.zh.translation && i18n.options.resources.zh.translation.itemNames;
+            if (a) return a;
+            const b = i18n.services && i18n.services.resourceStore && i18n.services.resourceStore.data
+                && i18n.services.resourceStore.data.zh && i18n.services.resourceStore.data.zh.translation
+                && i18n.services.resourceStore.data.zh.translation.itemNames;
+            return b || null;
+        };
+        // 收集候选 fiber 根：#root 容器键 / 任意元素的 fiber 沿 .return 爬到顶
+        const roots = [];
+        const rootEl = document.getElementById('root');
+        if (rootEl) {
+            const ck = Object.keys(rootEl).find(function (k) { return k.indexOf('__reactContainer$') === 0; });
+            if (ck && rootEl[ck]) roots.push(rootEl[ck]);
+            if (rootEl._reactRootContainer && rootEl._reactRootContainer.current) roots.push(rootEl._reactRootContainer.current);
+        }
+        const els = document.querySelectorAll('div');
+        for (let i = 0; i < els.length && i < 300 && roots.length < 3; i++) {
+            const k = Object.keys(els[i]).find(function (k2) { return k2.indexOf('__reactFiber$') === 0; });
+            if (!k) continue;
+            let f = els[i][k], guard = 0;
+            while (f && f.return && guard++ < 500) f = f.return;
+            if (f && roots.indexOf(f) < 0) roots.push(f);
+        }
+        // 全树 BFS 找 memoizedProps.i18n
+        for (const root of roots) {
+            const q = [root], seen = new Set();
+            let n = 0;
+            while (q.length && n++ < 60000) {
+                const f = q.shift();
+                if (!f || typeof f !== 'object' || seen.has(f)) continue;
+                seen.add(f);
+                const mp = f.memoizedProps;
+                const found = pick(mp && mp.i18n);
+                if (found) return found;
+                if (f.child) q.push(f.child);
+                if (f.sibling) q.push(f.sibling);
+            }
+        }
+        return null;
+    }
+    function tryLoadStockNames() {
+        if (Object.keys(stockItemNameByHrid).length > 0) return true;
+        const names = findI18nItemNames();
+        if (names && typeof names === 'object') {
+            stockItemNameByHrid = Object.assign({}, names);
+            return true;
+        }
+        return false;
+    }
+    // 格式化数量：5 字符内原样；超长缩写 K/M/B/T
+    function formatStockCount(n) {
+        n = Math.floor(Number(n) || 0);
+        const s = String(n);
+        if (s.length <= 5) return s;
+        const units = [{ v: 1e3, s: 'K' }, { v: 1e6, s: 'M' }, { v: 1e9, s: 'B' }, { v: 1e12, s: 'T' }];
+        for (let i = 0; i < units.length; i++) {
+            const cand = String(Math.floor(n / units[i].v)) + units[i].s;
+            if (cand.length <= 5) return cand;
+        }
+        return String(Math.floor(n / 1e12)) + 'T';
+    }
+    function removeAllStockOverlays() {
+        document.querySelectorAll('.' + ACTION_STOCK_OVERLAY_CLASS).forEach(function (n) { n.remove(); });
+    }
+    // 选择器用前缀匹配（css-modules 的 hash 后缀会随版本变化）
+    const SEL_ACTION_GRID = '[class^="SkillActionGrid_skillActionGrid"]';
+    const SEL_ACTION_ITEM = '[class^="SkillAction_skillAction"]';
+    const SEL_ACTION_NAME = '[class^="SkillAction_name"]';
+    function renderActionStockOverlays() {
+        if (trialEndState.silenced) return;
+        removeAllStockOverlays();
+        const actions = document.querySelectorAll(SEL_ACTION_GRID + ' ' + SEL_ACTION_ITEM);
+        if (!actions || actions.length === 0) return;
+        const hridByName = {};
+        for (const hrid in stockItemNameByHrid) {
+            if (Object.prototype.hasOwnProperty.call(stockItemNameByHrid, hrid)) {
+                hridByName[stockItemNameByHrid[hrid]] = hrid;
+            }
+        }
+        actions.forEach(function (skill) {
+            const nameElem = skill.querySelector(SEL_ACTION_NAME);
+            if (!nameElem) return;
+            const actionName = nameElem.textContent.trim();
+            if (!actionName) return;
+            let matchedHrid = hridByName[actionName] || null;
+            if (!matchedHrid && STOCK_NAME_MAP[actionName]) matchedHrid = hridByName[STOCK_NAME_MAP[actionName]] || null;
+            // 静态表兜底：i18n 取不到时按内置「物品中文名 → hrid」表匹配
+            if (!matchedHrid && STOCK_NAME_MAP[actionName]) matchedHrid = STOCK_ITEM_HRID_ZH[STOCK_NAME_MAP[actionName]] || null;
+            if (!matchedHrid) matchedHrid = STOCK_ITEM_HRID_ZH[actionName] || null;
+            if (!matchedHrid) {
+                // 图标兜底：动作按钮 svg use 的 href 形如 …/items/xxx（或 #items_xxx）
+                // → /items/xxx，且背包里确有该物品才采用
+                const use = skill.querySelector('use');
+                const href = (use && (use.getAttribute('href') || use.getAttribute('xlink:href'))) || '';
+                if (/items/.test(href)) {
+                    const tail = String(href).split('/').pop().replace(/^#/, '');
+                    const guess = '/items/' + tail;
+                    if (stockItemCountByHrid[guess]) matchedHrid = guess;
+                }
+            }
+            if (!matchedHrid) return;
+            const enhMap = stockCountByHridEnh[matchedHrid] || null;
+            if (!enhMap) return;
+            // 强化等级从高到低；只有强化0时保持单行纯数字（消耗品原样），
+            // 装备存在多个强化档时逐行显示「+N 数量」
+            const levels = Object.keys(enhMap).map(Number).sort(function (a, b) { return b - a; });
+            if (levels.length === 0) return;
+            let text;
+            if (levels.length === 1 && levels[0] === 0) {
+                text = formatStockCount(enhMap[0]);
+            } else {
+                // 强化数值黄色高亮（+N 用 span 包裹），数量保持白色
+                text = levels.map(function (e) {
+                    const cnt = formatStockCount(enhMap[e]);
+                    return e > 0 ? '<span style="color:#ffd700">+' + e + '</span> ' + cnt : cnt;
+                }).join('\n');
+            }
+            skill.style.position = skill.style.position || 'relative';
+            skill.style.overflow = 'visible';
+            const div = document.createElement('div');
+            div.className = ACTION_STOCK_OVERLAY_CLASS;
+            // 关键：外层是 display:flex，直接放多个节点会被当成多个 flex 子项横向排开；
+            // 必须包一层块级元素，让多行文本作为单一子项整体渲染（\n 由 white-space:pre 保留）
+            div.innerHTML = '<span style="display:block;white-space:pre;text-align:right">' + text + '</span>';
+            Object.assign(div.style, {
+                gridArea: '1/1', display: 'flex', alignItems: 'flex-end', justifyContent: 'flex-end',
+                margin: '0 2px -1px 0', color: '#fff', fontWeight: 'bold', position: 'relative',
+                zIndex: '10', pointerEvents: 'none', whiteSpace: 'pre', textAlign: 'right',
+                lineHeight: '1.15',
+                textShadow: '-1px 0 var(--color-background-game),0 1px var(--color-background-game),1px 0 var(--color-background-game),0 -1px var(--color-background-game)',
+            });
+            skill.appendChild(div);
+        });
+    }
+    function startActionStockObserver() {
+        if (stockObserver) return;
+        // 通用防抖刷新：任何 DOM 变化（背包数量/动作面板开合）都延迟重刷一次。
+        // 动作面板不在 DOM 时 renderActionStockOverlays 会自然清空，无需精确匹配节点。
+        let timer = 0;
+        const schedule = function () {
+            if (timer) return;
+            timer = setTimeout(function () {
+                timer = 0;
+                if (!document.querySelector(SEL_ACTION_GRID)) { removeAllStockOverlays(); return; }
+                tryLoadStockNames();
+                renderActionStockOverlays();
+            }, 150);
+        };
+        stockObserver = new MutationObserver(schedule);
+        stockObserver.observe(document.body, { childList: true, subtree: true });
+        // 启用后立即刷一次（等一拍让面板渲染完），并打印诊断信息方便排查
+        setTimeout(function () {
+            tryLoadStockNames();
+            renderActionStockOverlays();
+        }, 1000);
+    }
+    function stopActionStockObserver() {
+        if (stockObserver) { stockObserver.disconnect(); stockObserver = null; }
+        removeAllStockOverlays();
+    }
+    function applyActionStockFeature(on) {
+        if (on) startActionStockObserver(); else stopActionStockObserver();
+    }
+
+    // ═══ 模块②：显示升级时间 ═══
+    // 在技能提示框（导航栏技能悬浮）里显示「升级所需时间 / 升级具体时间」，仅战斗中有效。
+    const UPGRADE_TIME_CLASS = 'kunpo-upgrade-time-display';
+    // 选择器用前缀匹配（css-modules 的 hash 后缀会随版本变化）
+    const UPGRADE_TIP_SEL = '[class^="NavigationBar_navigationSkillTooltip"]';
+    const UPGRADE_NAME_SEL = '[class^="NavigationBar_name"]';
+    const UPGRADE_INFO_SEL = '[class^="NavigationBar_info"]';
+    const UPGRADE_SKILL_MAP = Object.freeze({
+        '/skills/stamina': '耐力', '/skills/intelligence': '智力', '/skills/attack': '攻击',
+        '/skills/defense': '防御', '/skills/melee': '近战', '/skills/ranged': '远程', '/skills/magic': '魔法',
+    });
+    const UPGRADE_SKILL_REVERSE = Object.freeze(Object.fromEntries(
+        Object.entries(UPGRADE_SKILL_MAP).map(function (e) { return [e[1], e[0]]; })
+    ));
+    const processedUpgradeTooltips = new Set();
+    let upgradeTimeObserver = null;   // 升级时间的 MutationObserver（未声明会导致 strict 模式下 ReferenceError）
+    // 专用 gameState 获取（与原升级时间脚本同款直查逻辑，不走 KUNPO 共用的
+    // getGameState —— 后者直查失败会走 #root BFS 兜底，可能返回缺
+    // battlePlayers/combatStartTime 的另一份 state，导致这里静默失效）
+    function getBattleGameState() {
+        try {
+            const gamePageEl = document.querySelector('[class^="GamePage"]');
+            if (!gamePageEl) return null;
+            const fiberKeys = Reflect.ownKeys(gamePageEl).filter(function (k) {
+                return typeof k === 'string' && k.indexOf('__reactFiber$') === 0;
+            });
+            for (const fiberKey of fiberKeys) {
+                const stateNode = gamePageEl[fiberKey] && gamePageEl[fiberKey].return && gamePageEl[fiberKey].return.stateNode;
+                if (stateNode && stateNode.state) return stateNode.state;
+            }
+            return null;
+        } catch (error) {
+            console.log('[KUNPO][升级时间] 获取游戏状态出错:', error);
+            return null;
+        }
+    }
+    function calcBattleDurationSec(combatStartTime) {
+        if (!combatStartTime) return 0;
+        const start = new Date(combatStartTime).getTime();
+        return Math.max(1, Math.floor((Date.now() - start) / 1000));
+    }
+    function formatUpgradeDuration(seconds) {
+        const years = Math.floor(seconds / 31536000);
+        seconds %= 31536000;
+        const days = Math.floor(seconds / 86400);
+        seconds %= 86400;
+        const hours = Math.floor(seconds / 3600);
+        seconds %= 3600;
+        const minutes = Math.floor(seconds / 60);
+        const parts = [];
+        if (years > 0) parts.push(years.toLocaleString() + ' y');
+        if (days > 0) parts.push(days + ' d');
+        if (hours > 0) parts.push(hours + ' h');
+        if (minutes > 0 || parts.length === 0) parts.push(minutes + ' m');
+        return parts.join(' ');
+    }
+    function formatUpgradeDateTime(seconds) {
+        const now = new Date();
+        const d = new Date(now.getTime() + seconds * 1000);
+        const month = String(d.getMonth() + 1).padStart(2, '0');
+        const day = String(d.getDate()).padStart(2, '0');
+        const hm = String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0');
+        if (Math.floor(seconds / 86400) >= 30 && d.getFullYear() > now.getFullYear()) {
+            return d.getFullYear() + '/' + month + '/' + day + ' ' + hm;
+        }
+        return month + '/' + day + ' ' + hm;
+    }
+    function handleUpgradeTooltip(tooltipEl) {
+        if (trialEndState.silenced) return;
+        try {
+            if (processedUpgradeTooltips.has(tooltipEl)) return;
+            processedUpgradeTooltips.add(tooltipEl);
+            const gs = getBattleGameState();
+            const playerId = gs && gs.character && gs.character.id;
+            const battlePlayers = gs && gs.battlePlayers;
+            const combatStartTime = gs && gs.combatStartTime;
+            if (!gs || !playerId || !battlePlayers || !combatStartTime) return;   // 未在战斗中
+            const playerIndex = battlePlayers.findIndex(function (p) { return p.character && p.character.id === playerId; });
+            if (playerIndex < 0) return;
+            const skillNameEl = tooltipEl.querySelector(UPGRADE_NAME_SEL);
+            const skillName = skillNameEl ? skillNameEl.textContent.trim() : '';
+            const skillKey = skillName ? UPGRADE_SKILL_REVERSE[skillName] : null;
+            if (!skillKey) return;
+            const playerData = battlePlayers[playerIndex];
+            const totalExp = (playerData.totalSkillExperienceMap && playerData.totalSkillExperienceMap[skillKey]) || 0;
+            const needExpEl = tooltipEl.querySelector('div:nth-child(4)');
+            const needExp = needExpEl ? parseFloat(needExpEl.textContent.replace(/[^0-9.-]/g, '')) : 0;
+            if (totalExp <= 0 || needExp <= 0) return;
+            const expPerHour = (totalExp / calcBattleDurationSec(combatStartTime)) * 3600;
+            if (expPerHour <= 0) return;
+            const remainingSec = Math.ceil(needExp / expPerHour * 3600);
+            let timeEl = tooltipEl.querySelector('.' + UPGRADE_TIME_CLASS);
+            if (!timeEl) {
+                timeEl = document.createElement('div');
+                timeEl.className = UPGRADE_TIME_CLASS;
+                timeEl.style.cssText = 'line-height: 1.4;';
+                const infoEl = tooltipEl.querySelector(UPGRADE_INFO_SEL);
+                tooltipEl.insertBefore(timeEl, infoEl);   // 插在升级所需经验之后、说明信息之前
+            }
+            timeEl.innerHTML = '升级所需时间:  ' + formatUpgradeDuration(remainingSec)
+                + '<br>升级具体时间: ' + formatUpgradeDateTime(remainingSec);
+        } catch (error) {
+            console.log('[KUNPO][升级时间] 处理技能提示框出错:', error);
+        }
+    }
+    function startUpgradeTimeObserver() {
+        if (upgradeTimeObserver) return;
+        if (!document.body) return;   // body 未就绪时由 initOptionalFeatures 的 DOMContentLoaded 分支重试
+        const tipMatch = function (el) {
+            return el instanceof Element && /^NavigationBar_navigationSkillTooltip/.test(String(el.className || ''));
+        };
+        const scanTree = function (root) {
+            if (tipMatch(root)) handleUpgradeTooltip(root);
+            if (root.querySelectorAll) root.querySelectorAll(UPGRADE_TIP_SEL).forEach(handleUpgradeTooltip);
+        };
+        upgradeTimeObserver = new MutationObserver(function (mutations) {
+            mutations.forEach(function (mutation) {
+                mutation.addedNodes.forEach(function (node) {
+                    if (node.nodeType === 1) scanTree(node);
+                });
+                if (mutation.type === 'attributes' && mutation.target.nodeType === 1) scanTree(mutation.target);
+            });
+        });
+        upgradeTimeObserver.observe(document.body, {
+            childList: true, subtree: true,
+            attributes: true, attributeFilter: ['class', 'style', 'data-popper-placement'],
+        });
+    }
+    function stopUpgradeTimeObserver() {
+        if (upgradeTimeObserver) { upgradeTimeObserver.disconnect(); upgradeTimeObserver = null; }
+        processedUpgradeTooltips.clear();
+        document.querySelectorAll('.' + UPGRADE_TIME_CLASS).forEach(function (n) { n.remove(); });
+    }
+    function applyUpgradeTimeFeature(on) {
+        if (on) startUpgradeTimeObserver(); else stopUpgradeTimeObserver();
+    }
+
+    // ── 启动入口：按当前设置启用两个可选模块 ──
+    function initOptionalFeatures() {
+        applyActionStockFeature(showActionStockEnabled());
+        applyUpgradeTimeFeature(showUpgradeTimeEnabled());
+    }
+
     function buildSettingsForm() {
         const form = document.createElement('div');
         form.id = 'kunpo-guild-settings';
@@ -2667,6 +3084,42 @@
         manualPlanRow.appendChild(manualPlanInput);
         manualPlanRow.appendChild(document.createTextNode('手动显示排刀（勾选后在面板显示《显示排刀》按钮，用于手动重新拉取排刀）'));
         form.appendChild(manualPlanRow);
+        // 动作页面显示库存（默认不勾选）：并入自「[银河奶牛]动作界面显示库存」插件
+        const stockRow = document.createElement('label');
+        stockRow.style.cssText = 'display:flex;align-items:center;gap:6px;margin:0 0 6px 0;color:#c3d2f2;font:600 11px/1.4 system-ui,sans-serif;cursor:pointer';
+        const stockInput = document.createElement('input');
+        stockInput.type = 'checkbox';
+        stockInput.checked = showActionStockEnabled();
+        stockInput.addEventListener('change', function () {
+            writeShowActionStockFlag(stockInput.checked);
+            applyActionStockFeature(stockInput.checked);
+            if (stockInput.checked) {
+                showAssignmentToast('库存显示已启用：请卸载「动作界面显示库存」插件并刷新网页，避免角标重复叠加', 5000);
+            } else {
+                showAssignmentToast('动作页库存显示已关闭', 3000);
+            }
+        });
+        stockRow.appendChild(stockInput);
+        stockRow.appendChild(document.createTextNode('动作页面显示库存（在动作按钮右下角显示对应物品库存）'));
+        form.appendChild(stockRow);
+        // 显示升级时间（默认不勾选）：并入自「[银河奶牛]显示战斗升级所需时间」插件
+        const upgRow = document.createElement('label');
+        upgRow.style.cssText = 'display:flex;align-items:center;gap:6px;margin:0 0 6px 0;color:#c3d2f2;font:600 11px/1.4 system-ui,sans-serif;cursor:pointer';
+        const upgInput = document.createElement('input');
+        upgInput.type = 'checkbox';
+        upgInput.checked = showUpgradeTimeEnabled();
+        upgInput.addEventListener('change', function () {
+            writeShowUpgradeTimeFlag(upgInput.checked);
+            applyUpgradeTimeFeature(upgInput.checked);
+            if (upgInput.checked) {
+                showAssignmentToast('升级时间显示已启用：请卸载「显示战斗升级所需时间」插件并刷新网页，避免重复注入', 5000);
+            } else {
+                showAssignmentToast('升级时间显示已关闭', 3000);
+            }
+        });
+        upgRow.appendChild(upgInput);
+        upgRow.appendChild(document.createTextNode('显示升级时间（战斗中，技能提示框显示升级所需/具体时间）'));
+        form.appendChild(upgRow);
         const btns = document.createElement('div');
         btns.style.cssText = 'display:flex;gap:6px;margin-top:8px;flex-wrap:wrap';
         const save = document.createElement('button');
@@ -2710,12 +3163,12 @@
             updateResumeButton();
         });
         save.addEventListener('click', function () {
-            saveGuildSettings(nameInput.value, idInput.value, urlInput.value, mkInput.value, docInput.value, hideInput.checked, countInput.checked, cnInput.checked, auraInput.checked);
+            saveGuildSettings(nameInput.value, idInput.value, urlInput.value, mkInput.value, docInput.value, hideInput.checked, countInput.checked, cnInput.checked, auraInput.checked, upgInput.checked, stockInput.checked);
         });
         cancel.addEventListener('click', function () { form.style.display = 'none'; });
         btns.append(save, cancel, resume, logBtn);
         form.appendChild(btns);
-        state.settingsInputs = { name: nameInput, id: idInput, url: urlInput, mk: mkInput, doc: docInput, cosApi: cosApiInput, cosToken: cosTokenInput, hide: hideInput, count: countInput, cn: cnInput, aura: auraInput };
+        state.settingsInputs = { name: nameInput, id: idInput, url: urlInput, mk: mkInput, doc: docInput, cosApi: cosApiInput, cosToken: cosTokenInput, hide: hideInput, count: countInput, cn: cnInput, aura: auraInput, upg: upgInput, stock: stockInput };
         return form;
     }
     // 只返回「用户自己存过的」地址；没存过就是空字符串（不回填脚本默认地址）。
@@ -2852,7 +3305,7 @@
             try { form.scrollIntoView({ block: 'nearest' }); } catch (_) { /* 老浏览器忽略 */ }
         });
     }
-    function saveGuildSettings(name, idRaw, url, mkRaw, docRaw, hideRaw, countRaw, cnRaw, auraRaw) {
+    function saveGuildSettings(name, idRaw, url, mkRaw, docRaw, hideRaw, countRaw, cnRaw, auraRaw, upgRaw, stockRaw) {
         try {
             writeCfg(K_GUILD_NAME, String(name || '').trim());
             writeCfg(K_GUILD_ID, String(idRaw || '').trim());
@@ -2862,6 +3315,10 @@
             try { localStorage.setItem(K_CN_DIRECT, cnRaw ? '1' : '0'); } catch (_) {}
             writeCfg(K_COUNT_CLICKS, countRaw ? '1' : '0');
             writeAuraRecoFlag(!!auraRaw);
+            writeShowUpgradeTimeFlag(!!upgRaw);
+            writeShowActionStockFlag(!!stockRaw);
+            applyUpgradeTimeFeature(!!upgRaw);      // 立刻生效：开/关技能提示框升级时间
+            applyActionStockFeature(!!stockRaw);    // 立刻生效：开/关动作页库存叠加
             const u = String(url || '').trim();
             if (u === '') clearCfg(CALC_URL_STORAGE_KEY);
             else if (/^https?:\/\//.test(u)) writeCfg(CALC_URL_STORAGE_KEY, u);
@@ -3623,6 +4080,42 @@
         });
         return any ? au : null;
     }
+    // ── 复活/无敌固定勾选：{成员名: 'revive'|'invincible'} ────────────────
+    // 复活/无敌是主动能力且无数值（AURA_STATS.base 为 null），不参与自动分配；
+    // 由信息块里的勾选框手动指定携带者：每人最多勾一个（存储值是单值，天然互斥），
+    // 每种能力全队最多一人（写入时清理其他成员的同键勾选）。
+    function readAuraFixed() {
+        try { return JSON.parse(localStorage.getItem(K_AURA_FIXED) || '{}') || {}; } catch (_) { return {}; }
+    }
+    function writeAuraFixed(map) {
+        try { localStorage.setItem(K_AURA_FIXED, JSON.stringify(map)); } catch (_) {}
+    }
+    function setAuraFixed(name, key) {
+        const map = readAuraFixed();
+        const n = String(name || '').trim();
+        Object.keys(map).forEach(function (other) { if (other !== n && map[other] === key) delete map[other]; });
+        map[n] = key;
+        writeAuraFixed(map);
+    }
+    function clearAuraFixed(name) {
+        const map = readAuraFixed();
+        delete map[String(name || '').trim()];
+        writeAuraFixed(map);
+    }
+    // 固定勾选框行：specialKeys 里每个能力一个框（勾选互斥由存储层保证）
+    function auraFixedChecksHtml(fixedKey, specialKeys) {
+        if (!specialKeys.length) return '';
+        let cells = '';
+        specialKeys.forEach(function (k) {
+            const label = (AURA_STATS[k] && AURA_STATS[k].label) || k;
+            cells += '<label style="display:inline-flex;align-items:center;gap:3px;margin:0 5px;cursor:pointer;font-weight:400">'
+                + '<input data-fixed-key="' + k + '" type="checkbox"' + (fixedKey === k ? ' checked' : '') + ' style="margin:0;vertical-align:middle"/>'
+                + '<span>' + label + '</span>'
+                + '</label>';
+        });
+        return '<div style="display:flex;justify-content:center;margin-top:2px">' + cells + '</div>';
+    }
+
     // 八个光环输入框（数字，0-99），data-aura-key 供事件委托写回
     function auraInputsHtml(name) {
         const manual = readAuraManual()[String(name || '').trim()] || {};
@@ -3813,6 +4306,87 @@
         window.addEventListener('scroll', repositionCnAuraBlocks, true);   // capture：捕获内部滚动容器
         window.addEventListener('resize', repositionCnAuraBlocks);
     }
+    // ── 成员卡片悬停提示：显示该成员全部光环等级（仅启用光环推荐时生效）──
+    // 用自定义浮动 div 跟随鼠标，而不是原生 title —— title 是悬停期间动态
+    // 设置时浏览器不会弹出，必须移开再悬停才有。
+    const auraHover = { installed: false, el: null, raf: 0 };
+    // 光标所在成员：遍历成员名字元素，定位各自卡片区域，命中光标的即目标
+    function auraHoverMemberAt(container, mx, my) {
+        const nameEls = auraNameElements(container);
+        for (let i = 0; i < nameEls.length; i++) {
+            const el = nameEls[i];
+            try {
+                const root = auraSlotRootFor(el, container, nameEls);
+                if (!root) continue;
+                // CN 站：卡片是绝对定位的精灵图区域（auraSlotRootFor 顺带定位好 __cnCard）；
+                // 非 CN 站：成员列根（含名字行+卡片）
+                const rectEl = (IS_CN_SITE && el.__cnCard) ? el.__cnCard : root;
+                const r = rectEl.getBoundingClientRect();
+                if (r.width < 10 || r.height < 10) continue;
+                if (mx >= r.left && mx <= r.right && my >= r.top && my <= r.bottom) {
+                    return { index: i, name: String(el.textContent || '').trim() };
+                }
+            } catch (_) {}
+        }
+        return null;
+    }
+    // 提示文本：成员名 + 数据来源 + 八个光环等级（服务器上传 → 手动录入，与推荐同源）
+    function auraHoverTipText(index, fallbackName) {
+        let name = fallbackName;
+        try {
+            const members = collectPartyMemberNames();
+            if (members[index] && members[index].name) name = members[index].name;
+        } catch (_) {}
+        if (!name) return '';
+        const serverAu = serverAuraLevels(name);
+        const au = serverAu || manualAuraLevels(readAuraManual(), name);
+        const lines = [name];
+        if (!au) return lines.join('\n') + '\n光环数据未上传或非本公会';
+        lines.push(serverAu ? '── 服务器上传 ──' : '── 手动录入 ──');
+        Object.keys(AURA_MAP).forEach(function (k) {
+            const label = (AURA_STATS[k] && AURA_STATS[k].label) || k;
+            lines.push(label + '：' + Number(au[k] || 0));
+        });
+        return lines.join('\n');
+    }
+    // 全局安装一次：mousemove 经 rAF 节流，仅组队页存在时检测
+    function ensureAuraHoverTooltip() {
+        if (auraHover.installed) return;
+        auraHover.installed = true;
+        const tip = document.createElement('div');
+        tip.id = 'kunpo-aura-hover-tip';
+        tip.style.cssText = 'position:fixed;left:0;top:0;z-index:2147483000;display:none;pointer-events:none;'
+            + 'padding:6px 10px;border-radius:6px;background:rgba(10,16,34,.95);border:1px solid #45598c;'
+            + 'color:#eef3ff;font:600 11px/1.7 system-ui,sans-serif;white-space:pre;box-shadow:0 6px 18px rgba(0,0,0,.45)';
+        const hide = function () { if (tip.style.display !== 'none') tip.style.display = 'none'; };
+        document.addEventListener('mousemove', function (e) {
+            if (auraHover.raf) return;
+            const mx = e.clientX, my = e.clientY;
+            auraHover.raf = requestAnimationFrame(function () {
+                auraHover.raf = 0;
+                try {
+                    if (!auraRecoEnabled()) { hide(); return; }   // 仅启用光环推荐时显示
+                    const container = document.querySelector('[class*="Party_page"]') || document.querySelector('[class^="Party_"]');
+                    if (!container) { hide(); return; }
+                    void refreshAuraServerData();   // 推荐开关关闭时也补拉共享空间光环数据（有缓存直接复用）
+                    const hit = auraHoverMemberAt(container, mx, my);
+                    if (!hit) { hide(); return; }
+                    const text = auraHoverTipText(hit.index, hit.name);
+                    if (!text) { hide(); return; }
+                    tip.textContent = text;
+                    tip.style.display = 'block';
+                    const r = tip.getBoundingClientRect();
+                    let x = mx + 14, y = my + 14;
+                    if (x + r.width > window.innerWidth - 8) x = mx - r.width - 10;
+                    if (y + r.height > window.innerHeight - 8) y = my - r.height - 10;
+                    tip.style.left = Math.max(4, Math.round(x)) + 'px';
+                    tip.style.top = Math.max(4, Math.round(y)) + 'px';
+                } catch (_) { hide(); }
+            });
+        }, true);
+        document.body.appendChild(tip);
+        auraHover.el = tip;
+    }
     // 按当前数据同步每个成员名字下方的信息块（内容无变化时不重写，避免触发 Observer 死循环）
     function syncAuraRecoInfo() {
         // 两站通用：scoped 容器（全文档查询会混入聊天/公会等面板的 100+ 隐藏名字组件，不可用）
@@ -3854,12 +4428,23 @@
                 auraReady: !!(serverAu || manualAu),
             };
         });
+        const recoKeys = auraPriorityKeys(members.length);
+        // 复活/无敌参与推荐（优先级槽位序号 < 队伍人数）时，信息块出现对应勾选框，
+        // 勾选后该成员固定携带该能力，并不再参与光环自动推荐（勾/取消都会整体重算）
+        const specialKeys = ['revive', 'invincible'].filter(function (k) { return recoKeys.indexOf(k) >= 0; });
+        const fixedMap = readAuraFixed();
         // 只对「资料+光环都就绪」的成员做唯一性分配（每种光环只给一人，总值最优）。
         // 以前要求全员就绪才开始推荐：只要一个人没采到资料/没上传光环，全队都看不到推荐。
         // 现在未就绪成员继续显示等待提示，不再拖累其他人；其数据补齐后会自动重算分配。
+        // 已勾选固定携带复活/无敌的成员被排除在推荐之外：该成员不占推荐名额，
+        // 其余成员在其勾选/取消后立即按新阵容重新分配。
         const readyPos = [];
-        infos.forEach(function (x, i) { if (x.ready && x.auraReady) readyPos.push(i); });
-        const recoKeys = auraPriorityKeys(members.length);
+        infos.forEach(function (x, i) {
+            if (!x.ready || !x.auraReady) return;
+            const fx = fixedMap[String(x.name || '').trim()] || '';
+            if (fx && specialKeys.indexOf(fx) >= 0) return;   // 固定携带复活/无敌 → 不参与光环推荐
+            readyPos.push(i);
+        });
         const allocation = (readyPos.length && recoKeys.length)
             ? assignAurasUnique(readyPos.map(function (i) { return infos[i]; }), recoKeys)
             : null;
@@ -3895,6 +4480,13 @@
                 html = '<div>' + status1 + '</div><div>' + status2 + '</div>';
             }
             if (showInputs) html += auraInputsHtml(x.name);
+            // 复活/无敌固定勾选：勾选的成员在块首显示「固定携带」，勾选框追加在块尾
+            const fixedKey = (fixedMap[String(x.name || '').trim()] || '');
+            const fixedValid = fixedKey && specialKeys.indexOf(fixedKey) >= 0 ? fixedKey : '';
+            if (fixedValid) {
+                html = '<div style="color:#ffd60a">固定携带：' + ((AURA_STATS[fixedValid] && AURA_STATS[fixedValid].label) || fixedValid) + '</div>' + html;
+            }
+            html += auraFixedChecksHtml(fixedValid, specialKeys);
             // 信息块放进成员列根节点内部末尾：撑高根节点，显示在整张卡片下方（不新增网格列）
             const slotRoot = auraSlotRootFor(el, container, nameEls);
             if (!slotRoot || !slotRoot.parentNode) return;
@@ -3929,7 +4521,18 @@
                     writeAuraManual(map);
                     syncAuraRecoInfo();
                 });
-                block.addEventListener('change', function () { syncAuraRecoInfo(); });
+                block.addEventListener('change', function (e) {
+                    const t = e.target;
+                    if (t && t.dataset && t.dataset.fixedKey) {
+                        const name = block.dataset.memberName || '';
+                        if (name) {
+                            if (t.checked) setAuraFixed(name, t.dataset.fixedKey);
+                            else clearAuraFixed(name);
+                        }
+                        if (t.blur) t.blur();   // 让出焦点，下一行重渲染不会被「正在输入」跳过
+                    }
+                    syncAuraRecoInfo();
+                });
                 // 阻止点击冒泡到游戏的事件委托（否则点击信息块会触发打开角色资料）
                 ['click', 'mousedown', 'mouseup', 'pointerdown', 'pointerup'].forEach(function (evt) {
                     block.addEventListener(evt, function (e) { e.stopPropagation(); });
@@ -3942,14 +4545,15 @@
                 slotRoot.appendChild(block);
             }
             block.dataset.memberName = x.name;
-            // 有输入框时展开高度并开放鼠标交互；否则固定 56px 且不响应指针
-            const wantPE = showInputs ? 'auto' : 'none';
-            const wantH = showInputs ? 'auto' : '56px';
+            // 有输入框或勾选框时展开高度并开放鼠标交互；否则固定 56px 且不响应指针
+            const hasCtrls = showInputs || specialKeys.length > 0;
+            const wantPE = hasCtrls ? 'auto' : 'none';
+            const wantH = hasCtrls ? 'auto' : '56px';
             if (block.style.pointerEvents !== wantPE) block.style.pointerEvents = wantPE;
             if (block.style.height !== wantH) block.style.height = wantH;
             // 正在输入时不重写 innerHTML，避免输入框失焦
             const active = document.activeElement;
-            if (!(active && block.contains(active) && showInputs) && block.dataset.sig !== html) {
+            if (!(active && block.contains(active) && hasCtrls) && block.dataset.sig !== html) {
                 block.innerHTML = html;
                 block.dataset.sig = html;
             }
@@ -4386,6 +4990,8 @@
         mountExportUi();
         initAssignment();
         addAuraRecoButton();
+        ensureAuraHoverTooltip();   // 成员卡片悬停显示全部光环等级（仅启用光环推荐时生效）
+        initOptionalFeatures();   // 可选功能模块（动作页库存 / 升级时间）：按设置勾选启动
         void checkForUpdate();
     }
 
