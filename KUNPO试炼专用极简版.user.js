@@ -11,8 +11,8 @@
 // @grant        GM_registerMenuCommand
 // @grant        GM_xmlhttpRequest
 // @grant        GM.xmlHttpRequest
-// @downloadURL  https://raw.githubusercontent.com/Chen19970809/MWI_Trial_Calculator/refs/heads/main/KUNPO%E8%AF%95%E7%82%BC%E4%B8%93%E7%94%A8.user.js
-// @updateURL    https://raw.githubusercontent.com/Chen19970809/MWI_Trial_Calculator/refs/heads/main/KUNPO%E8%AF%95%E7%82%BC%E4%B8%93%E7%94%A8.user.js
+// @downloadURL  https://github.com/Chen19970809/MWI_Trial_Calculator/raw/refs/heads/main/KUNPO%E8%AF%95%E7%82%BC%E4%B8%93%E7%94%A8%E6%9E%81%E7%AE%80%E7%89%88.user.js
+// @updateURL    https://github.com/Chen19970809/MWI_Trial_Calculator/raw/refs/heads/main/KUNPO%E8%AF%95%E7%82%BC%E4%B8%93%E7%94%A8%E6%9E%81%E7%AE%80%E7%89%88.user.js
 // @connect      api.jsonbin.io
 // @connect      1315858741-5moib0woaa.ap-shanghai.tencentscf.com
 // @connect      mwi-guild.43.167.210.211.sslip.io
