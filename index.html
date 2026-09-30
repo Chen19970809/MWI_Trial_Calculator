@@ -106,7 +106,6 @@ h2 { font-size:16px; margin:10px 0 8px; color:var(--text-muted); }
 .display-settings-bar .global-buff-item { cursor:default; }
 #display-cols-input { width:56px; text-align:center; }
 #display-rows-input { width:160px; text-align:center; }
-#display-profession-select { max-width:160px; padding:2px 4px; border:1px solid var(--border); border-radius:3px; font-size:12px; background:var(--input-bg); color:var(--text); }
 /* 截止时间：加宽以完整显示日期时间；双击展开自定义下拉，选项单击即生效（无需确定按钮） */
 #display-plan-deadline-input { min-width:150px; padding:2px 4px; border:1px solid var(--border); border-radius:3px; font-size:12px; background:var(--input-bg); color:var(--text); cursor:pointer; user-select:none; }
 .plan-deadline-picker { position:relative; display:inline-flex; align-items:center; }
@@ -156,6 +155,16 @@ h2 { font-size:16px; margin:10px 0 8px; color:var(--text-muted); }
 /* 战斗为试炼1 → 淡紫；试炼2 → 深紫 */
 .aura-data-table tr.aura-row-heal-t1 td { background:rgba(199, 88, 247, 0.315); }
 .aura-data-table tr.aura-row-heal-t2 td { background:rgba(232, 82, 252, 0.575); }
+/* 职业管理模式：左侧职业表格（改名/排序）+ 右侧角色归属预览 */
+#prof-mgr-area { flex:1 1 auto; min-height:0; max-height:100%; display:flex; gap:20px; align-items:flex-start; padding:10px; background:var(--surface); border:1px solid var(--border); border-radius:8px; overflow:auto; overscroll-behavior:contain; }
+.prof-mgr-table { border-collapse:collapse; align-self:flex-start; }
+.prof-mgr-table th, .prof-mgr-table td { border:1px solid var(--border); padding:4px 8px; text-align:center; font-size:12px; }
+.prof-mgr-table th { background:var(--table-header); color:var(--text-muted); font-weight:600; }
+.prof-mgr-name-input { width:96px; padding:2px 4px; border:1px solid var(--border); border-radius:3px; font-size:12px; background:var(--input-bg); color:var(--text); }
+.prof-mgr-btn { padding:1px 7px; cursor:pointer; }
+.prof-mgr-btn:disabled { opacity:.35; cursor:default; }
+.prof-mgr-preview { font-size:12px; color:var(--text-muted); line-height:1.9; }
+.prof-mgr-preview b { color:var(--text); }
 /* 技能配置：左栏=战斗1职业，右栏=战斗2职业；左右各自纵向排列，区域 overflow:auto 支持滚动 */
 .skill-config-cols { display:flex; align-items:flex-start; gap:12px; width:100%; }
 .skill-config-col { flex:1 1 0; min-width:300px; display:flex; flex-direction:column; gap:8px; }
@@ -207,9 +216,6 @@ h2 { font-size:16px; margin:10px 0 8px; color:var(--text-muted); }
 .battle-prof-option.checked { color:var(--accent); }
 .battle-prof-check { width:12px; flex:none; color:var(--accent); }
 .battle-prof-empty { font-size:12px; color:var(--text-faint); padding:4px 8px; white-space:nowrap; }
-.doc-import-result { margin-top:8px; padding:6px 10px; border-radius:4px; font-size:12px; line-height:1.6; word-break:break-all; }
-.doc-import-result.doc-import-ok { background:#e6f4ea; border:1px solid #a6d8b5; color:#1a7f37; }
-.doc-import-result.doc-import-error { background:#fde8e8; border:1px solid #f5b2b2; color:#c0392b; }
 /* 展示区域：窗口变窄时各列不换行，改为横向滚动（可左右拖动查看），纵向超出则内部纵向滚动 */
 #display-area { display:flex; flex-wrap:nowrap; gap:12px; align-items:flex-start; flex:1 1 auto; min-height:0; overflow:auto; overscroll-behavior:contain; background:var(--surface); border:1px solid var(--border); border-radius:8px; padding:12px; }
 #display-area .display-column { flex:none; }
@@ -974,12 +980,6 @@ table.member-table tbody tr:hover td.sticky-l.name-cell { background-color:var(-
       <span class="global-buff-label" id="ds-lbl-rows">每列行数</span>
       <input type="text" id="display-rows-input" placeholder="4 3 2 1" onchange="updateDisplayRows(this.value)">
     </label>
-    <button class="btn btn-sm" id="btn-doc-import" onclick="document.getElementById('doc-file-input').click()">文档</button>
-    <input type="file" id="doc-file-input" accept=".xlsx" style="display:none" onchange="importDocFile(this)">
-    <label class="global-buff-item" id="ds-item-prof" title="">
-      <span class="global-buff-label" id="ds-lbl-prof">所有职业</span>
-      <select id="display-profession-select" onchange="onProfessionSelect(this.value)"><option value="">(未导入)</option></select>
-    </label>
     <label class="global-buff-item" id="ds-item-battle-edit" title="">
       <input type="checkbox" id="display-battle-edit-input" onchange="toggleDisplayBattleEdit(this.checked)">
       <span class="global-buff-label" id="ds-lbl-battle-edit">单独修改</span>
@@ -1012,12 +1012,11 @@ table.member-table tbody tr:hover td.sticky-l.name-cell { background-color:var(-
   <div class="display-settings-bar" id="display-settings-row4">
     <div class="battle-trial-options" id="ds-even-split-options"></div>
   </div>
-  <div id="doc-import-result" class="doc-import-result" style="display:none"></div>
 </div>
 </div><!-- /#top-config -->
 
 <div class="member-section">
-  <h2 id="h2-member"><button class="btn btn-sm view-tab" id="btn-view-assignment" onclick="setMemberView('assignment')">分配结果</button><button class="btn btn-sm view-tab" id="btn-view-score" onclick="setMemberView('score')">分数估算</button><button class="btn btn-sm view-tab" id="btn-view-members" onclick="setMemberView('members')">成员数据</button><button class="btn btn-sm" id="btn-add-member" onclick="addMember()">+ 添加成员</button><button class="btn btn-sm view-tab" id="btn-view-display" onclick="toggleDisplayMode()">展示分配</button><button class="btn btn-sm view-tab" id="btn-view-skill" onclick="toggleSkillConfigMode()">技能配置</button><button class="btn btn-sm view-tab" id="btn-view-aura" onclick="toggleAuraConfigMode()">光环设置</button><button class="btn btn-sm view-tab" id="btn-view-aura-data" onclick="onAuraDataButtonClick(event)" ondblclick="onAuraDataButtonDblClick(event)" title="单击打开/关闭光环数据；双击下载当前光环数据(CSV)">光环数据</button></h2>
+  <h2 id="h2-member"><button class="btn btn-sm view-tab" id="btn-view-assignment" onclick="setMemberView('assignment')">分配结果</button><button class="btn btn-sm view-tab" id="btn-view-score" onclick="setMemberView('score')">分数估算</button><button class="btn btn-sm view-tab" id="btn-view-members" onclick="setMemberView('members')">成员数据</button><button class="btn btn-sm" id="btn-add-member" onclick="addMember()">+ 添加成员</button><button class="btn btn-sm view-tab" id="btn-view-display" onclick="toggleDisplayMode()">展示分配</button><button class="btn btn-sm view-tab" id="btn-view-skill" onclick="toggleSkillConfigMode()">技能配置</button><button class="btn btn-sm view-tab" id="btn-view-aura" onclick="toggleAuraConfigMode()">光环设置</button><button class="btn btn-sm view-tab" id="btn-view-aura-data" onclick="onAuraDataButtonClick(event)" ondblclick="onAuraDataButtonDblClick(event)" title="单击打开/关闭光环数据；双击下载当前光环数据(CSV)">光环数据</button><button class="btn btn-sm view-tab" id="btn-view-prof-mgr" onclick="toggleProfMgrMode()">职业管理</button></h2>
   <div class="table-wrap" id="member-table-wrap">
     <table class="member-table">
       <thead id="member-thead"></thead>
@@ -1032,6 +1031,8 @@ table.member-table tbody tr:hover td.sticky-l.name-cell { background-color:var(-
   <div id="aura-config-area" style="display:none"></div>
   <!-- 光环数据模式：所有成员的光环等级表（数据来自导入的 JSON） -->
   <div id="aura-data-area" style="display:none"></div>
+  <!-- 职业管理模式：左侧职业表格（改名/排序），右侧角色归属预览 -->
+  <div id="prof-mgr-area" style="display:none"></div>
 </div>
 
 <div class="summary-bar" id="summary-bar"></div>
@@ -1055,6 +1056,9 @@ const I18N = {
     auraConfig:'光环设置',
     auraData:'光环数据',
     auraChanges:'光环更改：{n} 处',
+    profMgrName:'职业名', profMgrCount:'成员数', profMgrOrder:'顺序',
+    profMgrPreview:'角色归属', profMgrEmpty:'暂无职业数据（等待云端同步）',
+    profMgrDup:'职业「{name}」已存在',
     displayCols:'列数', displayColsTip:'展示区域分成的列数（1-9 列）。修改后每列行数会按当前成员数重新生成均衡默认值。',
     displayRows:'每列行数', displayRowsTip:'依次填写每一列的行数，以空格分隔（如 4 3 2 1 = 第1列4行、第2列3行、第3列2行、第4列1行）。行数之和不足时，剩余成员会并入最后一列。',
     docImportBtn:'文档', allProfessions:'所有职业',
@@ -1209,6 +1213,9 @@ const I18N = {
     auraConfig:'Aura Config',
     auraData:'Aura Data',
     auraChanges:'Aura changes: {n}',
+    profMgrName:'Profession', profMgrCount:'Members', profMgrOrder:'Order',
+    profMgrPreview:'Character Mapping', profMgrEmpty:'No profession data yet (waiting for cloud sync)',
+    profMgrDup:'Profession "{name}" already exists',
   skillConfigAura:'Aura', skillConfigSkill:'Skill',
   skillConfigNoProf:'Publish a plan first',
     displayCols:'Columns', displayColsTip:'Number of columns (1-9) in the display area. Changing this regenerates a balanced rows-per-column string based on current members.',
@@ -2315,6 +2322,8 @@ let state = {
   auraConfigValues: [[null, null, null, null, null], [null, null, null, null, null]],
   // 《光环数据》模式开关：所有成员的光环等级表。成员 auras 数据来自导入的 JSON（parseMemberFromProfile 保留）。
   auraDataMode: false,
+  // 《职业管理》模式开关（会长专属，会话级不持久化）：改名/排序 profs 并联动所有显示位置。
+  profMgrMode: false,
   // 展示设置第二行：战斗试炼1/2 各自勾选的出战职业（值为《所有职业》列表中的字符串）。仅本地保存。
   displayBattleTrialProfessions: [[], []],
   // 职业列表：从《文档》按钮导入的 xlsx 中读取并去重的所有「职业_」列值。
@@ -2345,8 +2354,6 @@ let state = {
   displayBattleEdit: false,
   // 「加成与约束」分组（全局加成/公会建筑/公会神龛/进度约束）是否折叠。仅本地保存。
   buffGroupCollapsed: false,
-  // 《所有职业》下拉列表当前选中项（会话级）。
-  selectedProfession: '',
   // 本人姓名（用于个人端上传时按 name 主键覆盖同名条目）。默认取 importJson 后 members[0].name，也可持久化到 localStorage。
   selfName: '',
   // 是否已从云端拉取过一次数据。个人端必须先拉取再上传，避免覆盖别人。会话级，不持久化。
@@ -3886,6 +3893,7 @@ function setMemberView(view) {
     state.skillConfigMode = false;
     state.auraConfigMode = false;
     state.auraDataMode = false;
+    state.profMgrMode = false;
     try { localStorage.setItem('mwi_display_mode', '0'); } catch(e) {}
     try { localStorage.setItem('mwi_aura_config_mode', '0'); } catch(e) {}
     try { localStorage.setItem('mwi_aura_data_mode', '0'); } catch(e) {}
@@ -3906,6 +3914,7 @@ function syncMemberViewTabs() {
   const k = document.getElementById('btn-view-skill');
   const au = document.getElementById('btn-view-aura');
   const ad = document.getElementById('btn-view-aura-data');
+  const pm = document.getElementById('btn-view-prof-mgr');
   const leader = isGuildLeader();
   // 非会长端：不显示《成员数据》/《+ 添加成员》/《展示分配》/《技能配置》/《光环设置》。
   // 《光环数据》例外：所有成员可见（只读的光环等级表）。
@@ -3914,19 +3923,22 @@ function syncMemberViewTabs() {
   if (!leader && state.displayMode) state.displayMode = false;
   if (!leader && state.skillConfigMode) state.skillConfigMode = false;
   if (!leader && state.auraConfigMode) state.auraConfigMode = false;
+  if (!leader && state.profMgrMode) state.profMgrMode = false;
   if (m) m.style.display = leader ? '' : 'none';
   if (add) add.style.display = leader ? '' : 'none';
   if (d) d.style.display = leader ? '' : 'none';
   if (k) k.style.display = leader ? '' : 'none';
   if (au) au.style.display = leader ? '' : 'none';
+  if (pm) pm.style.display = leader ? '' : 'none';
   if (ad) ad.style.display = '';   // 光环数据：所有成员可见
   if (a) a.classList.toggle('active', state.memberView === 'assignment' && !state.displayMode);
   if (s) s.classList.toggle('active', state.memberView === 'score' && !state.displayMode);
   if (m) m.classList.toggle('active', state.memberView === 'members' && !state.displayMode);
-  if (d) d.classList.toggle('active', !!state.displayMode && !state.skillConfigMode && !state.auraConfigMode && !state.auraDataMode);
+  if (d) d.classList.toggle('active', !!state.displayMode && !state.skillConfigMode && !state.auraConfigMode && !state.auraDataMode && !state.profMgrMode);
   if (k) k.classList.toggle('active', !!state.skillConfigMode);
   if (au) au.classList.toggle('active', !!state.auraConfigMode);
   if (ad) ad.classList.toggle('active', !!state.auraDataMode);
+  if (pm) pm.classList.toggle('active', !!state.profMgrMode);
 }
 
 // === 展示分配模式（仅会长端）===
@@ -3934,12 +3946,13 @@ function syncMemberViewTabs() {
 // 展示设置 = 列数 + 每列行数（空格分隔，如 "4 3 2 1" = 第1列4行、第2列3行、第3列2行、第4列1行）。
 function toggleDisplayMode() {
   if (!isGuildLeader()) { alert(t('leaderOnly')); return; }
-  if (state.skillConfigMode || state.auraConfigMode || state.auraDataMode) {
-    // 技能配置/光环设置/光环数据是展示分配的子模式：在子模式里点《展示分配》= 退出子模式回到展示区域，
+  if (state.skillConfigMode || state.auraConfigMode || state.auraDataMode || state.profMgrMode) {
+    // 技能配置/光环设置/光环数据/职业管理是展示分配的子模式：在子模式里点《展示分配》= 退出子模式回到展示区域，
     // 而不是把 displayMode 也一起关掉（否则会退回上一次的成员区视图）。
     state.skillConfigMode = false;
     state.auraConfigMode = false;
     state.auraDataMode = false;
+    state.profMgrMode = false;
     try { localStorage.setItem('mwi_skill_config_mode', '0'); } catch(e) {}
     try { localStorage.setItem('mwi_aura_config_mode', '0'); } catch(e) {}
     try { localStorage.setItem('mwi_aura_data_mode', '0'); } catch(e) {}
@@ -3947,8 +3960,8 @@ function toggleDisplayMode() {
     state.displayMode = !state.displayMode;
     try { localStorage.setItem('mwi_display_mode', state.displayMode ? '1' : '0'); } catch(e) {}
   }
-  // 退出展示分配时一并退出技能配置/光环设置/光环数据子模式。
-  if (!state.displayMode) { state.skillConfigMode = false; state.auraConfigMode = false; state.auraDataMode = false; }
+  // 退出展示分配时一并退出技能配置/光环设置/光环数据/职业管理子模式。
+  if (!state.displayMode) { state.skillConfigMode = false; state.auraConfigMode = false; state.auraDataMode = false; state.profMgrMode = false; }
   renderDisplayMode();
   syncMemberViewTabs();
 }
@@ -3961,6 +3974,7 @@ function renderDisplayMode() {
   const skill = on && state.skillConfigMode;
   const aura = on && state.auraConfigMode && !skill;
   const auraData = on && state.auraDataMode && !skill && !aura;
+  const profMgr = on && state.profMgrMode && !skill && !aura && !auraData;
   const trialSection = document.getElementById('trial-config-section');
   const settingsSection = document.getElementById('display-settings-section');
   const tableWrap = document.getElementById('member-table-wrap');
@@ -3968,17 +3982,20 @@ function renderDisplayMode() {
   const skillArea = document.getElementById('skill-config-area');
   const auraArea = document.getElementById('aura-config-area');
   const auraDataArea = document.getElementById('aura-data-area');
+  const profMgrArea = document.getElementById('prof-mgr-area');
   if (trialSection) trialSection.style.display = on ? 'none' : '';
   if (settingsSection) settingsSection.style.display = (on && leader) ? '' : 'none';   // 展示设置为会长专属，成员端不显示
   if (tableWrap) tableWrap.style.display = on ? 'none' : '';
-  if (displayArea) displayArea.style.display = (skill || aura || auraData) ? 'none' : (on ? 'flex' : 'none');
+  if (displayArea) displayArea.style.display = (skill || aura || auraData || profMgr) ? 'none' : (on ? 'flex' : 'none');
   if (skillArea) skillArea.style.display = skill ? 'flex' : 'none';
   if (auraArea) auraArea.style.display = aura ? 'flex' : 'none';
   if (auraDataArea) auraDataArea.style.display = auraData ? 'flex' : 'none';
+  if (profMgrArea) profMgrArea.style.display = profMgr ? 'flex' : 'none';
   if (on && leader) renderDisplaySettings();
   if (skill) renderSkillConfigArea();
   if (aura) renderAuraConfigArea();
   if (auraData) renderAuraDataArea();
+  if (profMgr) renderProfMgrTable();
 }
 // ══ 技能配置模式（展示分配的子模式）══
 // 上方仍是展示设置；下方为每个「当前排刀出战职业」生成一个块，块内 6 列：
@@ -3989,10 +4006,11 @@ function toggleSkillConfigMode() {
   if (!isGuildLeader()) { alert(t('leaderOnly')); return; }
   state.skillConfigMode = !state.skillConfigMode;
   if (state.skillConfigMode) {
-    // 进入技能配置时确保同时进入展示分配（上方仍是展示设置），并退出光环设置/光环数据（互斥）。
+    // 进入技能配置时确保同时进入展示分配（上方仍是展示设置），并退出光环设置/光环数据/职业管理（互斥）。
     state.displayMode = true;
     state.auraConfigMode = false;
     state.auraDataMode = false;
+    state.profMgrMode = false;
     try { localStorage.setItem('mwi_display_mode', '1'); } catch(e) {}
     try { localStorage.setItem('mwi_aura_config_mode', '0'); } catch(e) {}
     try { localStorage.setItem('mwi_aura_data_mode', '0'); } catch(e) {}
@@ -4032,7 +4050,9 @@ function skillConfigSides() {
     if (mask & (1 << b1)) left.add(prof);
     if (mask & (1 << b2)) right.add(prof);
   });
-  return { left: Array.from(left), right: Array.from(right) };
+  // 输出按《职业管理》的合集顺序排序（顺序调整后此处跟随新顺序显示）。
+  const ordered = function(set) { return reorderProfListsLike(professionList(), Array.from(set)); };
+  return { left: ordered(left), right: ordered(right) };
 }
 // 光环类图标：5 个 *_aura，加上疯狂 / 无敌 / 复活（与游戏内 AURA_MAP 口径一致）。
 function isAuraIcon(id) {
@@ -4232,10 +4252,11 @@ function toggleAuraConfigMode() {
   if (!isGuildLeader()) { alert(t('leaderOnly')); return; }
   state.auraConfigMode = !state.auraConfigMode;
   if (state.auraConfigMode) {
-    // 进入光环设置时确保同时进入展示分配（上方仍是展示设置），并退出技能配置/光环数据（互斥）。
+    // 进入光环设置时确保同时进入展示分配（上方仍是展示设置），并退出技能配置/光环数据/职业管理（互斥）。
     state.displayMode = true;
     state.skillConfigMode = false;
     state.auraDataMode = false;
+    state.profMgrMode = false;
     try { localStorage.setItem('mwi_display_mode', '1'); } catch(e) {}
     try { localStorage.setItem('mwi_skill_config_mode', '0'); } catch(e) {}
     try { localStorage.setItem('mwi_aura_data_mode', '0'); } catch(e) {}
@@ -4373,6 +4394,7 @@ function toggleAuraDataMode() {
     state.displayMode = true;
     state.skillConfigMode = false;
     state.auraConfigMode = false;
+    state.profMgrMode = false;
     try { localStorage.setItem('mwi_display_mode', '1'); } catch(e) {}
     try { localStorage.setItem('mwi_skill_config_mode', '0'); } catch(e) {}
     try { localStorage.setItem('mwi_aura_config_mode', '0'); } catch(e) {}
@@ -4417,6 +4439,158 @@ function renderAuraDataArea() {
 function combatAbilityName(key) {
   const map = { speed: '速度光环', critical: '暴击光环', physical: '物理光环', elemental: '元素光环', guardian: '守护光环', invincible: '无敌', revive: '复活', insanity: '疯狂' };
   return map[key] || key;
+}
+
+// ══ 职业管理模式（展示分配的子模式，与其他子模式互斥，会长专属）══
+// 左侧：当前所有职业的表格——改名（数据中所有旧值换新值）、↑↓ 调整顺序；
+// 右侧：角色 → 职业归属预览（按 profs.byName 当前顺序）。
+// 顺序的消费点（调整后自动跟随）：出战职业多选、平均分配下拉/分组、每行《职业》下拉选项、技能配置左右两栏。
+function toggleProfMgrMode() {
+  if (!isGuildLeader()) { alert(t('leaderOnly')); return; }
+  state.profMgrMode = !state.profMgrMode;
+  if (state.profMgrMode) {
+    // 进入职业管理时确保同时进入展示分配（上方仍是展示设置），并退出其他子模式（互斥）。
+    state.displayMode = true;
+    state.skillConfigMode = false;
+    state.auraConfigMode = false;
+    state.auraDataMode = false;
+    try { localStorage.setItem('mwi_display_mode', '1'); } catch(e) {}
+    try { localStorage.setItem('mwi_skill_config_mode', '0'); } catch(e) {}
+    try { localStorage.setItem('mwi_aura_config_mode', '0'); } catch(e) {}
+    try { localStorage.setItem('mwi_aura_data_mode', '0'); } catch(e) {}
+  }
+  renderDisplayMode();
+  syncMemberViewTabs();
+}
+// 渲染职业管理页：左侧职业表格 + 右侧角色归属预览。
+function renderProfMgrTable() {
+  const area = document.getElementById('prof-mgr-area');
+  if (!area) return;
+  const pr = profsState();
+  const list = pr.list, byName = pr.byName;
+  // 每个职业的归属角色数（按 byName 统计，帮助确认改名影响范围）
+  const counts = {};
+  list.forEach(function(pf) { counts[pf] = 0; });
+  Object.keys(byName).forEach(function(nm) {
+    (byName[nm] || []).forEach(function(pf) { if (counts[pf] !== undefined) counts[pf]++; });
+  });
+  const rows = list.map(function(pf, i) {
+    return '<tr>'+
+      '<td class="aura-data-idx">'+i+'</td>'+
+      '<td><input class="prof-mgr-name-input" value="'+escHtml(pf)+'" onchange="renameProfessionInput('+i+',this.value)"></td>'+
+      '<td>'+counts[pf]+'</td>'+
+      '<td>'+
+        '<button class="prof-mgr-btn" title="上移" onclick="moveProfession('+i+',-1)"'+(i === 0 ? ' disabled' : '')+'>↑</button>'+
+        '<button class="prof-mgr-btn" title="下移" onclick="moveProfession('+i+',1)"'+(i === list.length - 1 ? ' disabled' : '')+'>↓</button>'+
+      '</td>'+
+    '</tr>';
+  }).join('');
+  const preview = Object.keys(byName).map(function(nm) {
+    const l = byName[nm] || [];
+    return '<div><b>'+escHtml(nm)+'</b>：'+escHtml(l.length ? l.join('、') : '(无职业)')+'</div>';
+  }).join('');
+  area.innerHTML = list.length
+    ? '<table class="prof-mgr-table"><thead><tr><th>#</th><th>'+escHtml(t('profMgrName'))+'</th><th>'+escHtml(t('profMgrCount'))+'</th><th>'+escHtml(t('profMgrOrder'))+'</th></tr></thead><tbody>'+rows+'</tbody></table>'+
+      '<div class="prof-mgr-preview"><b>'+escHtml(t('profMgrPreview'))+'</b>'+preview+'</div>'
+    : '<div class="prof-mgr-preview">'+escHtml(t('profMgrEmpty'))+'</div>';
+}
+// 职业名输入框 onchange 入口：空值/重名校验通过后执行全局重命名。
+function renameProfessionInput(idx, rawValue) {
+  const pr = profsState();
+  const oldName = pr.list[idx];
+  if (oldName === undefined) { renderProfMgrTable(); return; }
+  const newName = String(rawValue == null ? '' : rawValue).trim();
+  if (!newName || newName === oldName) { renderProfMgrTable(); return; }
+  if (pr.list.indexOf(newName) >= 0) {
+    alert(t('profMgrDup').replace('{name}', newName));
+    renderProfMgrTable();
+    return;
+  }
+  renameProfession(oldName, newName);
+}
+// 全局重命名：profs（list/byName/sel）、plan.m 第3位、plan.s 职业键、本地技能配置键、
+// 本地回退 displayProfessions、平均分配勾选、出战职业勾选——所有引用旧值的存储一次换净。
+function renameProfession(oldName, newName) {
+  const pr = profsState();
+  const rep = function(v) { return v === oldName ? newName : v; };
+  pr.list = pr.list.map(rep);
+  Object.keys(pr.byName).forEach(function(nm) { pr.byName[nm] = (pr.byName[nm] || []).map(rep); });
+  Object.keys(pr.sel).forEach(function(nm) { if (pr.sel[nm] === oldName) pr.sel[nm] = newName; });
+  // 排刀快照 m：{ 角色名: [生活idx, 战斗mask, 职业] }
+  if (state.plan && state.plan.m) {
+    Object.keys(state.plan.m).forEach(function(nm) {
+      const e = state.plan.m[nm];
+      if (Array.isArray(e) && e.length >= 3 && e[2] === oldName) e[2] = newName;
+    });
+  }
+  // 排刀快照 s：s[slug][职业] → 键换名（重建对象保持原顺序）
+  if (state.plan && state.plan.s) {
+    Object.keys(state.plan.s).forEach(function(slug) {
+      const byP = state.plan.s[slug] || {};
+      const out = {};
+      Object.keys(byP).forEach(function(pn) { out[pn === oldName ? newName : pn] = byP[pn]; });
+      state.plan.s[slug] = out;
+    });
+  }
+  // 本地技能配置键：'L|职业' / 'R|职业' / 旧格式 '职业'
+  const cfg = state.skillConfigByProf || {};
+  Object.keys(cfg).forEach(function(k) {
+    const sep = k.indexOf('|');
+    const side = sep >= 0 ? k.slice(0, sep + 1) : '';
+    const pn = sep >= 0 ? k.slice(sep + 1) : k;
+    if (pn === oldName) { cfg[side + newName] = cfg[k]; delete cfg[k]; }
+  });
+  try { localStorage.setItem('mwi_skill_config_by_prof', JSON.stringify(state.skillConfigByProf)); } catch(e) {}
+  // 本地回退（memberId → 职业）
+  Object.keys(state.displayProfessions || {}).forEach(function(id) {
+    if (state.displayProfessions[id] === oldName) state.displayProfessions[id] = newName;
+  });
+  try { localStorage.setItem('mwi_display_professions', JSON.stringify(state.displayProfessions)); } catch(e) {}
+  // 平均分配勾选 + 出战职业勾选
+  state.displayEvenSplitProfessions = (state.displayEvenSplitProfessions || []).map(rep);
+  try { localStorage.setItem('mwi_display_even_split_profs', JSON.stringify(state.displayEvenSplitProfessions)); } catch(e) {}
+  for (let j = 0; j < 2; j++) {
+    state.displayBattleTrialProfessions[j] = (state.displayBattleTrialProfessions[j] || []).map(rep);
+  }
+  try { localStorage.setItem('mwi_display_battle_trial_profs', JSON.stringify(state.displayBattleTrialProfessions)); } catch(e) {}
+  pr._ts = Date.now();
+  saveData(); // 持久化 + 红点，随下次「上传」分发给全员
+  renderProfMgrTable();
+  try { renderDisplaySettings(); } catch(e) {}
+  try { renderDisplayArea(); } catch(e) {}
+}
+// 调整顺序：交换 list 中相邻两项；byName 每角色列表与出战职业勾选按新合集顺序重排（组内相对顺序不变）。
+// plan.m / plan.s 是对象键无顺序语义，无需处理；消费点均读 professionList()/byName，自动跟随。
+function moveProfession(idx, dir) {
+  const pr = profsState();
+  const j = idx + dir;
+  if (j < 0 || j >= pr.list.length) return;
+  const tmp = pr.list[idx]; pr.list[idx] = pr.list[j]; pr.list[j] = tmp;
+  reorderProfListsLike(pr.list, pr.byName);
+  for (let b = 0; b < 2; b++) {
+    state.displayBattleTrialProfessions[b] = reorderProfListsLike(pr.list, state.displayBattleTrialProfessions[b] || []);
+  }
+  try { localStorage.setItem('mwi_display_battle_trial_profs', JSON.stringify(state.displayBattleTrialProfessions)); } catch(e) {}
+  pr._ts = Date.now();
+  saveData();
+  renderProfMgrTable();
+  try { renderDisplaySettings(); } catch(e) {}
+  try { renderDisplayArea(); } catch(e) {}
+}
+// 按「参照顺序」重排数组：目标为数组时返回重排后的副本；目标为 byName 对象时原地把每个角色的列表重排。
+function reorderProfListsLike(order, target) {
+  const rank = {};
+  order.forEach(function(pf, i) { if (!(pf in rank)) rank[pf] = i; });
+  const key = function(pf) { return (pf in rank) ? rank[pf] : Number.MAX_SAFE_INTEGER; };
+  if (Array.isArray(target)) {
+    return target.slice().sort(function(a, b) { return key(a) - key(b); });
+  }
+  Object.keys(target).forEach(function(nm) {
+    if (Array.isArray(target[nm])) {
+      target[nm] = target[nm].slice().sort(function(a, b) { return key(a) - key(b); });
+    }
+  });
+  return target;
 }
 function selectSkillIcon(key, iconId, ev) {
   if (ev) ev.stopPropagation();
@@ -4508,7 +4682,6 @@ function renderDisplaySettings() {
   }
   updatePlanDeadlineDisplay();
   updatePlanStatusText();
-  renderProfessionSelect();
   renderBattleTrialOptions();
   renderDisplayArea();
 }
@@ -5504,237 +5677,9 @@ function clearDisplayBattleOverrides(ev) {
   openBattleDropdown = null;
   renderBattleTrialOptions();
   renderDisplayArea();
-  const box = document.getElementById('doc-import-result');
-  if (box) {
-    box.style.display = '';
-    box.className = 'doc-import-result doc-import-ok';
-    box.textContent = t('clearBattleEditDone').replace('{n}', n);
-  }
+  showSignupToast(t('clearBattleEditDone').replace('{n}', n));
 }
 
-// === 职业文档导入（xlsx）===
-// 点击《文档》按钮选择 xlsx 表格（如 试炼汇总.xlsx），浏览器内解析 zip + xml，
-// 读取所有「职业_」开头列（职业_1/职业_2/…）的值并去重，显示在《所有职业》下拉列表中。
-// 依赖 Chrome 80+ 的 DecompressionStream('deflate-raw') 解压 zip 条目。
-function importDocFile(input) {
-  const file = input.files && input.files[0];
-  input.value = ''; // 允许重复导入同一文件
-  const box = document.getElementById('doc-import-result');
-  if (!file) return;
-  file.arrayBuffer().then(buf => parseXlsxProfessions(buf)).then(res => {
-    const profs = (res && res.professions) || [];
-    state.professions = profs;
-    state.professionsByName = (res && res.byName) || {};
-    // 写入云端职业数据（list=职业合集，byName=每角色所有职业），随下次「上传」分发给全员。
-    const pr = profsState();
-    pr._ts = Date.now();
-    pr.list = profs.slice();
-    pr.byName = {};
-    Object.keys(state.professionsByName).forEach(nm => { pr.byName[nm] = (state.professionsByName[nm] || []).slice(); });
-    // 《平均分配》中已不存在的职业去掉。
-    state.displayEvenSplitProfessions = (state.displayEvenSplitProfessions || []).filter(p => profs.indexOf(p) >= 0);
-    try { localStorage.setItem('mwi_display_even_split_profs', JSON.stringify(state.displayEvenSplitProfessions)); } catch(e) {}
-    // 导入后不记忆上次结果：每位成员一律选中其职业列表（原始读取顺序）的第一个值。
-    pr.sel = {};
-    state.displayProfessions = {};
-    state.members.forEach(p => {
-      const nm = String(p.name || '').trim();
-      const id = String(p.id);
-      const list = state.professionsByName[p.name] || [];
-      const first = list.length ? list[0] : '';
-      state.displayProfessions[id] = first;      // 本地回退（memberId 键）
-      pr.sel[nm] = first;                        // 云端数据（角色名键）
-    });
-    try { localStorage.setItem('mwi_display_professions', JSON.stringify(state.displayProfessions)); } catch(e) {}
-    saveData(); // 持久化 profs 并标记红点，提醒会长点击「上传」分发给成员
-    // 成员职业重置后重新均分（没选职业时即为撤销上一次平均分配）。
-    applyEvenSplit();
-    renderProfessionSelect();
-    renderBattleTrialOptions();
-    renderDisplayArea();
-    if (box) {
-      box.style.display = '';
-      box.className = 'doc-import-result doc-import-ok';
-      const nameCount = Object.keys(state.professionsByName).length;
-      box.textContent = t('docImportOkWithNames').replace('{n}', profs.length).replace('{m}', nameCount);
-    }
-  }).catch(err => {
-    if (box) {
-      box.style.display = '';
-      box.className = 'doc-import-result doc-import-error';
-      box.textContent = t('docImportFail').replace('{err}', (err && err.message) || String(err));
-    }
-  });
-}
-function onProfessionSelect(v) {
-  // 预留：选中职业后的联动（当前仅展示）。
-  state.selectedProfession = v;
-}
-function renderProfessionSelect() {
-  const sel = document.getElementById('display-profession-select');
-  if (!sel) return;
-  const profs = professionList();
-  sel.innerHTML = profs.length
-    ? profs.map(p => '<option value="'+escHtml(p)+'">'+escHtml(p)+'</option>').join('')
-    : '<option value="">'+t('profNone')+'</option>';
-}
-// 从 xlsx 的 ArrayBuffer 中提取匹配的 zip 条目并解压为文本。
-async function unzipEntries(buf, patterns) {
-  const view = new DataView(buf);
-  const u8 = new Uint8Array(buf);
-  const td = new TextDecoder();
-  let eocd = -1;
-  for (let i = u8.length - 22; i >= 0; i--) {
-    if (view.getUint32(i, true) === 0x06054b50) { eocd = i; break; }
-  }
-  if (eocd < 0) throw new Error('invalid xlsx');
-  const count = view.getUint16(eocd + 10, true);
-  let p = view.getUint32(eocd + 16, true);
-  const out = {};
-  for (let n = 0; n < count; n++) {
-    if (view.getUint32(p, true) !== 0x02014b50) break;
-    const method = view.getUint16(p + 10, true);
-    const compSize = view.getUint32(p + 20, true);
-    const nameLen = view.getUint16(p + 28, true);
-    const extraLen = view.getUint16(p + 30, true);
-    const commentLen = view.getUint16(p + 32, true);
-    const local = view.getUint32(p + 42, true);
-    const name = td.decode(u8.subarray(p + 46, p + 46 + nameLen));
-    p += 46 + nameLen + extraLen + commentLen;
-    if (!patterns.some(rx => rx.test(name))) continue;
-    const lhNameLen = view.getUint16(local + 26, true);
-    const lhExtraLen = view.getUint16(local + 28, true);
-    const dataStart = local + 30 + lhNameLen + lhExtraLen;
-    const comp = u8.subarray(dataStart, dataStart + compSize);
-    if (method === 0) {
-      out[name] = td.decode(comp);
-    } else if (method === 8) {
-      const ds = new DecompressionStream('deflate-raw');
-      const ab = await new Response(new Blob([comp]).stream().pipeThrough(ds)).arrayBuffer();
-      out[name] = td.decode(ab);
-    }
-  }
-  return out;
-}
-// 职业排序用的关键字优先级（越靠前越优先）。
-const PROFESSION_KEYWORDS = ['枪','剑','锤','弩','弓','水叉','水法','火叉','火法','绿叉','自然','奶','盾','发育中'];
-// 取职业名的排序键：关键字下标（未命中排在最后）+ 关键字后面的数字（无数字时用一个极大值排在最后）。
-function professionSortKey(v) {
-  const s = String(v == null ? '' : v);
-  // 包含「发育中」的一律强制排在最后（连未命中任何关键字的也排在它前面）。
-  const devAt = s.indexOf('发育中');
-  if (devAt >= 0) {
-    const dm = s.slice(devAt + 3).match(/\d+/);
-    return { keyword: PROFESSION_KEYWORDS.length + 1, number: dm ? Number(dm[0]) : Number.MAX_SAFE_INTEGER };
-  }
-  let keyword = PROFESSION_KEYWORDS.length, number = Number.MAX_SAFE_INTEGER;
-  for (let i = 0; i < PROFESSION_KEYWORDS.length; i++) {
-    const at = s.indexOf(PROFESSION_KEYWORDS[i]);
-    if (at < 0) continue;
-    keyword = i;
-    const m = s.slice(at + PROFESSION_KEYWORDS[i].length).match(/\d+/);
-    if (m) number = Number(m[0]);
-    else {
-      const any = s.match(/\d+/); // 关键字后没有数字时，退回取整个名字里的数字
-      if (any) number = Number(any[0]);
-    }
-    break;
-  }
-  return { keyword: keyword, number: number };
-}
-// 解析 xlsx：返回 { professions, byName }
-//   professions：所有「职业」开头的列的值（按出现顺序去重，再按关键字+数字排序）
-//   byName：角色名 → 该行的职业列表（用于展示区域每行的《职业》下拉）
-async function parseXlsxProfessions(buf) {
-  const files = await unzipEntries(buf, [/^xl\/sharedStrings\.xml$/, /^xl\/worksheets\/sheet\d+\.xml$/]);
-  // 共享字符串表
-  const shared = [];
-  if (files['xl/sharedStrings.xml']) {
-    const sdoc = new DOMParser().parseFromString(files['xl/sharedStrings.xml'], 'application/xml');
-    for (const si of sdoc.getElementsByTagName('si')) {
-      let s = '';
-      for (const tv of si.getElementsByTagName('t')) s += tv.textContent;
-      shared.push(s);
-    }
-  }
-  const sheetNames = Object.keys(files).filter(n => /^xl\/worksheets\/sheet\d+\.xml$/.test(n)).sort();
-  const values = [];
-  const seen = new Set();
-  const byName = {};
-  for (const name of sheetNames) {
-    const doc = new DOMParser().parseFromString(files[name], 'application/xml');
-    const rows = doc.getElementsByTagName('row');
-    if (!rows.length) continue;
-    // 单元格取值：t="s" → 共享字符串；t="inlineStr" → <is><t>；t="str" → <v>；否则数字直接取 <v>。
-    const cellValue = c => {
-      const type = c.getAttribute('t');
-      const v = c.getElementsByTagName('v')[0];
-      if (type === 's' && v) return shared[Number(v.textContent)] || '';
-      const is = c.getElementsByTagName('t')[0];
-      if (type === 'inlineStr' && is) return is.textContent;
-      return v ? v.textContent : '';
-    };
-    // 列引用（如 "B12"）→ 0 起列索引
-    const colIdx = ref => {
-      let n = 0;
-      for (const ch of String(ref || '').replace(/[0-9]/g, '')) n = n * 26 + (ch.charCodeAt(0) - 64);
-      return n - 1;
-    };
-    // 首行为表头：找出所有「职业」开头的列，以及「角色名」列
-    const profCols = new Set();
-    const headerCells = rows[0].getElementsByTagName('c');
-    let nameCol = -1;
-    // 角色名列：兼容「角色名 / 角色 / 名称 / 昵称 / 姓名 / name」等表头写法。
-    const NAME_HEADERS = ['角色名', '角色', '名称', '昵称', '姓名', 'name', 'membername', 'character', 'char'];
-    for (const c of headerCells) {
-      const v = String(cellValue(c) || '').trim();
-      if (/^职业/.test(v)) profCols.add(colIdx(c.getAttribute('r')));
-    }
-    for (const want of NAME_HEADERS) {
-      if (nameCol >= 0) break;
-      for (const c of headerCells) {
-        const v = String(cellValue(c) || '').trim().toLowerCase();
-        if (v === want) { nameCol = colIdx(c.getAttribute('r')); break; }
-      }
-    }
-    if (!profCols.size) continue;
-    // 收集数据行中这些列的值（单元格稀疏存储，按 r 属性定位列）
-    const profColList = [...profCols].sort((a, b) => a - b);
-    for (let r = 1; r < rows.length; r++) {
-      const byIdx = new Map();
-      for (const c of rows[r].getElementsByTagName('c')) byIdx.set(colIdx(c.getAttribute('r')), c);
-      const rowVals = [];
-      for (const ci of profColList) {
-        const c = byIdx.get(ci);
-        if (!c) continue;
-        const val = String(cellValue(c) || '').trim();
-        if (!val) continue;
-        rowVals.push(val);
-        if (!seen.has(val)) { seen.add(val); values.push(val); }
-      }
-      // 角色名 → 该行职业列表
-      if (nameCol >= 0 && rowVals.length) {
-        const nc = byIdx.get(nameCol);
-        const nm = nc ? String(cellValue(nc) || '').trim() : '';
-        if (nm) {
-          const prev = byName[nm] || [];
-          byName[nm] = prev.concat(rowVals.filter(v => prev.indexOf(v) < 0));
-        }
-      }
-    }
-  }
-  if (!values.length) throw new Error(t('docImportNoCol'));
-  // 排序：按关键字优先级（枪>剑>锤>弩>弓>水叉>水法>火叉>火法>绿叉>自然>奶>盾>发育中），
-  // 命中同一关键字时按关键字后面的数字从小到大排；都没命中/都没数字时按中文排序兜底。
-  values.sort((a, b) => {
-    const ka = professionSortKey(a), kb = professionSortKey(b);
-    if (ka.keyword !== kb.keyword) return ka.keyword - kb.keyword;
-    if (ka.number !== kb.number) return ka.number - kb.number; // 无数字时视为最大，排在最后
-    return String(a).localeCompare(String(b), 'zh-Hans-CN');
-  });
-  // 每个角色名下的职业保持表格中读取到的原始排列顺序（不重新排序）。
-  return { professions: values, byName: byName };
-}
 
 function renderTableHeader() {
   const thead = document.getElementById('member-thead');
@@ -5856,10 +5801,6 @@ function updateStaticText() {
   if (dsColsItem) dsColsItem.title = t('displayColsTip');
   const dsRowsItem = document.getElementById('ds-item-rows');
   if (dsRowsItem) dsRowsItem.title = t('displayRowsTip');
-  const dsProfLabel = document.getElementById('ds-lbl-prof');
-  if (dsProfLabel) dsProfLabel.textContent = t('allProfessions');
-  const dsProfItem = document.getElementById('ds-item-prof');
-  if (dsProfItem) dsProfItem.title = t('docImportTip');
   const dsEditLabel = document.getElementById('ds-lbl-battle-edit');
   if (dsEditLabel) dsEditLabel.textContent = t('displayBattleEdit');
   const dsEditItem = document.getElementById('ds-item-battle-edit');
@@ -5901,8 +5842,6 @@ function updateStaticText() {
     importPlanBtn.title = t('importPlanTooltip');
   }
   renderBattleTrialOptions();
-  const docImportBtn = document.getElementById('btn-doc-import');
-  if (docImportBtn) docImportBtn.textContent = t('docImportBtn');
   const teamDocBtn = document.getElementById('btn-open-team-doc');
   if (teamDocBtn) { teamDocBtn.textContent = t('openTeamDoc'); teamDocBtn.title = t('openTeamDocTip'); }
   const gbTitle = document.getElementById('h3-global-buff');
