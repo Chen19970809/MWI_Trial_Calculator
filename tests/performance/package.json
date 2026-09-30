@@ -1,0 +1,12 @@
+{
+  "name": "mwi-trial-performance-regression",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node verify.mjs ../../KUNPO试炼专用.user.js modified",
+    "test:baseline": "node verify.mjs --baseline baseline"
+  },
+  "devDependencies": {
+    "jsdom": "26.1.0"
+  }
+}
