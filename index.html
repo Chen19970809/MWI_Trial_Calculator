@@ -156,15 +156,25 @@ h2 { font-size:16px; margin:10px 0 8px; color:var(--text-muted); }
 .aura-data-table tr.aura-row-heal-t1 td { background:rgba(199, 88, 247, 0.315); }
 .aura-data-table tr.aura-row-heal-t2 td { background:rgba(232, 82, 252, 0.575); }
 /* 职业管理模式：左侧职业表格（改名/排序）+ 右侧角色归属预览 */
-#prof-mgr-area { flex:1 1 auto; min-height:0; max-height:100%; display:flex; gap:20px; align-items:flex-start; padding:10px; background:var(--surface); border:1px solid var(--border); border-radius:8px; overflow:auto; overscroll-behavior:contain; }
+#prof-mgr-area { flex:1 1 auto; min-height:0; max-height:100%; display:flex; gap:14px; align-items:stretch; padding:10px; background:var(--surface); border:1px solid var(--border); border-radius:8px; overflow:hidden; overscroll-behavior:contain; }
 .prof-mgr-table { border-collapse:collapse; align-self:flex-start; }
 .prof-mgr-table th, .prof-mgr-table td { border:1px solid var(--border); padding:4px 8px; text-align:center; font-size:12px; }
 .prof-mgr-table th { background:var(--table-header); color:var(--text-muted); font-weight:600; }
 .prof-mgr-name-input { width:96px; padding:2px 4px; border:1px solid var(--border); border-radius:3px; font-size:12px; background:var(--input-bg); color:var(--text); }
 .prof-mgr-btn { padding:1px 7px; cursor:pointer; }
 .prof-mgr-btn:disabled { opacity:.35; cursor:default; }
-.prof-mgr-preview { font-size:12px; color:var(--text-muted); line-height:1.9; }
-.prof-mgr-preview b { color:var(--text); }
+/* 右侧角色归属：独立滚动（左侧固定不动），按展示区列数配置横向分列 */
+.prof-mgr-right { flex:1 1 auto; min-width:0; align-self:stretch; display:flex; flex-wrap:nowrap; gap:12px; align-items:flex-start; max-height:100%; overflow:auto; overscroll-behavior:contain; }
+.prof-mgr-table td { white-space:nowrap; }
+/* 右侧「所有职业」下拉：每个职业行带「-」删除按钮；末尾输入序号 + 「+」新增 */
+.pm-pro-picker { min-width:140px; }
+.prof-mgr-add-inline { display:flex; gap:4px; align-items:center; padding:4px 8px 2px; border-top:1px solid var(--border); }
+.prof-mgr-add-idx { width:56px; padding:2px 4px; border:1px solid var(--border); border-radius:3px; font-size:12px; background:var(--input-bg); color:var(--text); }
+/* 「增加职业」行：表格下方输入 + 按钮；删除按钮 hover 提红 */
+.prof-mgr-left { display:flex; flex-direction:column; gap:10px; align-items:flex-start; flex:none; align-self:stretch; max-height:100%; overflow:auto; padding-right:14px; border-right:1px solid var(--border); }
+.prof-mgr-add-row { display:flex; gap:6px; align-items:center; }
+.prof-mgr-add-row input { width:96px; padding:2px 4px; border:1px solid var(--border); border-radius:3px; font-size:12px; background:var(--input-bg); color:var(--text); }
+.prof-mgr-del-btn:hover { color:var(--danger); }
 /* 技能配置：左栏=战斗1职业，右栏=战斗2职业；左右各自纵向排列，区域 overflow:auto 支持滚动 */
 .skill-config-cols { display:flex; align-items:flex-start; gap:12px; width:100%; }
 .skill-config-col { flex:1 1 0; min-width:300px; display:flex; flex-direction:column; gap:8px; }
@@ -1059,6 +1069,9 @@ const I18N = {
     profMgrName:'职业名', profMgrCount:'成员数', profMgrOrder:'顺序',
     profMgrPreview:'角色归属', profMgrEmpty:'暂无职业数据（等待云端同步）',
     profMgrDup:'职业「{name}」已存在',
+    profMgrAddPlaceholder:'新职业名', profMgrAdd:'增加',
+    profMgrDelConfirm:'职业「{name}」仍被 {n} 个角色使用，删除会一并清空其归属与排刀配置，确定删除？',
+    profMgrBadIdx:'序号「{n}」不在职业合集中',
     displayCols:'列数', displayColsTip:'展示区域分成的列数（1-9 列）。修改后每列行数会按当前成员数重新生成均衡默认值。',
     displayRows:'每列行数', displayRowsTip:'依次填写每一列的行数，以空格分隔（如 4 3 2 1 = 第1列4行、第2列3行、第3列2行、第4列1行）。行数之和不足时，剩余成员会并入最后一列。',
     docImportBtn:'文档', allProfessions:'所有职业',
@@ -1216,6 +1229,9 @@ const I18N = {
     profMgrName:'Profession', profMgrCount:'Members', profMgrOrder:'Order',
     profMgrPreview:'Character Mapping', profMgrEmpty:'No profession data yet (waiting for cloud sync)',
     profMgrDup:'Profession "{name}" already exists',
+    profMgrAddPlaceholder:'New profession', profMgrAdd:'Add',
+    profMgrDelConfirm:'Profession "{name}" is still used by {n} character(s); deleting also clears their mapping and plan config. Delete anyway?',
+    profMgrBadIdx:'Index "{n}" is not in the profession list',
   skillConfigAura:'Aura', skillConfigSkill:'Skill',
   skillConfigNoProf:'Publish a plan first',
     displayCols:'Columns', displayColsTip:'Number of columns (1-9) in the display area. Changing this regenerates a balanced rows-per-column string based on current members.',
@@ -4443,7 +4459,7 @@ function combatAbilityName(key) {
 
 // ══ 职业管理模式（展示分配的子模式，与其他子模式互斥，会长专属）══
 // 左侧：当前所有职业的表格——改名（数据中所有旧值换新值）、↑↓ 调整顺序；
-// 右侧：角色 → 职业归属预览（按 profs.byName 当前顺序）。
+// 右侧：角色归属表（序号 | 角色名 | 出战职业 | 所有职业），按展示区「列数/每列行数」分列；左侧固定，竖线分隔。
 // 顺序的消费点（调整后自动跟随）：出战职业多选、平均分配下拉/分组、每行《职业》下拉选项、技能配置左右两栏。
 function toggleProfMgrMode() {
   if (!isGuildLeader()) { alert(t('leaderOnly')); return; }
@@ -4462,7 +4478,7 @@ function toggleProfMgrMode() {
   renderDisplayMode();
   syncMemberViewTabs();
 }
-// 渲染职业管理页：左侧职业表格 + 右侧角色归属预览。
+// 渲染职业管理页：左侧职业表格（固定）+ 右侧角色归属表（分列滚动）。
 function renderProfMgrTable() {
   const area = document.getElementById('prof-mgr-area');
   if (!area) return;
@@ -4482,17 +4498,60 @@ function renderProfMgrTable() {
       '<td>'+
         '<button class="prof-mgr-btn" title="上移" onclick="moveProfession('+i+',-1)"'+(i === 0 ? ' disabled' : '')+'>↑</button>'+
         '<button class="prof-mgr-btn" title="下移" onclick="moveProfession('+i+',1)"'+(i === list.length - 1 ? ' disabled' : '')+'>↓</button>'+
+        '<button class="prof-mgr-btn prof-mgr-del-btn" title="删除" onclick="deleteProfession('+i+')">-</button>'+
       '</td>'+
     '</tr>';
   }).join('');
-  const preview = Object.keys(byName).map(function(nm) {
-    const l = byName[nm] || [];
-    return '<div><b>'+escHtml(nm)+'</b>：'+escHtml(l.length ? l.join('、') : '(无职业)')+'</div>';
-  }).join('');
-  area.innerHTML = list.length
-    ? '<table class="prof-mgr-table"><thead><tr><th>#</th><th>'+escHtml(t('profMgrName'))+'</th><th>'+escHtml(t('profMgrCount'))+'</th><th>'+escHtml(t('profMgrOrder'))+'</th></tr></thead><tbody>'+rows+'</tbody></table>'+
-      '<div class="prof-mgr-preview"><b>'+escHtml(t('profMgrPreview'))+'</b>'+preview+'</div>'
-    : '<div class="prof-mgr-preview">'+escHtml(t('profMgrEmpty'))+'</div>';
+  // 末尾「增加职业」：输入新职业名，回车或点 + 追加到合集末尾（空合集时也可用，便于会长补数据）
+  const addRow = '<div class="prof-mgr-add-row">'+
+    '<input id="prof-mgr-add-input" placeholder="'+escHtml(t('profMgrAddPlaceholder'))+'" onkeydown="profMgrAddKey(event)">'+
+    '<button class="prof-mgr-btn" title="'+escHtml(t('profMgrAdd'))+'" onclick="addProfessionFromInput()">+</button>'+
+  '</div>';
+  const left = '<div class="prof-mgr-left">'+
+    (list.length
+      ? '<table class="prof-mgr-table"><thead><tr><th>#</th><th>'+escHtml(t('profMgrName'))+'</th><th>'+escHtml(t('profMgrCount'))+'</th><th>'+escHtml(t('profMgrOrder'))+'</th></tr></thead><tbody>'+rows+'</tbody></table>'
+      : '<div class="aura-data-empty">'+escHtml(t('profMgrEmpty'))+'</div>')+
+    addRow+
+  '</div>';
+  // 右侧：角色归属表（序号 | 角色名 | 出战职业 | 所有职业），与展示区同样按「列数/每列行数」配置分列。
+  let preview;
+  if (!state.members.length) {
+    preview = '<div class="display-empty">'+escHtml(t('noMembers'))+'</div>';
+  } else {
+    const entries = state.members.map((p, rowIdx) => ({ p, rowIdx }));
+    const parsedRows = parseDisplayRows(state.displayRows);
+    const colRows = [];
+    for (let j = 0; j < state.displayCols; j++) colRows.push(parsedRows[j] || 0);
+    const slices = [];
+    let pos = 0;
+    for (let j = 0; j < state.displayCols; j++) {
+      slices.push(entries.slice(pos, pos + colRows[j]));
+      pos += colRows[j];
+    }
+    if (pos < entries.length && slices.length > 0) {
+      slices[slices.length - 1] = slices[slices.length - 1].concat(entries.slice(pos));
+    }
+    preview = slices.map(function(sl) {
+      if (!sl.length) return '';
+      const trs = sl.map(function(it) {
+        const p = it.p;
+        const prof = displayMemberProfession(p);
+        return '<tr>'+
+          '<td class="aura-data-idx">'+it.rowIdx+'</td>'+
+          '<td>'+escHtml(p.name)+'</td>'+
+          '<td>'+escHtml(prof || '-')+'</td>'+
+          '<td>'+profMgrPickerHtml(it.rowIdx)+'</td>'+
+        '</tr>';
+      }).join('');
+      return '<div class="display-column"><table class="prof-mgr-table"><thead><tr>'+
+        '<th>'+escHtml(t('indexCol'))+'</th>'+
+        '<th>'+escHtml(t('nameCol'))+'</th>'+
+        '<th>'+escHtml(t('battleProfessions'))+'</th>'+
+        '<th>'+escHtml(t('allProfessions'))+'</th>'+
+      '</tr></thead><tbody>'+trs+'</tbody></table></div>';
+    }).join('');
+  }
+  area.innerHTML = left+'<div class="prof-mgr-right">'+preview+'</div>';
 }
 // 职业名输入框 onchange 入口：空值/重名校验通过后执行全局重命名。
 function renameProfessionInput(idx, rawValue) {
@@ -4591,6 +4650,221 @@ function reorderProfListsLike(order, target) {
     }
   });
   return target;
+}
+// 「增加职业」输入框回车入口。
+function profMgrAddKey(ev) { if (ev && ev.key === 'Enter') addProfessionFromInput(); }
+// 「增加职业」入口：空值忽略，重名拒绝；合法则追加到合集末尾。
+function addProfessionFromInput() {
+  const input = document.getElementById('prof-mgr-add-input');
+  if (!input) return;
+  const name = String(input.value == null ? '' : input.value).trim();
+  if (!name) return;
+  const pr = profsState();
+  if (pr.list.indexOf(name) >= 0) {
+    alert(t('profMgrDup').replace('{name}', name));
+    renderProfMgrTable();
+    return;
+  }
+  addProfession(name);
+}
+// 新增职业：只需追加 list 末尾（新职业尚无归属，byName/sel/plan 等无需改动）。
+function addProfession(name) {
+  const pr = profsState();
+  pr.list.push(name);
+  pr._ts = Date.now();
+  saveData(); // 持久化 + 红点，随下次「上传」分发给全员
+  renderProfMgrTable();
+  try { renderDisplaySettings(); } catch(e) {}
+  try { renderDisplayArea(); } catch(e) {}
+}
+// 删除职业：从所有引用处一次清干净——
+// profs（list/byName/sel）、plan.m 第3位、plan.s 职业键、本地技能配置键、
+// 本地回退 displayProfessions、平均分配勾选、出战职业勾选。
+function deleteProfession(idx) {
+  const pr = profsState();
+  const name = pr.list[idx];
+  if (name === undefined) { renderProfMgrTable(); return; }
+  // 使用中的职业需二次确认（删除会影响该职业所有角色的归属与排刀配置）
+  let used = 0;
+  Object.keys(pr.byName).forEach(function(nm) { if ((pr.byName[nm] || []).indexOf(name) >= 0) used++; });
+  if (used > 0 && !confirm(t('profMgrDelConfirm').replace('{name}', name).replace('{n}', used))) return;
+  const keep = function(v) { return v !== name; };
+  pr.list = pr.list.filter(keep);
+  Object.keys(pr.byName).forEach(function(nm) { pr.byName[nm] = (pr.byName[nm] || []).filter(keep); });
+  Object.keys(pr.sel).forEach(function(nm) { if (pr.sel[nm] === name) pr.sel[nm] = ''; });
+  // 排刀快照 m：{ 角色名: [生活idx, 战斗mask, 职业] }
+  if (state.plan && state.plan.m) {
+    Object.keys(state.plan.m).forEach(function(nm) {
+      const e = state.plan.m[nm];
+      if (Array.isArray(e) && e.length >= 3 && e[2] === name) e[2] = '';
+    });
+  }
+  // 排刀快照 s：删除该职业键（其余键保留原顺序）
+  if (state.plan && state.plan.s) {
+    Object.keys(state.plan.s).forEach(function(slug) {
+      const byP = state.plan.s[slug] || {};
+      if (name in byP) { delete byP[name]; state.plan.s[slug] = byP; }
+    });
+  }
+  // 本地技能配置键：'L|职业' / 'R|职业' / 旧格式 '职业'
+  const cfg = state.skillConfigByProf || {};
+  Object.keys(cfg).forEach(function(k) {
+    const sep = k.indexOf('|');
+    const pn = sep >= 0 ? k.slice(sep + 1) : k;
+    if (pn === name) delete cfg[k];
+  });
+  try { localStorage.setItem('mwi_skill_config_by_prof', JSON.stringify(state.skillConfigByProf)); } catch(e) {}
+  // 本地回退（memberId → 职业）
+  Object.keys(state.displayProfessions || {}).forEach(function(id) {
+    if (state.displayProfessions[id] === name) delete state.displayProfessions[id];
+  });
+  try { localStorage.setItem('mwi_display_professions', JSON.stringify(state.displayProfessions)); } catch(e) {}
+  // 平均分配勾选 + 出战职业勾选
+  state.displayEvenSplitProfessions = (state.displayEvenSplitProfessions || []).filter(keep);
+  try { localStorage.setItem('mwi_display_even_split_profs', JSON.stringify(state.displayEvenSplitProfessions)); } catch(e) {}
+  for (let j = 0; j < 2; j++) {
+    state.displayBattleTrialProfessions[j] = (state.displayBattleTrialProfessions[j] || []).filter(keep);
+  }
+  try { localStorage.setItem('mwi_display_battle_trial_profs', JSON.stringify(state.displayBattleTrialProfessions)); } catch(e) {}
+  pr._ts = Date.now();
+  saveData();
+  renderProfMgrTable();
+  try { renderDisplaySettings(); } catch(e) {}
+  try { renderDisplayArea(); } catch(e) {}
+}
+// ══ 右侧「所有职业」下拉：查看/删除该角色已有职业；末尾按《职业管理》合集序号新增 ══
+let openProfMgrDropdown = null; // 形如 'pm<rowIdx>'，null = 无
+function profMgrPickerHtml(rowIdx) {
+  const m = state.members[rowIdx];
+  if (!m) return '';
+  const key = 'pm' + rowIdx;
+  const list = profListByName(m.name);
+  const summary = list.length ? list.join('、') : t('profNone');
+  const cur = displayMemberProfessionRaw(m); // 当前出战职业（sel → 本地回退 → 列表第一个）
+  const options = list.map(function(pf, pIdx) {
+    const checked = (cur === pf);
+    return '<span class="battle-prof-option'+(checked ? ' checked' : '')+'" title="'+escHtml(pf)+'" onclick="profMgrSelectProf('+rowIdx+','+pIdx+',event)">'+
+      '<span class="battle-prof-check">'+(checked ? '✓' : '')+'</span>'+
+      '<span>'+escHtml(pf)+'</span>'+
+      '<button class="prof-mgr-btn prof-mgr-del-btn" title="删除" onclick="profMgrRemoveProf('+rowIdx+','+pIdx+',event)">-</button>'+
+    '</span>';
+  }).join('');
+  const dd = (openProfMgrDropdown === key)
+    ? '<span class="battle-trial-dropdown battle-prof-dropdown" id="pm-dropdown-'+key+'">'+
+        options+
+        '<span class="prof-mgr-add-inline">'+
+          '<input id="pm-add-'+rowIdx+'" class="prof-mgr-add-idx" placeholder="'+escHtml(t('indexCol'))+'" onclick="event.stopPropagation()" onkeydown="profMgrAddIdxKey('+rowIdx+',event)">'+
+          '<button class="prof-mgr-btn" title="'+escHtml(t('profMgrAdd'))+'" onclick="profMgrAddProf('+rowIdx+',event)">+</button>'+
+        '</span>'+
+      '</span>'
+    : '';
+  return '<span class="battle-prof-picker pm-pro-picker" id="pm-picker-'+key+'" title="'+escHtml(t('profMgrPreview'))+'" onclick="toggleProfMgrDropdown(\''+key+'\',event)">'+
+    '<span class="battle-prof-text">'+escHtml(summary)+'</span>'+
+    '<span class="battle-trial-caret">▾</span>'+
+    dd+
+  '</span>';
+}
+function toggleProfMgrDropdown(key, ev) {
+  if (ev) ev.stopPropagation();
+  openProfMgrDropdown = (openProfMgrDropdown === key) ? null : key;
+  renderProfMgrTable(); // 下拉 HTML 随重渲染展开/收起；openProfMgrDropdown 未变时保持展开
+  if (openProfMgrDropdown) positionProfMgrDropdown();
+}
+function closeProfMgrDropdown() {
+  if (!openProfMgrDropdown) return;
+  openProfMgrDropdown = null;
+  renderProfMgrTable();
+}
+function positionProfMgrDropdown() {
+  const key = openProfMgrDropdown;
+  if (!key) return;
+  const picker = document.getElementById('pm-picker-' + key);
+  const dd = document.getElementById('pm-dropdown-' + key);
+  if (!picker || !dd) return;
+  const r = picker.getBoundingClientRect();
+  const h = dd.offsetHeight || 64;
+  const w = dd.offsetWidth || 200;
+  dd.style.left = Math.max(4, Math.min(r.left, window.innerWidth - w - 4)) + 'px';
+  dd.style.top = ((r.bottom + h > window.innerHeight - 4) ? Math.max(4, r.top - h - 2) : r.bottom + 2) + 'px';
+}
+// 点击下拉以外区域 → 关闭（下拉内部控件均已 stopPropagation，不会到这里）
+document.addEventListener('click', function(ev) {
+  if (!openProfMgrDropdown) return;
+  const dd = document.getElementById('pm-dropdown-' + openProfMgrDropdown);
+  const pk = document.getElementById('pm-picker-' + openProfMgrDropdown);
+  const tgt = ev.target;
+  if (dd && tgt && (tgt === dd || (tgt.nodeType === 1 && dd.contains(tgt)))) return;
+  if (pk && tgt && (tgt === pk || (tgt.nodeType === 1 && pk.contains(tgt)))) return;
+  closeProfMgrDropdown();
+});
+window.addEventListener('resize', closeProfMgrDropdown);
+window.addEventListener('scroll', function(ev) {
+  if (!openProfMgrDropdown) return;
+  const dd = document.getElementById('pm-dropdown-' + openProfMgrDropdown);
+  const tgt = ev.target;
+  if (dd && tgt && (tgt === dd || (tgt.nodeType === 1 && dd.contains(tgt)))) return;
+  closeProfMgrDropdown();
+}, true);
+// 职业归属变更后的公共收尾：_ts → saveData → 重渲染（下拉保持展开）。
+function profMgrPersist() {
+  const pr = profsState();
+  pr._ts = Date.now();
+  saveData(); // 持久化 + 红点，随下次「上传」分发给全员
+  renderProfMgrTable();
+  if (openProfMgrDropdown) positionProfMgrDropdown();
+  try { renderDisplaySettings(); } catch(e) {}
+  try { renderDisplayArea(); } catch(e) {}
+}
+// 从该角色「所有职业」中删除指定序号的职业。
+function profMgrRemoveProf(rowIdx, pIdx, ev) {
+  if (ev) ev.stopPropagation();
+  const m = state.members[rowIdx];
+  if (!m) { renderProfMgrTable(); return; }
+  const name = String(m.name == null ? '' : m.name).trim();
+  const pr = profsState();
+  const list = profListByName(name).slice();
+  const prof = list[pIdx];
+  if (prof === undefined) { renderProfMgrTable(); return; }
+  list.splice(pIdx, 1);
+  pr.byName[name] = list;
+  // 出战职业恰为被删职业时清空选择，回退到列表第一个
+  if (profSelByName(name) === prof) delete pr.sel[name];
+  profMgrPersist();
+}
+// 单击选中：将该职业设为此人出战职业（写入 profs.sel，替换原出战职业）。
+function profMgrSelectProf(rowIdx, pIdx, ev) {
+  if (ev) ev.stopPropagation();
+  const m = state.members[rowIdx];
+  if (!m) { renderProfMgrTable(); return; }
+  const name = String(m.name == null ? '' : m.name).trim();
+  const list = profListByName(name);
+  const prof = list[pIdx];
+  if (prof === undefined) { renderProfMgrTable(); return; }
+  const pr = profsState();
+  pr.sel[name] = prof;
+  profMgrPersist();
+}
+// 输入框回车入口：按《职业管理》合集序号为该角色新增职业。
+function profMgrAddIdxKey(rowIdx, ev) { if (ev && ev.key === 'Enter') profMgrAddProf(rowIdx, ev); }
+function profMgrAddProf(rowIdx, ev) {
+  if (ev) ev.stopPropagation();
+  const m = state.members[rowIdx];
+  if (!m) { renderProfMgrTable(); return; }
+  const input = document.getElementById('pm-add-' + rowIdx);
+  const raw = input ? String(input.value == null ? '' : input.value).trim() : '';
+  const n = Math.floor(Number(raw));
+  const pool = professionList();
+  if (!raw || !Number.isFinite(n) || n < 0 || n >= pool.length) {
+    alert(t('profMgrBadIdx').replace('{n}', raw));
+    return;
+  }
+  const name = String(m.name == null ? '' : m.name).trim();
+  const prof = pool[n];
+  const pr = profsState();
+  const list = profListByName(name);
+  if (list.indexOf(prof) >= 0) { alert(t('profMgrDup').replace('{name}', prof)); return; }
+  pr.byName[name] = list.concat([prof]);
+  profMgrPersist();
 }
 function selectSkillIcon(key, iconId, ev) {
   if (ev) ev.stopPropagation();
