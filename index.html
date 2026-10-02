@@ -5494,6 +5494,7 @@ function toggleEvenSplitProfession(pIdx, ev) {
   openBattleDropdown = 'esplit';
   renderBattleTrialOptions();
   renderDisplayArea();
+  renderSkillConfigArea(); // 技能配置左右两栏随平均分配实时跟随
 }
 // 均分规则：把「职业属于勾选范围」的成员先按职业分组，每个职业内按展示顺序切成前后两半，
 // 一半用试炼1的图标、另一半用试炼2的图标（组内顺序相近的人仍在一起；同一职业不会被全分到一个试炼）。
@@ -5762,6 +5763,7 @@ function onDisplayProfessionChange(id, v) {
   if ((state.displayEvenSplitProfessions || []).length) applyEvenSplit();
   renderBattleTrialOptions(); // 右侧人数/奶/盾统计随职业变化
   renderDisplayArea();
+  renderSkillConfigArea(); // 技能配置左右两栏随职业变化实时跟随
 }
 // 《战斗》列：选中职业被战斗试炼1/2 的出战职业包含时，显示对应试炼的图标（可同时命中两个）。
 function battleIconsForProfession(prof, size) {
@@ -5814,6 +5816,7 @@ function resetDisplayBattleIcon(key, ev) {
   openBattleDropdown = null;
   renderBattleTrialOptions();
   renderDisplayArea();
+  renderSkillConfigArea(); // 技能配置左右两栏随单独修改实时跟随
 }
 // 选中某个战斗图标：写入该成员的单独指定值；再次点击同一图标则手动清空（显示为空，不回落到自动计算）。
 function selectDisplayBattleIcon(key, kIdx, ev) {
@@ -5834,6 +5837,7 @@ function selectDisplayBattleIcon(key, kIdx, ev) {
   openBattleDropdown = null;
   renderBattleTrialOptions(); // 右侧人数/奶/盾统计随单独修改变化
   renderDisplayArea();
+  renderSkillConfigArea(); // 技能配置左右两栏随单独修改实时跟随
 }
 // === 公会试炼报名对比 ===
 // 书签脚本抓取「公会 > 成员 > 贡献」页成员表，产出以 MWI_SIGNUPS_V1 开头的 JSON 写入剪贴板；
