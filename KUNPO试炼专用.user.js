@@ -30,8 +30,9 @@
 
     // ── 更新日志：key = 版本号，value = 中文更新内容；发新版本时在顶部加一条即可 ──
     const CHANGELOG = {
-        '1.1.2': '1. DIY插件新增极简版，不喜欢过多功能或者游戏卡顿或者（屁事多的）梦想可以前往下载了！\n'
-            + '2. TODO 职业\n',
+        '1.1.2': '1. DIY插件新增极简版，不喜欢过多功能或者游戏卡顿的伙伴可以前往下载\n'
+            + '2. fix bug 过期排刀仍然高亮\n'
+            + '3. TODO 职业\n',
         '1.1.1': '1. 新增DIY插件分享，可以方便的下载群友DIY升级的插件\n'
             + '2. 上传神龛，后续模拟试炼使用真实神龛数据\n'
             + '3. 地牢光环推荐支持固定无敌、复活，鼠标悬停可查看角色所有光环等级\n'
@@ -2148,6 +2149,15 @@
         const announce = !!(opts && opts.announce);
         const expired = !!(opts && opts.expired);
         if (trialEndState.silenced) return;
+        // 统一过期闸门：排刀已过期且非「手动强制展示」→ 一律不渲染高亮。
+        // 之前 onEnterTrialPage 的 .then 回调在 refreshAssignment 的过期判定之后
+        // 无条件调用本函数，绕过判定把过期排刀的高亮重新画上（残留"上周高亮"）。
+        const dl = assignmentState.doc && assignmentState.doc.t ? Date.parse(assignmentState.doc.t) : NaN;
+        if (!expired && !assignmentState.forceShowExpired && Number.isFinite(dl) && Date.now() > dl) {
+            clearAssignmentUi();
+            announceAssignment('排刀信息已过期，尚未发布新排刀', announce);
+            return;
+        }
         const currentCards = [...document.querySelectorAll(TRIAL_CARD_SELECTOR)];
         const inputs = assignmentInputsUnchanged(currentCards, opts);
         if (inputs.unchanged) {
