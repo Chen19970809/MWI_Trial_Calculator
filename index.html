@@ -2366,6 +2366,10 @@ let state = {
   plan: null,
   // 《单独修改》：为单个成员手动指定的战斗图标（memberId → BATTLE_TRIAL_ICONS 下标）。仅本地保存。
   displayBattleOverrides: {},
+  // 《导入试炼》写入的生活分配覆盖（memberId → 生活试炼下标，含 -1=快照中未分配）：
+  // 展示区域生活列优先显示该值，保证导入后本地显示与发布的排刀一致（成员数据漂移也不重算）。
+  // 发布新排刀或《清除单独修改》时清空。仅本地保存。
+  displayLifeOverrides: {},
   // 是否开启《单独修改》（可点击成员战斗列图标修改战斗结果）。仅本地保存。
   displayBattleEdit: false,
   // 「加成与约束」分组（全局加成/公会建筑/公会神龛/进度约束）是否折叠。仅本地保存。
@@ -5167,6 +5171,10 @@ async function publishDisplayPlan() {
   if (!raw || isNaN(dl.getTime())) { alert(t('planNeedDeadline')); return; }
   // 截止时间已过仅作提醒，不再强行阻拦（是否继续由会长自行决定）
   if (Date.now() >= dl.getTime()) { alert(t('planDeadlinePassed')); }
+  // 发布新排刀 → 清除《导入试炼》带来的生活分配覆盖：快照内容已随本次发布更新，
+  // 之后展示区回到按本地重算实时显示（与本次发布内容同口径）。
+  state.displayLifeOverrides = {};
+  try { localStorage.removeItem('mwi_display_life_overrides'); } catch(e) {}
   state.plan = buildDisplayPlan(dl.toISOString());
   setPlanForce(false);   // 发布了新排刀 → 清除旧的强制套用标志（新排刀按截止时间正常生效）
   saveData();
@@ -5249,9 +5257,10 @@ function importPlanForce() {
   alert(t(next ? 'importPlanOn' : 'importPlanOff').replace('{t}', formatPlanDeadline(state.plan.t)));
 }
 // 会长端《导入试炼》：把云端排刀快照反推为本地编辑状态。
-// 生活分配（state.assignment）是本地算法每次 calculate() 重算的，不可持久化还原；
-// 只要成员/试炼数据与发布时一致（从云端拉取），重算结果即与快照同口径，无需干预。
-// 真正需要还原的是仅存本地的三块：每人职业选择、战斗分组（出战职业+单独修改）、平均分配记录。
+// 生活分配：快照 life 写入 displayLifeOverrides（memberId → 试炼下标，含 -1），展示区域生活列
+// 优先显示覆盖值——即使本地成员数据与发布时有漂移（calculate() 重算结果不同），显示仍与发布的排刀一致。
+// 覆盖在「发布新排刀」或「清除单独修改」时清空，此后回到按本地重算实时显示。
+// 同时还原仅存本地的三块：每人职业选择、战斗分组（出战职业+单独修改）、平均分配记录。
 // 战斗还原策略：
 //   单图标成员 → displayBattleOverrides 精确指定（并标记手动，不被后续均分覆盖）；
 //   双图标成员 → 其职业加入两个试炼的出战职业列表（自动匹配出两个图标）；
@@ -5261,6 +5270,7 @@ function restorePlanToEditor() {
   const byName = {};
   (state.members || []).forEach(function(p) { if (p && p.name) byName[String(p.name).trim()] = p; });
   const want = {};   // p.id → 图标下标数组（快照位掩码反解）
+  state.displayLifeOverrides = {};   // 重建（而非叠加）：以本次导入的快照为准
   Object.keys(m).forEach(function(name) {
     const p = byName[name];
     const e = m[name];
@@ -5268,6 +5278,10 @@ function restorePlanToEditor() {
     const prof = String(e[2] || '');
     state.displayProfessions[p.id] = prof;                    // 本地回退（memberId 键）
     profsState().sel[String(name).trim()] = prof;             // 云端职业数据（角色名键）
+    // 生活分配覆盖：快照 life（-1=未分配也覆盖，保持与发布一致的空显示）
+    if (Number.isInteger(e[0]) && (e[0] === -1 || e[0] < (state.trials || []).length)) {
+      state.displayLifeOverrides[String(p.id)] = e[0];
+    }
     want[p.id] = battleIconsFromMask(e[1]);
   });
   // 反推两个试炼的图标：快照不记录「试炼↔图标」映射（仅存本地），这里把快照中
@@ -5350,6 +5364,7 @@ function restorePlanToEditor() {
   });
   // 持久化（与各手动编辑入口写同一批 localStorage 键，刷新后不丢）
   try { localStorage.setItem('mwi_display_professions', JSON.stringify(state.displayProfessions)); } catch(e) {}
+  try { localStorage.setItem('mwi_display_life_overrides', JSON.stringify(state.displayLifeOverrides)); } catch(e) {}
   try { localStorage.setItem('mwi_display_battle_trial_icons', JSON.stringify(state.displayBattleTrialIcons)); } catch(e) {}
   try { localStorage.setItem('mwi_display_battle_trial_profs', JSON.stringify(state.displayBattleTrialProfessions)); } catch(e) {}
   try { localStorage.setItem('mwi_display_battle_manual', JSON.stringify(state.displayBattleManual)); } catch(e) {}
@@ -5641,9 +5656,13 @@ function renderDisplayArea() {
   }
   area.innerHTML = slices.map(list => {
     const rowsHtml = list.map(({ p, rowIdx }) => {
-      // 生活列：已发布且未过期的排刀优先；否则用本地计算的最优分配。
+      // 生活列：导入快照的生活覆盖优先（保证与发布的排刀一致）；
+      // 其次已发布且未过期的排刀（个人端）；否则用本地计算的最优分配。
+      const lifeOv = (state.displayLifeOverrides || {})[String(p.id)];
       const pp = displayPlanFor(p);
-      const assign = pp ? ((Number.isInteger(pp[0]) && pp[0] >= 0) ? pp[0] : -1) : (state.assignment ? state.assignment[p.id] : -1);
+      let assign = (lifeOv !== undefined && lifeOv !== null) ? lifeOv
+        : (pp ? ((Number.isInteger(pp[0]) && pp[0] >= 0) ? pp[0] : -1) : (state.assignment ? state.assignment[p.id] : -1));
+      if (!(assign >= 0 && assign < (state.trials || []).length)) assign = -1;   // 试炼下标越界按未分配显示
       const assignClass = assign >= 0 ? 'assign-T'+(assign+1) : 'assign-none';
       const assignContent = assign >= 0 ? svgIcon(SKILL_KEYS[state.trials[assign].skill], 22, 22) : '-';
       // 未手动选择过（或原选择已不在当前职业列表中）时，默认选中该成员职业列表的第一个值；手动选空则保留空。
@@ -5940,15 +5959,19 @@ function toggleDisplayBattleEdit(checked) {
   openBattleDropdown = null;
   renderDisplayArea();
 }
-// 《清除单独修改》：清空所有成员的单独指定，战斗结果回到按职业自动匹配（旧规则）。
+// 《清除单独修改》：清空所有成员的单独指定，战斗结果回到按职业自动匹配（旧规则）；
+// 同时清空《导入试炼》写入的生活分配覆盖，生活列回到按本地重算实时显示。
 function clearDisplayBattleOverrides(ev) {
   if (ev) ev.stopPropagation();
-  const n = Object.keys(state.displayBattleOverrides || {}).length;
+  const n = Object.keys(state.displayBattleOverrides || {}).length
+    + Object.keys(state.displayLifeOverrides || {}).length;
   state.displayBattleOverrides = {};
+  state.displayLifeOverrides = {};
   state.displayEvenSplitAssigned = {}; // 自动分配记录一并作废
   state.displayBattleManual = {};      // 手动指定标记一并作废
   try {
     localStorage.removeItem('mwi_display_battle_overrides');
+    localStorage.removeItem('mwi_display_life_overrides');
     localStorage.removeItem('mwi_display_even_split_assigned');
     localStorage.removeItem('mwi_display_battle_manual');
   } catch(e) {}
@@ -6722,6 +6745,13 @@ function loadPrefs() {
         for (const k of Object.keys(btOv)) {
           const v = btOv[k];
           if (v === BATTLE_OVERRIDE_EMPTY || (Number.isInteger(v) && v >= 0 && v < BATTLE_TRIAL_ICONS.length)) state.displayBattleOverrides[k] = v;
+        }
+      }
+      const lfOv = JSON.parse(localStorage.getItem('mwi_display_life_overrides') || 'null');
+      if (lfOv && typeof lfOv === 'object' && !Array.isArray(lfOv)) {
+        for (const k of Object.keys(lfOv)) {
+          const v = lfOv[k];
+          if (v === -1 || (Number.isInteger(v) && v >= 0 && v < (state.trials || []).length)) state.displayLifeOverrides[k] = v;
         }
       }
     } catch(e) {}
