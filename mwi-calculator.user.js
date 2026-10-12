@@ -1,0 +1,5142 @@
+// ==UserScript==
+// @name         [银河奶牛]生产制作计算器
+// @version      0.1.6
+// @namespace    http://tampermonkey.net/
+// @description  银河奶牛计算器，自动计算需求缺口，一键跳转到制作、购买。Calculator for MilkyWayIdle，Automatically calculate supply-demand gaps and navigate to production or purchasing with a single click.
+// @author       RERoger
+// @match        https://www.milkywayidle.com/*
+// @match        https://test.milkywayidle.com/*
+// @match        https://www.milkywayidlecn.com/*
+// @match        https://test.milkywayidlecn.com/*
+// @icon         https://www.google.com/s2/favicons?sz=64&domain=milkywayidle.com
+// @grant        GM_setValue
+// @grant        GM_getValue
+// @grant        GM_setClipboard
+// @run-at       document-body
+// @license      MIT
+// @require      https://cdn.jsdelivr.net/npm/lz-string@1.5.0/libs/lz-string.min.js
+
+// @downloadURL https://raw.githubusercontent.com/RERoger/mwi-calculator/main/dist/mwi-calculator.user.js
+// @updateURL https://raw.githubusercontent.com/RERoger/mwi-calculator/main/dist/mwi-calculator.meta.js
+// @homepageURL https://github.com/RERoger/mwi-calculator
+// @supportURL https://github.com/RERoger/mwi-calculator/issues
+// ==/UserScript==
+(function () {
+    'use strict';
+    //#region UI theme / state / components
+    // 颜色唯一入口：布局样式、状态判断、业务数据分别管理。
+    const MWI_Calculator_UITheme = Object.freeze({
+        surface: '#2c2e45',          // 默认列表、已完成条目：44,46,69
+        heading: '#393a5b',          // 已完成标题：57,58,91
+        activeHeading: '#147147',    // 已启用、未全部完成标题：20,113,71
+        pending: '#0E4F32',          // 有效且未完成条目：14,79,50
+        disabledSurface: '#636363',  // 未勾选/零目标/分类禁用：99,99,99
+        disabledHeading: '#969696',  // 未勾选标题：150,150,150
+        danger: '#eb3f3f',
+        onAction: '#FFFFFF'
+    });
+    const MWI_Calculator_UIStyles = Object.freeze({
+        // 房屋等级、大类数量与目标条目数量统一宽度，避免 flex 挤压造成不一致。
+        quantityInput: Object.freeze({ width: '60px', flex: '0 0 60px' }),
+        // 公用物品行：上下无外边距、无圆角，背景连续；保留左右及行内留白。
+        itemRow: Object.freeze({ border: 'none', borderRadius: '0', padding: '1px',
+            margin: '0 2px', display: 'flex', alignItems: 'center' }),
+        category: Object.freeze({ background: MWI_Calculator_UITheme.surface,
+            borderRadius: '4px', margin: '2px 0px', padding: '2px 0px' }),
+        summary: Object.freeze({ background: MWI_Calculator_UITheme.heading,
+            borderRadius: '4px', fontSize: '14px', padding: '2px 6px',
+            textAlign: 'left', cursor: 'pointer' }),
+        summaryWithAction: Object.freeze({ position: 'relative', paddingRight: '4em', minHeight: '28px' }),
+        dangerButton: Object.freeze({ background: MWI_Calculator_UITheme.danger,
+            border: 'none', borderRadius: '4px', padding: '4px', margin: '2px', cursor: 'pointer' }),
+        // 标题专用紧凑按钮：覆盖通用按钮尺寸，不影响全局清空和单条删除。
+        cornerAction: Object.freeze({ position: 'absolute', top: '50%', right: '2px', transform: 'translateY(-50%)',
+            whiteSpace: 'nowrap', boxSizing: 'border-box', height: '20px',
+            maxHeight: 'calc(100% - 4px)', minHeight: '0', padding: '0 5px',
+            margin: '0', fontSize: '12px', lineHeight: '16px',
+            display: 'inline-flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden' })
+    });
+    class MWI_Calculator_UI {
+        // 仅目标行使用此布局：名称先收缩，操作区不参与 flex 压缩。
+        static attachTargetLayout(row, nameGroup, controls, owned, input, removeButton) {
+            row.classList.add('mwi-target-row');
+            nameGroup.classList.add('mwi-target-name');
+            nameGroup.querySelector('span')?.classList.add('mwi-target-label');
+            controls.classList.add('mwi-target-controls');
+            owned.classList.add('mwi-target-owned');
+            input.classList.add('mwi-target-input');
+            removeButton.classList.add('mwi-target-remove');
+            this.targetLayouts ||= new WeakMap();
+            this.targetLayouts.set(row, { controls, input, checkbox: row.querySelector('input[type="checkbox"]') });
+            if (!this.targetLayoutObserver && typeof ResizeObserver !== 'undefined') {
+                this.targetLayoutObserver = new ResizeObserver(entries => {
+                    for (const entry of entries) this.scheduleTargetLayout(entry.target);
+                });
+            }
+            this.targetLayoutObserver?.observe(row);
+            this.scheduleTargetLayout(row);
+        }
+        static scheduleTargetLayout(row) {
+            if (!row || !this.targetLayouts?.has(row) || !MWI_Calculator_Calculator.isPanelVisible()) return;
+            this.pendingTargetLayouts ||= new Set();
+            this.pendingTargetLayouts.add(row);
+            if (this.targetLayoutFrame) return;
+            this.targetLayoutFrame = requestAnimationFrame(() => {
+                this.targetLayoutFrame = null;
+                const rows = [...this.pendingTargetLayouts];
+                this.pendingTargetLayouts.clear();
+                for (const element of rows) if (element.isConnected) this.fitTargetLayout(element);
+            });
+        }
+        static fitTargetLayout(row) {
+            const layout = this.targetLayouts?.get(row);
+            if (!layout || !MWI_Calculator_Calculator.isPanelVisible() || row.clientWidth === 0) return; // 折叠状态等待 ResizeObserver 重新触发。
+            const outerWidth = element => {
+                if (!element) return 0;
+                const style = getComputedStyle(element);
+                return element.getBoundingClientRect().width + (parseFloat(style.marginLeft) || 0) + (parseFloat(style.marginRight) || 0);
+            };
+            const style = getComputedStyle(row);
+            const signature = JSON.stringify([row.clientWidth, layout.controls.textContent, layout.input.value,
+                style.fontFamily, style.fontWeight, style.letterSpacing, window.devicePixelRatio, this.fontGeneration || 0]);
+            if (layout.signature === signature) return;
+            const available = row.clientWidth - (parseFloat(style.paddingLeft) || 0)
+                - (parseFloat(style.paddingRight) || 0) - outerWidth(layout.checkbox);
+            this.targetTextCanvas ||= document.createElement('canvas');
+            const context = this.targetTextCanvas.getContext('2d');
+            const fits = () => {
+                const inputStyle = getComputedStyle(layout.input);
+                if (context) context.font = inputStyle.font;
+                const textWidth = context ? context.measureText(layout.input.value || layout.input.placeholder).width : 0;
+                const inputSpace = layout.input.clientWidth - (parseFloat(inputStyle.paddingLeft) || 0) - (parseFloat(inputStyle.paddingRight) || 0);
+                return outerWidth(layout.controls) <= available + 0.5 && textWidth <= inputSpace + 0.5;
+            };
+            // 先允许名称缩至零，再缩字号；不会缩小60px输入框和26px删除按钮。
+            for (let size = 14; size >= 8; size--) {
+                row.style.setProperty('--mwi-target-font-size', size + 'px');
+                if (fits()) break;
+            }
+            // 极端窄屏保留横向访问，不以隐藏数量/按钮换取表面上的“适配”。
+            const overflow = outerWidth(layout.controls) > available + 0.5;
+            if (row.style.overflowX !== (overflow ? 'auto' : '')) row.style.overflowX = overflow ? 'auto' : '';
+            layout.signature = signature;
+        }
+        static detachTargetLayout(row) {
+            if (!row) return;
+            this.targetLayoutObserver?.unobserve(row);
+            this.targetLayouts?.delete(row);
+            this.pendingTargetLayouts?.delete(row);
+        }
+        // 状态函数只读取数据，不修改勾选值、库存、目标数量或 DOM。
+        static getTargetState(item, categoryEnabled = true) {
+            if (!item.needCalc || !categoryEnabled || item.count <= 0) return 'inactive';
+            return item.getOwnedCount() < item.count ? 'pending' : 'completed';
+        }
+        static getCategoryState(category, items) {
+            if (!category.needCalc) return 'inactive';
+            let hasActiveTarget = false;
+            for (const item of items) {
+                if (item.categoryHrid !== category.categoryHrid || !item.needCalc || !(item.count > 0)) continue;
+                hasActiveTarget = true;
+                if (!(item.getOwnedCount() >= item.count)) return 'pending';
+            }
+            // 空分类、全未勾选或全零目标均不判定为“全部完成”。
+            return hasActiveTarget ? 'completed' : 'pending';
+        }
+        static renderTargetState(element, state) {
+            this.paintedStates ||= new WeakMap();
+            if (this.paintedStates.get(element) === state) return;
+            this.paintedStates.set(element, state);
+            const colors = MWI_Calculator_UITheme;
+            element.style.background = state === 'inactive' ? colors.disabledSurface
+                : state === 'pending' ? colors.pending : colors.surface;
+        }
+        static renderCategoryState(details, summary, state) {
+            this.paintedStates ||= new WeakMap();
+            if (this.paintedStates.get(summary) === state) return;
+            this.paintedStates.set(summary, state);
+            const colors = MWI_Calculator_UITheme;
+            details.style.background = state === 'inactive' ? colors.disabledSurface : colors.surface;
+            summary.style.background = state === 'inactive' ? colors.disabledHeading
+                : state === 'pending' ? colors.activeHeading : colors.heading;
+        }
+        static styleDangerButton(button, hasText = false) {
+            button.type = 'button';
+            Object.assign(button.style, MWI_Calculator_UIStyles.dangerButton);
+            if (hasText) button.style.color = MWI_Calculator_UITheme.onAction;
+        }
+        // 分类组件负责 DOM、布局和交互隔离，调用方只传标题与业务回调。
+        static createCategory(name, onToggle, onClear = null) {
+            const details = document.createElement('details');
+            Object.assign(details.style, MWI_Calculator_UIStyles.category);
+            details.open = true;
+            details.addEventListener('toggle', onToggle);
+            const summary = document.createElement('summary');
+            summary.textContent = name;
+            Object.assign(summary.style, MWI_Calculator_UIStyles.summary);
+            if (onClear) {
+                Object.assign(summary.style, MWI_Calculator_UIStyles.summaryWithAction);
+                const button = document.createElement('button');
+                button.className = 'mwi-calculator-remove-category';
+                button.textContent = '清空';
+                button.title = `清空“${name}”中的所有目标（含未勾选项）`;
+                button.setAttribute('aria-label', button.title);
+                this.styleDangerButton(button, true);
+                Object.assign(button.style, MWI_Calculator_UIStyles.cornerAction);
+                button.addEventListener('click', event => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    onClear();
+                });
+                summary.appendChild(button);
+            }
+            details.appendChild(summary);
+            return { details, summary };
+        }
+    }
+    //#endregion
+    //#region Calculator
+    class TargetItemCategory {
+        constructor(categoryHrid, needCalc = true) {
+            this.needCalc = true;
+            this.categoryDetailsElement = null;
+            this.categorySummaryElement = null;
+            this.needCalcCheckbox = null;
+            this.categoryHrid = categoryHrid;
+            this.needCalc = needCalc;
+        }
+        updateDisplayElement(items = MWI_Calculator_Calculator.targetItemsMap.values()) {
+            if (!MWI_Calculator_Calculator.isPanelVisible()) return;
+            const state = MWI_Calculator_UI.getCategoryState(this, items);
+            MWI_Calculator_UI.renderCategoryState(this.categoryDetailsElement, this.categorySummaryElement, state);
+            this.needCalcCheckbox.checked = this.needCalc;
+        }
+    }
+    class DisplayItem {
+        constructor(itemHrid, count) {
+            this.itemHrid = itemHrid;
+            this.count = count;
+            this.initDisplayProperties();
+        }
+        initDisplayProperties() {
+            if ([...MWI_Calculator_ActionDetailPlus.processableItemMap.values()].includes(this.itemHrid)) {
+                this.categoryHrid = '/item_categories/materials';
+            }
+            else if (this.itemHrid.endsWith('_tea')) {
+                this.categoryHrid = '/item_categories/tea';
+            }
+            else if (this.itemHrid.endsWith('_coffee')) {
+                this.categoryHrid = '/item_categories/coffee';
+            }
+            else {
+                this.categoryHrid = MWI_Calculator.initClientData?.itemDetailMap?.[this.itemHrid].categoryHrid;
+            }
+            this.displayName = MWI_Calculator_I18n.getItemName(this.itemHrid);
+            this.iconHref = MWI_Calculator_Utils.getIconHrefByItemHrid(this.itemHrid);
+            this.sortIndex = MWI_Calculator_Utils.getSortIndexByItemHrid(this.itemHrid);
+        }
+        getOwnedCount() {
+            return MWI_Calculator_ItemsMap.getCount(this.itemHrid);
+        }
+    }
+    class TargetItem extends DisplayItem {
+        constructor(itemHrid, count, needCalc = true) {
+            super(itemHrid, count);
+            this.needCalc = true;
+            this.displayElement = null;
+            this.needCalcCheckbox = null;
+            this.ownedSpan = null;
+            this.targetInput = null;
+            this.needCalc = needCalc;
+        }
+        updateDisplayElement() {
+            if (!MWI_Calculator_Calculator.isPanelVisible()) return;
+            if (this.needCalcCheckbox) {
+                if (this.needCalcCheckbox.checked !== this.needCalc) this.needCalcCheckbox.checked = this.needCalc;
+                const categoryEnabled = MWI_Calculator_Calculator.targetItemCategoryMap.get(this.categoryHrid)?.needCalc !== false;
+                const state = MWI_Calculator_UI.getTargetState(this, categoryEnabled);
+                MWI_Calculator_UI.renderTargetState(this.displayElement, state);
+            }
+            if (this.ownedSpan) {
+                const newText = MWI_Calculator_Utils.formatNumber(this.getOwnedCount());
+                if (this.ownedSpan.textContent !== newText) {
+                    this.ownedSpan.textContent = newText;
+                }
+            }
+            if (this.targetInput) {
+                const newText = this.count.toString();
+                if (this.targetInput.value.trim() != newText) {
+                    this.targetInput.value = newText;
+                }
+            }
+            MWI_Calculator_UI.scheduleTargetLayout(this.displayElement);
+        }
+        removeDisplayElement() {
+            MWI_Calculator_UI.detachTargetLayout(this.displayElement);
+            this.displayElement?.remove();
+        }
+    }
+    class TargetHouseRoom extends TargetItem {
+        constructor(houseRoomHrid, level, needCalc = true) {
+            super(houseRoomHrid, level, needCalc);
+        }
+        initDisplayProperties() {
+            this.categoryHrid = '/item_categories/house_rooms';
+            this.displayName = MWI_Calculator_I18n.getName(this.itemHrid, 'houseRoomNames');
+            this.iconHref = MWI_Calculator_Utils.getIconHrefByHouseRoomHrid(this.itemHrid);
+            this.sortIndex = MWI_Calculator_Utils.getSortIndexByHouseRoomHrid(this.itemHrid);
+        }
+        getOwnedCount() {
+            return MWI_Calculator.gameObject?.state?.characterHouseRoomDict?.[this.itemHrid]?.level || 0;
+        }
+    }
+    class RequiredItem extends DisplayItem {
+        constructor(itemHrid, count, shortageCount, overflowCount) {
+            super(itemHrid, count);
+            this.shortageCount = 0;
+            this.overflowCount = 0;
+            this.shortageDisplayElement = null;
+            this.requiredDisplayElement = null;
+            this.shortageSpan = null;
+            this.overflowSpan = null;
+            this.requiredSpan = null;
+            this.displayNameSpan = null;
+            this.shortageCount = shortageCount;
+            this.overflowCount = overflowCount;
+        }
+        updateDisplayElement() {
+            if (!MWI_Calculator_Calculator.isPanelVisible()) return;
+            const netCount = this.shortageCount > 0 ? -this.shortageCount : this.overflowCount;
+            if (this.shortageSpan) {
+                const newText = MWI_Calculator_Utils.formatNumber(this.shortageCount);
+                if (this.shortageSpan.textContent !== newText) {
+                    this.shortageSpan.textContent = newText;
+                }
+                if (this.shortageCount > 0) {
+                    let inputShortageCount = 0;
+                    MWI_Calculator_ActionDetailPlus.tryGetRecipe(this.itemHrid)?.inputs?.forEach(input => {
+                        inputShortageCount += MWI_Calculator_Calculator.requiredItemsMap.get(input.itemHrid)?.shortageCount || 0;
+                    });
+                    this.shortageDisplayElement.style.background = (inputShortageCount === 0 ? MWI_Calculator_UITheme.activeHeading : '');
+                    this.shortageDisplayElement.style.display = 'flex';
+                }
+                else {
+                    this.shortageDisplayElement.style.display = 'none';
+                }
+            }
+            if (this.overflowSpan) {
+                const newText = MWI_Calculator_Utils.formatNumber(netCount);
+                if (this.overflowSpan.textContent !== newText) {
+                    this.overflowSpan.textContent = newText;
+                }
+                this.overflowSpan.style.color = this.shortageCount > 0 ? MWI_Calculator_UITheme.danger : '';
+            }
+            if (this.requiredSpan) {
+                const newText = MWI_Calculator_Utils.formatNumber(this.count);
+                if (this.requiredSpan.textContent !== newText) {
+                    this.requiredSpan.textContent = newText;
+                }
+            }
+            if (this.displayNameSpan) {
+                const percentage = Math.floor(netCount / this.count * 100) + '%';
+                if (this.displayNameSpan.textContent !== percentage) this.displayNameSpan.textContent = percentage;
+                if (netCount < 0) {
+                    this.displayNameSpan.style.color = MWI_Calculator_UITheme.danger;
+                }
+                else if (netCount < this.count) {
+                    this.displayNameSpan.style.color = '#faa21e';
+                }
+                else if (netCount < 2 * this.count) {
+                    this.displayNameSpan.style.color = '';
+                }
+                else if (netCount < 4 * this.count) {
+                    this.displayNameSpan.style.color = '#59d0b9';
+                }
+                else {
+                    this.displayNameSpan.style.color = '#4aa3e6';
+                }
+            }
+        }
+        removeDisplayElement() {
+            this.shortageDisplayElement?.remove();
+            this.requiredDisplayElement?.remove();
+        }
+    }
+    class MWI_Calculator_Calculator {
+        // 清单与已加载角色绑定；禁止使用 undefined/null 存储键。
+        static normalizeCharacterID(id) {
+            if (typeof id !== 'string' && typeof id !== 'number') return null;
+            const value = String(id).trim();
+            return /^[1-9]\d*$/.test(value) ? value : null;
+        }
+        static getLiveCharacterID() {
+            return this.normalizeCharacterID(MWI_Calculator.gameObject?.state?.character?.id);
+        }
+        static getSessionCharacterID() {
+            return MWI_Calculator.hasCharacterSession
+                ? this.normalizeCharacterID(MWI_Calculator.characterID) : this.getLiveCharacterID();
+        }
+        static canUseCharacterData() {
+            return !this.loadingCharacterData && this.characterDataLoaded === true
+                && this.activeCharacterID != null
+                && this.activeCharacterID === this.getSessionCharacterID()
+                && this.activeCharacterID === this.getLiveCharacterID();
+        }
+        static getStorageKey(characterID = null) {
+            const id = this.normalizeCharacterID(characterID ?? this.activeCharacterID ?? this.getSessionCharacterID());
+            return id == null ? null : `${this.resolveStorageKeyPrefix(id)}${id}`;
+        }
+        // 只清理内存与 DOM，绝不在角色切换/加载过程中保存空清单。
+        static resetCharacterView() {
+            clearTimeout(this.renderTimeout);
+            this.renderTimeout = null;
+            clearInterval(this.marketAutoFillTimer);
+            this.marketAutoFillTimer = null;
+            this.marketAutoFillTarget = null;
+            this.targetItemsMap.forEach(item => item.removeDisplayElement());
+            this.requiredItemsMap.forEach(item => item.removeDisplayElement());
+            this.targetItemsMap.clear();
+            this.requiredItemsMap.clear();
+            this.downgradeRows?.forEach(row => row.element.remove());
+            this.downgradeRows?.clear();
+            if (this.downgradeDetails) this.downgradeDetails.hidden = true;
+            this.targetItemCategoryMap.forEach(category => { category.needCalc = true; });
+            for (const map of [this.targetItemDetailsMap, this.shortageItemDetailsMap, this.requiredItemDetailsMap]) {
+                map.forEach(details => { details.open = true; details.hidden = true; });
+            }
+            // 已应用预设的类随角色切换一并移除（新角色的 targetItemsMap 会整体替换，无需恢复勾选）
+            this.presetAppliedMap?.forEach(applied => applied.details.remove());
+            this.presetAppliedMap?.clear();
+        }
+        static prepareCharacterSession(characterID) {
+            const id = this.normalizeCharacterID(characterID);
+            if (id != null && this.pendingCharacterID === id) return;
+            this.characterGeneration = (this.characterGeneration || 0) + 1;
+            this.pendingCharacterID = id;
+            this.activeCharacterID = null;
+            this.characterDataLoaded = false;
+            this.resetCharacterView();
+        }
+        static tryLoadActiveCharacter() {
+            if (this.loadingCharacterData || !this.tabPanel || this.pendingCharacterID == null) return false;
+            if (this.canUseCharacterData()) return true;
+            const game = MWI_Calculator.getGameObject();
+            if (game) MWI_Calculator.gameObject = game;
+            if (this.pendingCharacterID !== this.getLiveCharacterID()
+                || this.pendingCharacterID !== this.getSessionCharacterID()) return false;
+            return this.loadCalculatorData(this.pendingCharacterID);
+        }
+        /**
+         * 始终使用本脚本前缀。自己的任一关联键有数据时不覆盖；
+         * 否则将当前角色的 Toolkit 目标、分类、折叠状态复制到本脚本存储。
+         * 保留 Toolkit 原数据；成功后按角色缓存，避免重复导入。
+         */
+        static resolveStorageKeyPrefix(characterID) {
+            const ownPrefix = 'MWI_Calculator_Calculator_TargetItems_';
+            const toolkitPrefix = 'MWI_Toolkit_Calculator_TargetItems_';
+            if (characterID == null) return ownPrefix;
+            const cacheID = String(characterID);
+            this.storagePrefixCache ||= new Map();
+            if (this.storagePrefixCache.has(cacheID)) return ownPrefix;
+            try {
+                // 空字符串、空数组、空对象和 null 不视为已有数据。
+                // 非空但损坏的自身数据也保留，避免静默覆盖。
+                const hasData = raw => {
+                    if (raw == null) return false;
+                    let value = raw;
+                    if (typeof raw === 'string') {
+                        if (!raw.trim()) return false;
+                        try { value = JSON.parse(raw); }
+                        catch { return true; }
+                    }
+                    if (value == null || value === '') return false;
+                    if (typeof value === 'object') return Object.keys(value).length > 0;
+                    return true;
+                };
+                const fields = [
+                    ['DetailsOpenState', '{}'],
+                    ['TargetItemCategories', '[]'],
+                    ['TargetItems', '[]']
+                ];
+                const records = fields.map(([field, empty]) => {
+                    const ownKey = ownPrefix.replace('TargetItems', field) + cacheID;
+                    const toolkitKey = toolkitPrefix.replace('TargetItems', field) + cacheID;
+                    return { ownKey, toolkitKey, empty, own: GM_getValue(ownKey, empty) };
+                });
+                if (!records.some(record => hasData(record.own))) {
+                    records.forEach(record => {
+                        record.source = GM_getValue(record.toolkitKey, record.empty);
+                    });
+                    if (records.some(record => hasData(record.source))) {
+                        const written = [];
+                        try {
+                            for (const record of records) {
+                                // 记录后再写，以便写入过程中抛错时也尝试恢复。
+                                written.push(record);
+                                GM_setValue(record.ownKey, record.source);
+                                if (JSON.stringify(GM_getValue(record.ownKey)) !== JSON.stringify(record.source)) {
+                                    throw new Error('存储写入校验失败: ' + record.ownKey);
+                                }
+                            }
+                        }
+                        catch (error) {
+                            for (const record of written.reverse()) {
+                                try { GM_setValue(record.ownKey, record.own); }
+                                catch (restoreError) {
+                                    console.error('[MWI_Calculator] 恢复存储失败', restoreError);
+                                }
+                            }
+                            throw error;
+                        }
+                        console.log(`[MWI_Calculator] 已复制 Toolkit 数据到自身前缀（角色ID: ${cacheID}）`);
+                    }
+                }
+                this.storagePrefixCache.set(cacheID, ownPrefix);
+            }
+            catch (error) {
+                // 失败时不缓存；保持自身前缀，后续调用可重试。
+                console.warn('[MWI_Calculator] 旧键名兼容处理失败', error);
+            }
+            return ownPrefix;
+        }
+        // 保存所有 details 元素的 open 状态
+        static saveDetailsOpenState() {
+            if (!this.canUseCharacterData()) return false;
+            const storageKey = MWI_Calculator_Calculator.getStorageKey();
+            const storageKey_Details = storageKey.replace('TargetItems', 'DetailsOpenState');
+            const detailsState = {};
+            // 保存 targetItemDetailsMap
+            MWI_Calculator_Calculator.targetItemDetailsMap.forEach((details, key) => {
+                detailsState[`target_${key}`] = details.open;
+            });
+            // 保存 shortageItemDetailsMap
+            MWI_Calculator_Calculator.shortageItemDetailsMap.forEach((details, key) => {
+                detailsState[`shortage_${key}`] = details.open;
+            });
+            // 保存 requiredItemDetailsMap
+            MWI_Calculator_Calculator.requiredItemDetailsMap.forEach((details, key) => {
+                detailsState[`required_${key}`] = details.open;
+            });
+            try {
+                GM_setValue(storageKey_Details, JSON.stringify(detailsState));
+            }
+            catch (error) {
+                console.error('[MWI_Calculator] 保存Details open状态失败', error);
+            }
+        }
+        // 恢复所有 details 元素的 open 状态
+        static restoreDetailsOpenState(storageKey_Details) {
+            try {
+                const saved = GM_getValue(storageKey_Details, '{}');
+                const detailsState = JSON.parse(saved);
+                // 恢复 targetItemDetailsMap
+                MWI_Calculator_Calculator.targetItemDetailsMap.forEach((details, key) => {
+                    if (typeof detailsState[`target_${key}`] === 'boolean') {
+                        details.open = detailsState[`target_${key}`];
+                    }
+                });
+                // 恢复 shortageItemDetailsMap
+                MWI_Calculator_Calculator.shortageItemDetailsMap.forEach((details, key) => {
+                    if (typeof detailsState[`shortage_${key}`] === 'boolean') {
+                        details.open = detailsState[`shortage_${key}`];
+                    }
+                });
+                // 恢复 requiredItemDetailsMap
+                MWI_Calculator_Calculator.requiredItemDetailsMap.forEach((details, key) => {
+                    if (typeof detailsState[`required_${key}`] === 'boolean') {
+                        details.open = detailsState[`required_${key}`];
+                    }
+                });
+            }
+            catch (error) {
+                console.error('[MWI_Calculator] 恢复Details open状态失败', error);
+            }
+        }
+        // 保存数据
+        static saveCalculatorData() {
+            if (!this.canUseCharacterData()) return false;
+            const storageKey = MWI_Calculator_Calculator.getStorageKey();
+            const storageKey_Category = storageKey.replace('TargetItems', 'TargetItemCategories');
+            const storageKey_Details = storageKey.replace('TargetItems', 'DetailsOpenState');
+            MWI_Calculator_Calculator.saveDetailsOpenState();
+            const dataToSave = [...MWI_Calculator_Calculator.targetItemsMap.values()].map(item => ({
+                itemHrid: item.itemHrid,
+                count: item.count,
+                needCalc: item.needCalc
+            }));
+            const dataToSave_Category = [...MWI_Calculator_Calculator.targetItemCategoryMap.values()].map(category => ({
+                categoryHrid: category.categoryHrid,
+                needCalc: category.needCalc
+            }));
+            try {
+                GM_setValue(storageKey, JSON.stringify(dataToSave));
+                GM_setValue(storageKey_Category, JSON.stringify(dataToSave_Category));
+                return true;
+            }
+            catch (error) {
+                console.error('[MWI_Calculator]' + error);
+                return false;
+            }
+        }
+        // 读取与渲染分离，不调用 clearAllTargetItems，不在加载后自动回写。
+        static loadCalculatorData(characterID = null, { importToCurrent = false } = {}) {
+            const destinationID = this.getSessionCharacterID();
+            const sourceID = this.normalizeCharacterID(characterID ?? destinationID);
+            if (destinationID == null || sourceID == null || destinationID !== this.getLiveCharacterID()) return false;
+            if (sourceID !== destinationID && !importToCurrent) return false;
+            const storageKey = this.getStorageKey(sourceID);
+            this.loadingCharacterData = true;
+            this.characterDataLoaded = false;
+            try {
+                const loadedItems = JSON.parse(GM_getValue(storageKey, '[]'));
+                const loadedCategories = JSON.parse(GM_getValue(storageKey.replace('TargetItems', 'TargetItemCategories'), '[]'));
+                if (!Array.isArray(loadedItems) || !Array.isArray(loadedCategories)) throw new Error('清单格式无效');
+                const validItemsMap = new Map();
+                for (const item of loadedItems) {
+                    if (!item || typeof item.itemHrid !== 'string' || !Number.isFinite(item.count)) throw new Error('目标格式无效');
+                    const enabled = typeof item.needCalc === 'boolean' ? item.needCalc : true;
+                    let target;
+                    if (item.itemHrid.startsWith('/items/')) target = new TargetItem(item.itemHrid, item.count, enabled);
+                    else if (item.itemHrid.startsWith('/house_rooms/')) target = new TargetHouseRoom(item.itemHrid, item.count, enabled);
+                    else throw new Error('未知目标类型');
+                    validItemsMap.set(item.itemHrid, target);
+                }
+                for (const category of loadedCategories) {
+                    if (!category || typeof category.categoryHrid !== 'string') throw new Error('分类格式无效');
+                }
+                this.resetCharacterView();
+                this.activeCharacterID = destinationID;
+                this.targetItemsMap = validItemsMap; // 空清单也必须替换，避免旧角色残留。
+                for (const category of loadedCategories) {
+                    const enabled = typeof category.needCalc === 'boolean' ? category.needCalc : true;
+                    if (this.targetItemCategoryMap.has(category.categoryHrid)) this.targetItemCategoryMap.get(category.categoryHrid).needCalc = enabled;
+                    else this.targetItemCategoryMap.set(category.categoryHrid, new TargetItemCategory(category.categoryHrid, enabled));
+                }
+                this.restoreDetailsOpenState(storageKey.replace('TargetItems', 'DetailsOpenState'));
+                this.loadPresets();
+                this.loadAppliedPresets();
+                this.refreshPresetOptions();
+                // 渲染放在预设恢复之后，缺口计算才能包含已应用的预设物品
+                this.renderItemsDisplay();
+                this.characterDataLoaded = true;
+                return true;
+            }
+            catch (error) {
+                console.error('[MWI_Calculator] 加载失败，保留原存储并暂停写入', error);
+                return false;
+            }
+            finally { this.loadingCharacterData = false; }
+        }
+        static importCalculatorData(characterID) {
+            if (!this.canUseCharacterData()) return false;
+            const sourceID = this.normalizeCharacterID(characterID);
+            if (sourceID == null) return false;
+            if (sourceID === this.activeCharacterID) return this.loadCalculatorData();
+            // 三选一弹窗：合并导入 / 覆盖替换 / 取消（原为 confirm 二选一）
+            void this.chooseImportMode(sourceID);
+            return true;
+        }
+
+         static createImportDialogBox() {
+             const box = document.createElement('div');
+             box.style.cssText = 'position:relative;width:min(380px,90vw);padding:16px;border-radius:12px;'
+                 + 'background:linear-gradient(145deg,#152447,#1d3566);color:#eef3ff;border:1px solid #6f9bd8;'
+                 + 'box-shadow:0 10px 28px rgba(3,10,26,.55);font:13px/1.6 system-ui,sans-serif';
+             return box;
+         }
+         // 导入结果非阻塞提示：复用选择框外观，重复提示替换旧提示。
+         static showImportResult(message) {
+             clearTimeout(this.importResultTimer);
+             this.dismissImportResult?.();
+             const box = this.createImportDialogBox();
+             box.id = 'mwi-calculator-import-result';
+             box.setAttribute('role', 'status');
+             box.setAttribute('aria-live', 'polite');
+             Object.assign(box.style, {
+                 position: 'fixed', top: '50%', left: '50%', transform: 'translate(-50%, -50%)',
+                 zIndex: '2147483647', boxSizing: 'border-box',
+             });
+             const text = document.createElement('div');
+             text.textContent = message;
+             const outsideClick = event => {
+                 if (!box.contains(event.target)) dismiss();
+             };
+             const dismiss = () => {
+                 document.removeEventListener('click', outsideClick, true);
+                 box.remove();
+                 if (this.importResultNotice === box) {
+                     clearTimeout(this.importResultTimer);
+                     this.importResultTimer = null;
+                     this.importResultNotice = null;
+                     this.dismissImportResult = null;
+                 }
+             };
+             box.append(text);
+             document.addEventListener('click', outsideClick, true);
+             this.dismissImportResult = dismiss;
+             document.body.appendChild(box);
+             this.importResultNotice = box;
+             this.importResultTimer = setTimeout(dismiss, 3000);
+         }
+
+        // 导入方式选择弹窗，resolve('merge' | 'overwrite' | null)
+        static showImportModeDialog(sourceID) {
+            return new Promise(resolve => {
+                const finish = value => { overlay.remove(); resolve(value); };
+                const overlay = document.createElement('div');
+                overlay.style.cssText = 'position:fixed;inset:0;z-index:2147483647;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center';
+                const box = this.createImportDialogBox();
+                const text = document.createElement('div');
+                text.style.cssText = 'margin-bottom:12px';
+                text.textContent = `将角色 ${sourceID} 的清单导入到当前角色 ${this.activeCharacterID}：`;
+                const btnRow = document.createElement('div');
+                btnRow.style.cssText = 'display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap';
+                const mkBtn = (label, bg, title, value) => {
+                    const btn = document.createElement('button');
+                    btn.type = 'button';
+                    btn.textContent = label;
+                    btn.title = title;
+                    btn.style.cssText = `border:0;border-radius:7px;padding:6px 10px;background:${bg};color:#fff;cursor:pointer;font:600 12px/1.4 system-ui,sans-serif`;
+                    btn.addEventListener('click', () => finish(value));
+                    return btn;
+                };
+                btnRow.append(
+                    mkBtn('合并导入', '#2e7d32', '只新增当前清单缺少的物品，已有的物品保持不变', 'merge'),
+                    mkBtn('覆盖替换', '#c05621', '用源角色清单整体替换当前清单（原有物品会被清除）', 'overwrite'),
+                    mkBtn('取消', '#344879', '不做任何改动', null),
+                );
+                box.append(text, btnRow);
+                overlay.appendChild(box);
+                overlay.addEventListener('click', ev => { if (ev.target === overlay) finish(null); });
+                document.body.appendChild(overlay);
+            });
+        }
+        // 导入前备份当前清单三件套（TargetItems/TargetItemCategories/DetailsOpenState），失败返回 false
+        static backupCurrentListBeforeImport() {
+            const destinationKey = this.getStorageKey(this.activeCharacterID);
+            try {
+                const backup = {};
+                for (const field of ['TargetItems', 'TargetItemCategories', 'DetailsOpenState']) {
+                    const key = destinationKey.replace('TargetItems', field);
+                    backup[key] = GM_getValue(key, field === 'DetailsOpenState' ? '{}' : '[]');
+                }
+                GM_setValue(destinationKey + '_BackupBeforeImport', JSON.stringify(backup));
+                return true;
+            }
+            catch (error) {
+                console.error('[MWI_Calculator] 导入备份失败，已取消导入', error);
+                return false;
+            }
+        }
+        // 导入事务：保存失败时恢复三组存储及原内存清单，不报告成功。
+        static runImportTransaction(apply) {
+            if (!this.canUseCharacterData()) return null;
+            const destinationKey = this.getStorageKey(this.activeCharacterID);
+            const records = [];
+            const items = new Map(this.targetItemsMap);
+            const categories = new Map(this.targetItemCategoryMap);
+            const categoryStates = [...categories.values()].map(category => [category, category.needCalc]);
+            const details = [this.targetItemDetailsMap, this.shortageItemDetailsMap, this.requiredItemDetailsMap]
+                .flatMap(map => [...map.values()].map(element => [element, element.open, element.hidden]));
+            try {
+                for (const field of ['TargetItems', 'TargetItemCategories', 'DetailsOpenState']) {
+                    const key = destinationKey.replace('TargetItems', field);
+                    records.push([key, GM_getValue(key, field === 'DetailsOpenState' ? '{}' : '[]')]);
+                }
+                const result = apply();
+                if (!result) throw new Error('导入加载失败');
+                this.renderItemsDisplay();
+                if (!this.saveCalculatorData()) throw new Error('导入保存失败');
+                // 同时验证三组数据，捕获底层写入失败或静默丢写。
+                const expectedDetails = {};
+                for (const [prefix, map] of [['target', this.targetItemDetailsMap], ['shortage', this.shortageItemDetailsMap], ['required', this.requiredItemDetailsMap]]) {
+                    map.forEach((element, key) => { expectedDetails[`${prefix}_${key}`] = element.open; });
+                }
+                const expected = [
+                    [...this.targetItemsMap.values()].map(({ itemHrid, count, needCalc }) => ({ itemHrid, count, needCalc })),
+                    [...this.targetItemCategoryMap.values()].map(({ categoryHrid, needCalc }) => ({ categoryHrid, needCalc })),
+                    expectedDetails
+                ];
+                records.forEach(([key], index) => {
+                    if (GM_getValue(key) !== JSON.stringify(expected[index])) throw new Error('导入写入校验失败');
+                });
+                return result;
+            }
+            catch (error) {
+                let restored = true;
+                for (const [key, value] of records) {
+                    try {
+                        if (GM_getValue(key) !== value) GM_setValue(key, value);
+                        if (GM_getValue(key) !== value) throw new Error('恢复校验失败');
+                    }
+                    catch (restoreError) { restored = false; console.error('[MWI_Calculator] 导入恢复失败', restoreError); }
+                }
+                this.targetItemsMap = items;
+                this.targetItemCategoryMap = categories;
+                categoryStates.forEach(([category, enabled]) => { category.needCalc = enabled; });
+                details.forEach(([element, open, hidden]) => { element.open = open; element.hidden = hidden; });
+                this.characterDataLoaded = restored;
+                try { this.renderItemsDisplay(); }
+                catch (renderError) { this.characterDataLoaded = false; console.error('[MWI_Calculator] 恢复显示失败', renderError); }
+                console.error('[MWI_Calculator] 导入未完成', error);
+                return null;
+            }
+        }
+        // 合并导入：先在副本中构建，只新增缺少的物品，保留已有数量和勾选状态。
+        static mergeItemsFromCharacter(sourceID) {
+            return this.runImportTransaction(() => {
+                const loadedItems = JSON.parse(GM_getValue(this.getStorageKey(sourceID), '[]'));
+                if (!Array.isArray(loadedItems)) throw new Error('清单格式无效');
+                const merged = new Map(this.targetItemsMap);
+                let added = 0, kept = 0;
+                for (const item of loadedItems) {
+                    if (!item || typeof item.itemHrid !== 'string' || !Number.isFinite(item.count)) throw new Error('目标格式无效');
+                    if (merged.has(item.itemHrid)) { kept++; continue; }
+                    const enabled = typeof item.needCalc === 'boolean' ? item.needCalc : true;
+                    if (item.itemHrid.startsWith('/items/')) merged.set(item.itemHrid, new TargetItem(item.itemHrid, item.count, enabled));
+                    else if (item.itemHrid.startsWith('/house_rooms/')) merged.set(item.itemHrid, new TargetHouseRoom(item.itemHrid, item.count, enabled));
+                    else throw new Error('未知目标类型');
+                    added++;
+                }
+                this.targetItemsMap = merged;
+                return { added, kept };
+            });
+        }
+        // UID 拷贝时同步导入源角色的预设：
+        // overwrite = 用源角色预设整体替换；merge = 只新增当前缺少的预设（按名称）。
+        static importPresetsFromCharacter(sourceID, mode) {
+            const sourceKey = this.getStorageKey(sourceID);
+            if (!sourceKey) return { added: 0, kept: 0, total: 0 };
+            let loaded;
+            try {
+                loaded = JSON.parse(GM_getValue(sourceKey.replace('TargetItems', 'Presets'), '[]'));
+            }
+            catch (error) {
+                console.error('[MWI_Calculator] 源角色预设读取失败', error);
+                loaded = [];
+            }
+            if (!Array.isArray(loaded)) loaded = [];
+            const valid = [];
+            for (const preset of loaded) {
+                if (!preset || typeof preset.name !== 'string' || !preset.name) continue;
+                if (!Array.isArray(preset.items)) continue;
+                const items = [];
+                for (const item of preset.items) {
+                    if (!item || typeof item.itemHrid !== 'string' || !Number.isFinite(item.count)) continue;
+                    items.push({ itemHrid: item.itemHrid, count: item.count });
+                }
+                valid.push({ name: preset.name, items, alertRatio: preset.alertRatio });
+            }
+            let added = 0, kept = 0;
+            if (mode === 'overwrite') {
+                this.presetMap.clear();
+                for (const preset of valid) this.presetMap.set(preset.name, { items: preset.items, alertRatio: this.normalizeAlertRatio(preset.alertRatio) });
+                added = valid.length;
+            }
+            else {
+                for (const preset of valid) {
+                    if (this.presetMap.has(preset.name)) { kept++; continue; }
+                    this.presetMap.set(preset.name, { items: preset.items, alertRatio: this.normalizeAlertRatio(preset.alertRatio) });
+                    added++;
+                }
+            }
+            this.savePresets();
+            this.refreshPresetOptions();
+            return { added, kept, total: valid.length };
+        }
+        static async chooseImportMode(sourceID) {
+            if (!this.canUseCharacterData() || this.importDialogPending) return false;
+            const destinationID = this.activeCharacterID;
+            const generation = this.characterGeneration;
+            this.importDialogPending = true;
+            try {
+                const mode = await this.showImportModeDialog(sourceID);
+                if (mode !== 'merge' && mode !== 'overwrite') return false;
+                // 包括 A -> B -> A：旧弹窗同样失效，绝不导入到新会话。
+                if (!this.canUseCharacterData() || this.activeCharacterID !== destinationID
+                    || this.characterGeneration !== generation) return false;
+                if (!this.backupCurrentListBeforeImport()) return false;
+                // 覆盖导入前先整体取消已应用的预设，避免应用状态与导入后的清单错位
+                if (mode === 'overwrite') {
+                    [...this.presetAppliedMap.keys()].forEach(appliedName => this.removeAppliedPreset(appliedName));
+                }
+                const result = mode === 'overwrite'
+                    ? this.runImportTransaction(() => this.loadCalculatorData(sourceID, { importToCurrent: true }))
+                    : this.mergeItemsFromCharacter(sourceID);
+                if (!result) { alert('导入失败，未完成保存；请检查控制台，确认原清单后重试。'); return false; }
+                // 同步导入源角色的预设：覆盖 = 整体替换，合并 = 只新增缺少的预设
+                const presetResult = this.importPresetsFromCharacter(sourceID, mode);
+                alert(mode === 'overwrite'
+                    ? `已用角色 ${sourceID} 的清单覆盖当前清单；预设已同步覆盖（源角色共 ${presetResult.total} 个）`
+                    : `合并导入完成：新增 ${result.added} 项，已存在 ${result.kept} 项保持不变；预设新增 ${presetResult.added} 个，已存在 ${presetResult.kept} 个保持不变`);
+                return true;
+            }
+            catch (error) { console.error('[MWI_Calculator] 导入失败', error); return false; }
+            finally { this.importDialogPending = false; }
+        }
+        // 更新目标物品
+        static updateTargetItem(itemHrid, count = 1) {
+            if (!this.canUseCharacterData()) return;
+            if (!itemHrid)
+                return;
+            const item = MWI_Calculator_Calculator.targetItemsMap.get(itemHrid);
+            if (item) {
+                item.count = count;
+                item.updateDisplayElement();
+            }
+            else {
+                // 添加新物品
+                if (itemHrid.includes('/items/')) {
+                    MWI_Calculator_Calculator.targetItemsMap.set(itemHrid, new TargetItem(itemHrid, count));
+                }
+                if (itemHrid.includes('/house_rooms/')) {
+                    MWI_Calculator_Calculator.targetItemsMap.set(itemHrid, new TargetHouseRoom(itemHrid, count));
+                }
+            }
+            MWI_Calculator_Calculator.saveAndScheduleRender();
+        }
+        // 添加目标物品
+        static addTargetItem(itemHrid, count = 1) {
+            if (!this.canUseCharacterData()) return;
+            if (!itemHrid)
+                return;
+            const item = MWI_Calculator_Calculator.targetItemsMap.get(itemHrid);
+            if (item) {
+                item.count += count;
+                item.updateDisplayElement();
+            }
+            else {
+                // 添加新物品
+                if (itemHrid.includes('/items/')) {
+                    MWI_Calculator_Calculator.targetItemsMap.set(itemHrid, new TargetItem(itemHrid, count));
+                }
+                if (itemHrid.includes('/house_rooms/')) {
+                    MWI_Calculator_Calculator.targetItemsMap.set(itemHrid, new TargetHouseRoom(itemHrid, count));
+                }
+            }
+            MWI_Calculator_Calculator.saveAndScheduleRender();
+        }
+        // 删除目标物品
+        static removeTargetItem(itemHrid) {
+            if (!this.canUseCharacterData()) return;
+            if (!itemHrid)
+                return;
+            MWI_Calculator_Calculator.targetItemsMap.get(itemHrid)?.removeDisplayElement();
+            MWI_Calculator_Calculator.targetItemsMap.delete(itemHrid);
+            MWI_Calculator_Calculator.saveAndScheduleRender();
+        }
+        // 清空指定大类中的所有目标（包括未勾选目标），只保存和刷新一次。
+        static removeTargetItemsByCategory(categoryHrid) {
+            if (!this.canUseCharacterData()) return;
+            let removed = false;
+            for (const [itemHrid, item] of this.targetItemsMap) {
+                if (item.categoryHrid !== categoryHrid) continue;
+                item.removeDisplayElement();
+                this.targetItemsMap.delete(itemHrid);
+                removed = true;
+            }
+            if (removed) this.saveAndScheduleRender();
+        }
+        // 清空目标物品
+        static clearAllTargetItems() {
+            if (!this.canUseCharacterData()) return;
+            MWI_Calculator_Calculator.targetItemsMap.forEach(item => item.removeDisplayElement());
+            MWI_Calculator_Calculator.targetItemsMap.clear();
+            MWI_Calculator_Calculator.saveAndScheduleRender();
+        }
+        static isPanelVisible() {
+            if (this.renderingVisible) return true; // 同步刷新批次仅检查一次布局可见性。
+            return !!(this.calculatorActive && this.tabPanel?.isConnected && !this.tabPanel.hidden
+                && !document.hidden && this.tabPanel.getClientRects().length
+                && getComputedStyle(this.tabPanel).visibility !== 'hidden');
+        }
+        static suspendPanelWork() {
+            this.renderDirty = true;
+            clearTimeout(this.renderTimeout);
+            this.renderTimeout = null;
+            clearInterval(this.marketAutoFillTimer);
+            this.marketAutoFillTimer = null;
+            this.marketAutoFillObserver?.disconnect();
+            this.marketAutoFillObserver = null;
+            this.marketAutoFillTarget = null;
+            if (this.marketFillFrame) cancelAnimationFrame(this.marketFillFrame);
+            this.marketFillFrame = null;
+            if (MWI_Calculator_UI.targetLayoutFrame) cancelAnimationFrame(MWI_Calculator_UI.targetLayoutFrame);
+            MWI_Calculator_UI.targetLayoutFrame = null;
+            MWI_Calculator_UI.pendingTargetLayouts?.clear();
+        }
+        static refreshPanelVisibility() {
+            if (!this.isPanelVisible()) { this.suspendPanelWork(); return; }
+            if (this.renderDirty && this.canUseCharacterData()) this.renderItemsDisplay();
+            if (this.marketAutoFillEnabled && !this.marketAutoFillObserver) this.ensureMarketAutoFillObserver();
+        }
+        static groupItems(items) {
+            const groups = new Map();
+            for (const item of [...items].sort((a, b) => a.sortIndex - b.sortIndex)) {
+                if (!groups.has(item.categoryHrid)) groups.set(item.categoryHrid, []);
+                groups.get(item.categoryHrid).push(item);
+            }
+            return groups;
+        }
+        // 保存数据并计划渲染
+        static saveAndScheduleRender() {
+            // 保存数据到存储
+            MWI_Calculator_Calculator.saveCalculatorData();
+            MWI_Calculator_Calculator.scheduleRender();
+        }
+        // 定时任务绑定角色和会话代数，切角色后旧回调不会刷新新清单。
+        static scheduleRender() {
+            clearTimeout(this.renderTimeout);
+            this.renderTimeout = null;
+            this.renderDirty = true;
+            if (!this.canUseCharacterData() || !this.isPanelVisible()) return;
+            const id = this.activeCharacterID;
+            const generation = this.characterGeneration;
+            this.renderTimeout = setTimeout(() => {
+                if (!this.canUseCharacterData() || id !== this.activeCharacterID || generation !== this.characterGeneration) return;
+                this.renderTimeout = null;
+                this.renderItemsDisplay();
+            }, 300);
+        }
+        // 计算所有所需材料
+        static calculateAllRequiredItems(inventoryMap, { enhancedInventory = null, downgradeItems = null } = {}) {
+            const result = new Map();
+            const queueMap = new Map();
+            // 各用途分别计数，但同一物品仍合并展开配方，避免重复取整。
+            const enqueue = (itemHrid, count, purpose = 'material') => {
+                if (!(count > 0)) return;
+                if (!queueMap.has(itemHrid)) queueMap.set(itemHrid, { target: 0, material: 0, upgrade: 0 });
+                queueMap.get(itemHrid)[purpose] += count;
+            };
+            // 使用副本共享扣减，A/B及不同配方之间不会重复占用同一件强化装备。
+            const enhanced = new Map([...(enhancedInventory || new Map())].map(([hrid, levels]) =>
+                [hrid, new Map([...levels].filter(([level, count]) => Number.isInteger(level) && level > 0 && Number.isFinite(count) && count > 0)
+                    .sort(([a], [b]) => a - b))]));
+            const useEnhanced = (itemHrid, need, needsDowngrade) => {
+                let remaining = need;
+                for (const [level, available] of enhanced.get(itemHrid) || []) {
+                    if (!(remaining > 0)) break;
+                    const used = Math.min(Math.floor(available), Math.ceil(remaining));
+                    if (!(used > 0)) continue;
+                    enhanced.get(itemHrid).set(level, available - used);
+                    remaining = Math.max(0, remaining - used);
+                    if (needsDowngrade && downgradeItems) {
+                        const key = `${itemHrid}:${level}`;
+                        const previous = downgradeItems.get(key);
+                        downgradeItems.set(key, { itemHrid, enhancementLevel: level, count: (previous?.count || 0) + used });
+                    }
+                }
+                return remaining;
+            };
+            this.targetItemsMap.forEach(targetItem => {
+                if (!targetItem.needCalc || !this.targetItemCategoryMap.get(targetItem.categoryHrid)?.needCalc) return;
+                if (targetItem.itemHrid.includes('/house_rooms/')) {
+                    const currentLevel = MWI_Calculator.gameObject.state.characterHouseRoomDict?.[targetItem.itemHrid]?.level || 0;
+                    const costs = MWI_Calculator.initClientData?.houseRoomDetailMap?.[targetItem.itemHrid]?.upgradeCostsMap;
+                    for (let i = currentLevel + 1; i <= targetItem.count && i <= 8; i++) {
+                        costs[i].forEach(item => enqueue(item.itemHrid, item.count));
+                    }
+                } else if (targetItem.count < 0) {
+                    inventoryMap.set(targetItem.itemHrid, (inventoryMap.get(targetItem.itemHrid) || 0) - targetItem.count);
+                } else enqueue(targetItem.itemHrid, targetItem.count, 'target');
+            });
+            // 已应用的预设物品并入缺口计算：本地数量低于需求数量时同样产生缺口；
+            // 同一物品在原目标/多个预设间重合时，仅保留需求数量最高者的缺口。
+            if (this.presetAppliedMap?.size > 0) {
+                const presetMax = new Map();
+                this.presetAppliedMap.forEach(applied => {
+                    for (const row of applied.rows || []) {
+                        const item = row.item;
+                        if (row.checked === false) continue;
+                        if (!item?.itemHrid || !(item.count > 0)) continue;
+                        if (item.count > (presetMax.get(item.itemHrid) || 0)) presetMax.set(item.itemHrid, item.count);
+                    }
+                });
+                presetMax.forEach((count, itemHrid) => {
+                    const target = this.targetItemsMap.get(itemHrid);
+                    const targetActive = Boolean(target && target.needCalc
+                        && this.targetItemCategoryMap.get(target.categoryHrid)?.needCalc
+                        && !target.itemHrid.includes('/house_rooms/'));
+                    if (targetActive && target.count >= count) return;
+                    enqueue(itemHrid, targetActive ? count - target.count : count, 'target');
+                });
+            }
+            while (queueMap.size > 0) {
+                const [itemHrid, needs] = queueMap.entries().next().value;
+                queueMap.delete(itemHrid);
+                // 0级先满足目标和普通材料；强化库存优先留给可直接继承强化的升级基底。
+                let available = Math.max(0, inventoryMap.get(itemHrid) || 0);
+                for (const purpose of ['target', 'material', 'upgrade']) {
+                    const used = Math.min(available, needs[purpose]);
+                    available -= used;
+                    needs[purpose] -= used;
+                }
+                inventoryMap.set(itemHrid, available);
+                needs.upgrade = useEnhanced(itemHrid, needs.upgrade, false);
+                needs.material = useEnhanced(itemHrid, needs.material, true);
+                const remain = needs.target + needs.material + needs.upgrade;
+                if (!(remain > 0)) continue;
+                result.set(itemHrid, (result.get(itemHrid) || 0) + remain);
+                const recipe = MWI_Calculator_ActionDetailPlus.tryGetRecipe(itemHrid);
+                if (!recipe) continue;
+                const redundant = this.materialPlanningMode === 'redundant';
+                const times = this.getProductionActionCount(recipe, remain);
+                for (const input of recipe.inputs) {
+                    const amount = redundant ? this.getMaterialBudget(input.count, times, input.consumptionVariance || 0) : input.count * times;
+                    enqueue(input.itemHrid, amount, input.isUpgradeBase ? 'upgrade' : 'material');
+                }
+            }
+            return result;
+        }
+        // 初始化计算器逻辑
+        static initialize() {
+            MWI_Calculator_ItemsMap.itemsUpdatedCallbacks.push((enditemsMap) => {
+                MWI_Calculator_Calculator.scheduleRender();
+            });
+        }
+        // 单实例面板随可见角色页签栏迁移，覆盖桌面右栏和窄屏“我的物品”。
+        static initializeCalculatorUI() {
+            if (this.mountObserver) return;
+            this.installCalculatorStyles();
+            const schedule = () => {
+                if (this.mountFrame) return;
+                this.mountFrame = requestAnimationFrame(() => {
+                    this.mountFrame = null;
+                    this.createCalculatorUI();
+                    this.refreshPanelVisibility();
+                });
+            };
+            this.mountObserver = new MutationObserver(records => {
+                // 兜底：游戏通过键盘/程序化方式切换了页签（不触发 click 捕获）时主动交还控制权，
+                // 避免游戏面板被我们写过的 inline display 压住 → 该显示的面板空白。
+                // ⚠️ 只认 class 里"出现" Mui-selected 的记录：
+                //    ① 不看 aria-selected——我们激活时不清游戏按钮的 aria-selected，残留的
+                //       "true" 会在自己激活的同一批 records 里误触发 → 刚点开就被交还（点了没反应）。
+                //    ② 必须是 record 后仍有 Mui-selected——我们激活时移除游戏按钮的
+                //       Mui-selected 也会产生 class 记录，此时已不含该类，不应触发。
+                if (this.calculatorActive && records.some(record =>
+                    record.type === 'attributes'
+                    && record.attributeName === 'class'
+                    && record.target instanceof Element
+                    && record.target !== this.tabButton
+                    && this.calculatorMount?.navigation?.contains(record.target)
+                    && record.target.classList.contains('Mui-selected')
+                )) {
+                    this.setCalculatorActive(false);
+                    return;
+                }
+                const relevant = records.some(record => {
+                    // 监测面板本身被外部页签隐藏/清空；内部数据更新仍忽略。
+                    if (record.target === this.tabPanel || record.target === this.calculatorContent) return true;
+                    if (record.type === 'childList' && this.calculatorContent
+                        && [...record.removedNodes].some(node => node === this.calculatorContent || node.contains?.(this.calculatorContent))) return true;
+                    if (record.target.closest?.('#mwi-calculator-panel, #mwi-calculator-tab')) return false;
+                    const navigation = this.calculatorMount?.navigation;
+                    if (!navigation?.isConnected || !this.tabPanel?.isConnected) return true;
+                    if (record.target === this.calculatorMount?.shell || record.target === navigation) return true;
+                    if (record.type === 'attributes') {
+                        return record.target.contains?.(navigation) || navigation.contains(record.target)
+                            || record.target.contains?.(this.tabPanel);
+                    }
+                    const selector = '[class*="CharacterManagement_"], [class*="TabsComponent_"], [role="tablist"], [role="tab"]';
+                    return [...record.addedNodes, ...record.removedNodes].some(node => node.nodeType === 1
+                        && (node.contains(navigation) || node.contains(this.tabPanel) || node.matches(selector) || node.querySelector(selector)));
+                });
+                if (relevant) schedule();
+            });
+            this.mountObserver.observe(document.body, {
+                childList: true, subtree: true, attributes: true,
+                attributeFilter: ['class', 'hidden', 'aria-selected', 'style']
+            });
+            document.addEventListener('visibilitychange', () => this.refreshPanelVisibility());
+            document.fonts?.addEventListener('loadingdone', () => {
+                MWI_Calculator_UI.fontGeneration = (MWI_Calculator_UI.fontGeneration || 0) + 1;
+                this.scheduleRender();
+            });
+            window.addEventListener('resize', schedule);
+            if (typeof ResizeObserver !== 'undefined') {
+                this.calculatorSizeObserver = new ResizeObserver(schedule);
+            }
+            window.visualViewport?.addEventListener('resize', schedule);
+            window.visualViewport?.addEventListener('scroll', schedule);
+            document.addEventListener('click', event => {
+                const mount = this.calculatorMount;
+                const button = event.target.closest?.('button, [role="tab"]');
+                if (mount && button && button !== this.tabButton && mount.navigation.contains(button)) {
+                    this.setCalculatorActive(false);
+                }
+            }, true);
+            this.createCalculatorUI();
+        }
+        static installCalculatorStyles() {
+            if (document.getElementById('mwi-calculator-responsive-style')) return;
+            const style = document.createElement('style');
+            style.id = 'mwi-calculator-responsive-style';
+            style.textContent = `
+                :has(> #mwi-calculator-tab) { overflow-x:auto; max-width:100%; min-width:0; }
+                #mwi-calculator-tab { flex-shrink:0; white-space:nowrap; }
+                #mwi-calculator-tab[aria-selected="true"] { color:#00c6ff; font-weight:bold; }
+                #mwi-calculator-panel { width:100%; min-width:0; box-sizing:border-box;
+                    overflow:auto; overscroll-behavior:contain; container-type:inline-size;
+                    min-height:0; flex-shrink:0; padding-bottom:env(safe-area-inset-bottom, 0px); -webkit-overflow-scrolling:touch; }
+                #mwi-calculator-panel[hidden] { display:none !important; }
+                #mwi-calculator-panel .mwi-calculator-layout { min-width:0; }
+                #mwi-calculator-panel .mwi-calculator-layout > div { min-width:0; box-sizing:border-box; }
+                #mwi-calculator-panel input, #mwi-calculator-panel select { min-width:0; max-width:100%; box-sizing:border-box; }
+                /* 窄屏仍保留60/40双列，允许控件收缩，文本省略而非撑宽列。 */
+                #mwi-calculator-panel .mwi-calculator-layout { flex-direction:row; flex-wrap:nowrap; }
+                #mwi-calculator-panel .mwi-calculator-layout > div { flex-shrink:1; }
+                @container (max-width:560px) {
+                    #mwi-calculator-panel .mwi-calculator-layout div { min-width:0 !important; max-width:100%; box-sizing:border-box; }
+                    #mwi-calculator-panel .mwi-calculator-layout button,
+                    #mwi-calculator-panel .mwi-calculator-layout summary,
+                    #mwi-calculator-panel .mwi-calculator-layout span {
+                        min-width:0 !important; max-width:100%; overflow:hidden;
+                        text-overflow:ellipsis; white-space:nowrap; box-sizing:border-box;
+                    }
+                    #mwi-calculator-panel .mwi-calculator-layout button { font-size:12px; }
+                    #mwi-calculator-panel .mwi-planning-label { flex:0 1 auto !important; max-width:40% !important; margin-right:2px !important; }
+                    #mwi-calculator-panel .mwi-planning-selector { padding:2px !important; }
+                    #mwi-calculator-panel .mwi-planning-selector button { padding:3px 1px !important; margin:1px !important; }
+                }
+                /* 仅大类数量框隐藏原生步进按钮，保留 number 校验与键盘步进。 */
+                #mwi-calculator-panel input.mwi-category-quantity {
+                    -moz-appearance:textfield; appearance:textfield;
+                }
+                #mwi-calculator-panel input.mwi-category-quantity::-webkit-inner-spin-button,
+                #mwi-calculator-panel input.mwi-category-quantity::-webkit-outer-spin-button {
+                    -webkit-appearance:none; margin:0;
+                }
+                #mwi-calculator-panel .mwi-downgrade-section {
+                    background:rgb(207,149,62); border-radius:4px; padding:2px;
+                }
+                #mwi-calculator-panel .mwi-downgrade-section > summary {
+                    background:rgb(251,181,75); color:#2c2e45; border-radius:4px; padding:2px 6px; font-size:14px; text-align:left; cursor:pointer;
+                }
+                #mwi-calculator-panel .mwi-downgrade-item {
+                    background:${MWI_Calculator_UITheme.surface}; color:#e7e7e7;
+                    font:inherit; white-space:nowrap;
+                }
+                #mwi-calculator-panel .mwi-downgrade-item .mwi-downgrade-level {
+                    color:rgb(251,181,75);
+                }
+                /* 目标清单行：数量完整，操作区固定，只有名称占用剩余空间。 */
+                #mwi-calculator-panel .mwi-target-row {
+                    flex-wrap:nowrap; align-items:center !important; min-width:0; box-sizing:border-box;
+                }
+                #mwi-calculator-panel .mwi-target-row > input[type="checkbox"] {
+                    flex:0 0 auto; align-self:center; margin-top:0; margin-bottom:0;
+                }
+                #mwi-calculator-panel .mwi-target-row .mwi-target-name {
+                    flex:1 1 0; min-width:0 !important; overflow:hidden; align-self:center;
+                    justify-content:flex-start; align-items:center !important; text-align:left;
+                }
+                #mwi-calculator-panel .mwi-target-name > div { flex:0 0 auto; display:flex; align-items:center; }
+                #mwi-calculator-panel .mwi-target-name > div > svg { display:block; }
+                #mwi-calculator-panel .mwi-target-row .mwi-target-label {
+                    flex:1 1 0; min-width:0 !important; overflow:hidden; text-overflow:ellipsis;
+                    white-space:nowrap; font-size:var(--mwi-target-font-size,14px); line-height:18px;
+                    text-align:left; align-self:center;
+                }
+                #mwi-calculator-panel .mwi-target-row .mwi-target-controls {
+                    flex:0 0 auto; width:max-content; max-width:none !important; min-width:max-content !important;
+                    margin-left:auto; align-self:center; align-items:center; white-space:nowrap;
+                }
+                #mwi-calculator-panel .mwi-target-controls > span {
+                    flex:0 0 auto; max-width:none !important; overflow:visible !important; text-overflow:clip !important;
+                    white-space:nowrap; font-size:var(--mwi-target-font-size,14px); line-height:18px;
+                    font-variant-numeric:tabular-nums;
+                }
+                #mwi-calculator-panel .mwi-target-controls .mwi-target-input {
+                    box-sizing:border-box; width:60px !important; min-width:60px !important; max-width:60px !important;
+                    flex:0 0 60px !important; font-size:var(--mwi-target-font-size,14px); line-height:18px;
+                }
+                #mwi-calculator-panel .mwi-target-controls .mwi-target-remove {
+                    box-sizing:border-box; width:26px !important; min-width:26px !important; max-width:26px !important;
+                    height:26px; flex:0 0 26px; display:flex; align-items:center; justify-content:center;
+                }
+            `;
+            document.head.appendChild(style);
+        }
+        static findCalculatorMount() {
+            const groups = new Set();
+            document.querySelectorAll('[class*="CharacterManagement_"] [class*="TabsComponent_tabsContainer"] button, button[role="tab"]')
+                .forEach(button => { if (button.id !== 'mwi-calculator-tab') groups.add(button.parentElement); });
+            const candidates = [];
+            for (const navigation of groups) {
+                const buttons = [...navigation.children].filter(el => el.matches('button') && el.id !== 'mwi-calculator-tab');
+                const native = buttons.filter(el => !el.dataset.mwitoolsCharacterTab && !el.id.startsWith('mwi-'));
+                const labels = buttons.map(el => el.textContent.trim().toLowerCase());
+                const character = navigation.closest('[class*="CharacterManagement_"]');
+                const semantic = labels.some(s => /^(库存|物品|inventory)$/.test(s))
+                    && labels.filter(s => /^(装备|技能|房屋|配装|equipment|skills?|abilities|house|loadouts?)$/.test(s)).length >= 2;
+                if (!(character && native.length >= 3) && !semantic) continue;
+                const rect = navigation.getBoundingClientRect();
+                if (!navigation.isConnected || rect.width <= 0 || rect.height <= 0 || getComputedStyle(navigation).visibility === 'hidden') continue;
+                let branch = navigation, found = null;
+                for (let depth = 0; branch.parentElement && depth < 7; depth++) {
+                    const shell = branch.parentElement;
+                    const siblings = [...shell.children].filter(el => el !== branch && el.id !== 'mwi-calculator-panel');
+                    const content = siblings.find(el => el.matches('[class*="TabsComponent_tabPanelsContainer"]'));
+                    // 独立挂载到原生内容容器旁，避免随原生子页签一起隐藏或清空。
+                    if (content) { found = { shell, navigation, branch, buttons }; break; }
+                    if (siblings.some(el => el.matches('[class*="TabPanel_"], [class*="Inventory_"], [class*="Equipment_"], [class*="CharacterManagement_content"]')
+                        || el.querySelector('[class*="Inventory_"], [class*="TabPanel_"], [class*="Equipment_"]'))) {
+                        found = { shell, navigation, branch, buttons }; break;
+                    }
+                    branch = shell;
+                }
+                if (found) candidates.push(found);
+            }
+            // 保持当前可见挂载点，避免同时存在多个可见容器时来回迁移。
+            return candidates.find(candidate => candidate.navigation === this.calculatorMount?.navigation) || candidates[0];
+        }
+        static createCalculatorUI() {
+            const found = this.findCalculatorMount();
+            if (!found) return;
+            if (this.tabPanel) this.tryLoadActiveCharacter();
+            if (!this.tabPanel) {
+                this.tabPanel = document.createElement('section');
+                this.tabPanel.id = 'mwi-calculator-panel';
+                this.tabPanel.setAttribute('role', 'tabpanel');
+                this.tabPanel.setAttribute('aria-labelledby', 'mwi-calculator-tab');
+                this.tabPanel.hidden = true;
+                this.calculatorContent = this.createCalculatorPanel();
+                this.tabPanel.appendChild(this.calculatorContent);
+                this.tryLoadActiveCharacter();
+                this.ensureMarketAutoFillObserver();
+            }
+            const same = this.calculatorMount?.navigation === found.navigation
+                && this.tabButton?.parentElement === found.navigation && this.tabPanel.parentElement === found.shell;
+            if (!same) {
+                const active = !!this.calculatorActive;
+                this.setCalculatorActive(false);
+                this.tabButton?.remove();
+                this.calculatorMount = found;
+                this.tabButton = (found.buttons[1] || found.buttons[0]).cloneNode(true);
+                this.tabButton.id = 'mwi-calculator-tab';
+                this.tabButton.textContent = MWI_Calculator_I18n.isChinese() ? 'MWI计算器' : 'MWI_Calculator';
+                this.tabButton.type = 'button';
+                this.tabButton.setAttribute('role', 'tab');
+                this.tabButton.setAttribute('aria-controls', 'mwi-calculator-panel');
+                this.tabButton.dataset.mwitoolsCharacterTab = 'true'; // 与MWITools自定义页签识别兼容
+                this.tabButton.classList.remove('Mui-selected');
+                this.tabButton.setAttribute('aria-selected', 'false');
+                this.tabButton.tabIndex = 0;
+                this.tabButton.addEventListener('click', event => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    this.setCalculatorActive(true);
+                });
+                found.navigation.appendChild(this.tabButton);
+                found.shell.appendChild(this.tabPanel);
+                this.calculatorSizeObserver?.disconnect();
+                this.calculatorSizeObserver?.observe(found.navigation);
+                this.calculatorSizeObserver?.observe(found.shell);
+                this.calculatorSizeObserver?.observe(this.tabPanel);
+                this.calculatorSizeObserver?.observe(this.calculatorContent);
+                this.setCalculatorActive(active);
+            }
+            this.repairCalculatorPanel();
+            if (this.calculatorActive) {
+                this.hideCalculatorSiblings();
+                this.syncCalculatorViewport();
+            }
+        }
+        // 窄屏空列表也占满剩余可视高度，避免下拉框被内容自适应的小面板裁剪。
+        static setCalculatorSizingStyle(node, property, value) {
+            if (!node) return;
+            this.calculatorSizingStyles ||= new Map();
+            if (!this.calculatorSizingStyles.has(node)) this.calculatorSizingStyles.set(node, new Map());
+            const saved = this.calculatorSizingStyles.get(node);
+            if (!saved.has(property)) saved.set(property, {
+                value: node.style.getPropertyValue(property), priority: node.style.getPropertyPriority(property)
+            });
+            if (node.style.getPropertyValue(property) !== value || node.style.getPropertyPriority(property) !== 'important') {
+                node.style.setProperty(property, value, 'important');
+            }
+        }
+        static restoreCalculatorSizing() {
+            this.calculatorSizingStyles?.forEach((properties, node) => properties.forEach((saved, property) => {
+                if (saved.value) node.style.setProperty(property, saved.value, saved.priority);
+                else node.style.removeProperty(property);
+            }));
+            this.calculatorSizingStyles?.clear();
+        }
+        static syncCalculatorViewport() {
+            const panel = this.tabPanel;
+            if (!panel || !this.calculatorActive || !panel.isConnected) return;
+            const viewport = window.visualViewport;
+            const bottom = viewport ? viewport.offsetTop + viewport.height : window.innerHeight;
+            const rect = panel.getBoundingClientRect();
+            // 所有布局都占满可视区域，不因桌面模式、缩放或宽度跨断点而撤销高度。
+            const available = Math.max(0, Math.floor(bottom - rect.top));
+            const height = available + 'px';
+            for (const property of ['height', 'min-height', 'max-height']) this.setCalculatorSizingStyle(panel, property, height);
+            this.setCalculatorSizingStyle(panel, 'flex', '0 0 auto');
+            this.setCalculatorSizingStyle(panel, 'box-sizing', 'border-box');
+            const padding = parseFloat(getComputedStyle(panel).paddingBottom) || 0;
+            this.setCalculatorSizingStyle(this.calculatorContent, 'min-height', Math.max(0, available - padding) + 'px');
+            this.setCalculatorSizingStyle(this.calculatorContent, 'height', 'auto');
+            this.setCalculatorSizingStyle(this.calculatorContent, 'max-height', 'none');
+            this.setCalculatorSizingStyle(this.calculatorContent, 'flex', '0 0 auto');
+            // 只解除当前角色面板链上的约束；离开计算器时原样恢复。
+            const root = panel.closest('[class*="CharacterManagement_characterManagement"]') || this.calculatorMount?.shell;
+            if (root) {
+                for (let node = panel.parentElement; node && root.contains(node); node = node.parentElement) {
+                    const nodeHeight = Math.max(0, Math.ceil(bottom - node.getBoundingClientRect().top));
+                    this.setCalculatorSizingStyle(node, 'min-height', nodeHeight + 'px');
+                    this.setCalculatorSizingStyle(node, 'max-height', 'none');
+                    this.setCalculatorSizingStyle(node, 'height', 'auto');
+                    this.setCalculatorSizingStyle(node, 'flex-shrink', '0');
+                    if (node === root) break;
+                }
+            }
+        }
+        static repairCalculatorPanel() {
+            const panel = this.tabPanel;
+            if (!panel) return;
+            // 保留原DOM实例及输入/事件/计算引用，不重建、不重新加载数据。
+            if (this.calculatorContent && this.calculatorContent.parentElement !== panel) {
+                panel.appendChild(this.calculatorContent);
+            }
+            const hidden = !this.calculatorActive;
+            if (panel.hidden !== hidden) panel.hidden = hidden;
+            if (this.calculatorActive) {
+                // 其他扩展可能留下display:none；仅修复本脚本节点。
+                if (panel.style.getPropertyValue('display') !== 'block'
+                    || panel.style.getPropertyPriority('display') !== 'important') {
+                    panel.style.setProperty('display', 'block', 'important');
+                }
+                if (panel.style.getPropertyValue('visibility') !== 'visible') panel.style.visibility = 'visible';
+            } else if (panel.style.getPropertyValue('display') !== 'none'
+                || panel.style.getPropertyPriority('display') !== 'important') {
+                // 与激活时的内联!important对称，避免覆盖[hidden]规则。
+                panel.style.setProperty('display', 'none', 'important');
+            }
+        }
+        static hideCalculatorSiblings() {
+            const mount = this.calculatorMount;
+            if (!mount) return;
+            this.hiddenCalculatorSiblings ||= new Map();
+            for (const element of mount.shell.children) {
+                if (element === this.tabPanel || element === mount.branch || element.contains(mount.navigation)) continue;
+                if (!this.hiddenCalculatorSiblings.has(element)) this.hiddenCalculatorSiblings.set(element, {
+                    display: element.style.getPropertyValue('display'), priority: element.style.getPropertyPriority('display')
+                });
+                if (element.style.getPropertyValue('display') !== 'none') element.style.setProperty('display', 'none', 'important');
+            }
+        }
+        static setCalculatorActive(active) {
+            this.calculatorActive = active;
+            if (!active) this.suspendPanelWork();
+            if (!active) {
+                this.closeCalculatorDropdowns();
+                this.restoreCalculatorSizing();
+            }
+            if (!this.tabPanel || !this.tabButton) return;
+            this.repairCalculatorPanel();
+            // ⚠️ 游戏页签是 React 管理的"全渲染 + hidden 类"结构：
+            //    手改游戏按钮的 class/aria-selected，React 只跟自己的上一次 vDOM 比，
+            //    改动不会回写 → 永久残留 → 多个面板同时显示 / 该显示的空白。
+            //    所以：aria-selected 只写自己的按钮；游戏按钮仅移除 Mui-selected 做视觉让位，
+            //    不做任何"保存/恢复"——切回游戏页签时由 React 自己的点击处理回写状态。
+            this.tabButton.setAttribute('aria-selected', String(active));
+            this.tabButton.classList.toggle('Mui-selected', active);
+            this.calculatorMount?.navigation.querySelectorAll('button').forEach(button => {
+                if (button !== this.tabButton) button.classList.remove('Mui-selected');
+            });
+            if (active) {
+                this.hideCalculatorSiblings();
+                this.syncCalculatorViewport();
+            } else {
+                this.hiddenCalculatorSiblings?.forEach((saved, element) => {
+                    if (saved.display) element.style.setProperty('display', saved.display, saved.priority);
+                    else element.style.removeProperty('display');
+                });
+                this.hiddenCalculatorSiblings?.clear();
+            }
+            this.refreshPanelVisibility();
+        }
+        // 创建计算器面板
+        static createCalculatorPanel() {
+            const calculatorPanel = document.createElement('div');
+            calculatorPanel.className = 'Toolkit_Calculator_Container mwi-calculator-layout';
+            calculatorPanel.style.display = 'flex';
+            calculatorPanel.style.alignItems = 'flex-start';
+            calculatorPanel.style.width = '100%';
+            // 左列：建筑、物品、物品清单
+            const leftDiv = document.createElement('div');
+            leftDiv.style.display = 'flex';
+            leftDiv.style.flexDirection = 'column';
+            leftDiv.style.width = '60%';
+            leftDiv.style.padding = '0px 2px';
+            leftDiv.appendChild(MWI_Calculator_Calculator.createHouseRoomSelectionComponent());
+            leftDiv.appendChild(MWI_Calculator_Calculator.createCategoryAddComponent());
+            // 预设选择区域：与「选择房屋」「选择大类」添加行同级
+            leftDiv.appendChild(MWI_Calculator_Calculator.createPresetSelectionComponent());
+            leftDiv.appendChild(MWI_Calculator_Calculator.createItemSearchComponent());
+            MWI_Calculator_Calculator.createItemDetailsMap(leftDiv, MWI_Calculator_Calculator.targetItemDetailsMap);
+            // 预设应用容器：已应用的预设类建立在此（与原大类 details 同层级）
+            MWI_Calculator_Calculator.presetDetailsHost = leftDiv;
+            calculatorPanel.appendChild(leftDiv);
+            MWI_Calculator_Calculator.targetItemDetailsMap.forEach((details, categoryHrid) => {
+                const summary = details.querySelector('summary');
+                const checkbox = document.createElement('input');
+                checkbox.type = 'checkbox';
+                checkbox.style.verticalAlign = 'middle';
+                if (!MWI_Calculator_Calculator.targetItemCategoryMap.has(categoryHrid)) {
+                    MWI_Calculator_Calculator.targetItemCategoryMap.set(categoryHrid, new TargetItemCategory(categoryHrid));
+                }
+                MWI_Calculator_Calculator.targetItemCategoryMap.get(categoryHrid).categoryDetailsElement = details;
+                MWI_Calculator_Calculator.targetItemCategoryMap.get(categoryHrid).categorySummaryElement = summary;
+                MWI_Calculator_Calculator.targetItemCategoryMap.get(categoryHrid).needCalcCheckbox = checkbox;
+                checkbox.checked = MWI_Calculator_Calculator.targetItemCategoryMap.get(categoryHrid).needCalc;
+                checkbox.addEventListener('change', () => {
+                    MWI_Calculator_Calculator.targetItemCategoryMap.get(categoryHrid).needCalc = checkbox.checked;
+                    MWI_Calculator_Calculator.saveAndScheduleRender();
+                });
+                summary.prepend(checkbox);
+            });
+            // 右列：制作/购买枚举、缺口、详情
+            const rightDiv = document.createElement('div');
+            rightDiv.style.display = 'flex';
+            rightDiv.style.flexDirection = 'column';
+            rightDiv.style.width = '40%';
+            rightDiv.style.padding = '0px 2px';
+            rightDiv.appendChild(MWI_Calculator_Calculator.createMaterialPlanningModeSelector());
+            rightDiv.appendChild(MWI_Calculator_Calculator.createHouseAcquisitionModeSelector());
+            rightDiv.appendChild(this.createDowngradeSection());
+            const shortageItemDetails = document.createElement('details');
+            shortageItemDetails.style.background = '#902f10';
+            shortageItemDetails.style.borderRadius = '4px';
+            shortageItemDetails.style.padding = '2px';
+            shortageItemDetails.open = true;
+            const shortageSummary = document.createElement('summary');
+            shortageSummary.textContent = MWI_Calculator_I18n.isChinese() ? '缺口' : 'Shortages';
+            shortageSummary.style.background = '#af3914';
+            shortageSummary.style.borderRadius = '4px';
+            shortageSummary.style.fontSize = '14px';
+            shortageSummary.style.padding = '2px 6px';
+            shortageSummary.style.textAlign = 'left';
+            shortageSummary.style.cursor = 'pointer';
+            shortageItemDetails.appendChild(shortageSummary);
+            MWI_Calculator_Calculator.createItemDetailsMap(shortageItemDetails, MWI_Calculator_Calculator.shortageItemDetailsMap);
+            rightDiv.appendChild(shortageItemDetails);
+            const requiredItemDetails = document.createElement('details');
+            requiredItemDetails.style.background = '#0c385a';
+            requiredItemDetails.style.borderRadius = '4px';
+            requiredItemDetails.style.padding = '2px';
+            const requiredSummary = document.createElement('summary');
+            requiredSummary.textContent = MWI_Calculator_I18n.isChinese() ? '详情（余量/需求）' : 'Status(Remaining/Required)';
+            requiredSummary.style.background = '#1770b3';
+            requiredSummary.style.borderRadius = '4px';
+            requiredSummary.style.fontSize = '14px';
+            requiredSummary.style.padding = '2px 6px';
+            requiredSummary.style.textAlign = 'left';
+            requiredSummary.style.cursor = 'pointer';
+            requiredItemDetails.appendChild(requiredSummary);
+            MWI_Calculator_Calculator.createItemDetailsMap(requiredItemDetails, MWI_Calculator_Calculator.requiredItemDetailsMap);
+            rightDiv.appendChild(requiredItemDetails);
+            calculatorPanel.appendChild(rightDiv);
+            return calculatorPanel;
+        }
+        // 创建物品分类区域
+        static createItemDetailsMap(container, ItemDetailsMap) {
+            MWI_Calculator_Calculator.itemCategoryList.forEach(categoryHrid => {
+                const categoryName = MWI_Calculator_I18n.getName(categoryHrid, 'itemCategoryNames');
+                const onClear = ItemDetailsMap === this.targetItemDetailsMap
+                    ? () => this.removeTargetItemsByCategory(categoryHrid) : null;
+                const { details } = MWI_Calculator_UI.createCategory(
+                    categoryName, () => this.saveDetailsOpenState(), onClear
+                );
+                container.appendChild(details);
+                ItemDetailsMap.set(categoryHrid, details);
+            });
+        }
+        // 创建添加物品区域
+        static createAddItemSection() {
+            const addItemSection = document.createElement('div');
+            addItemSection.style.display = 'flex';
+            addItemSection.style.flexDirection = 'column';
+            addItemSection.style.width = '100%';
+            // 建筑添加区域置于物品搜索区域上方
+            const houseSection = document.createElement('div');
+            houseSection.style.width = '100%';
+            houseSection.appendChild(MWI_Calculator_Calculator.createHouseRoomSelectionComponent());
+            addItemSection.appendChild(houseSection);
+            addItemSection.appendChild(MWI_Calculator_Calculator.createCategoryAddComponent());
+            // 预设选择区域：与「选择房屋」「选择大类」添加行同级
+            addItemSection.appendChild(MWI_Calculator_Calculator.createPresetSelectionComponent());
+            // 物品搜索区域
+            const itemSection = document.createElement('div');
+            itemSection.style.width = '100%';
+            const searchContainer = MWI_Calculator_Calculator.createItemSearchComponent();
+            itemSection.appendChild(searchContainer);
+            addItemSection.appendChild(itemSection);
+            return addItemSection;
+        }
+        // 创建预设选择组件：与「选择房屋」「选择大类」同级。
+        // 点击展开下拉列表，列表最上端固定「管理预设」按钮；
+        // 点击后原位切换为「新增/保存/取消」三个管理按钮（事件暂留空，等待下一步实现）。
+        static createPresetSelectionComponent() {
+            const section = document.createElement('div');
+            section.style.background = MWI_Calculator_UITheme.surface;
+            section.style.border = 'none';
+            section.style.borderRadius = '4px';
+            section.style.padding = '4px';
+            section.style.margin = '2px';
+            section.style.display = 'flex';
+            section.style.flexDirection = 'column';
+            const dropdown = document.createElement('div');
+            dropdown.style.display = 'flex';
+            dropdown.style.minWidth = '20px';
+            dropdown.style.flex = '1';
+            dropdown.style.position = 'relative';
+            const selected = document.createElement('div');
+            selected.style.background = MWI_Calculator_UITheme.heading;
+            selected.style.color = MWI_Calculator_UITheme.onAction;
+            selected.style.borderRadius = '4px';
+            selected.style.paddingLeft = '4px';
+            selected.style.margin = '2px';
+            selected.style.minWidth = '40px';
+            selected.style.flex = '1';
+            selected.style.cursor = 'pointer';
+            selected.style.display = 'flex';
+            selected.style.alignItems = 'center';
+            selected.style.whiteSpace = 'nowrap';
+            selected.textContent = MWI_Calculator_I18n.isChinese() ? '选择预设' : 'Select preset';
+            const list = document.createElement('div');
+            list.style.background = MWI_Calculator_UITheme.surface;
+            list.style.borderRadius = '4px';
+            list.style.padding = '4px';
+            list.style.margin = '2px';
+            list.style.width = '150px';
+            list.style.maxHeight = '335px';
+            list.style.overflowY = 'auto';
+            list.style.zIndex = '1000';
+            list.style.display = 'none';
+            list.style.position = 'absolute';
+            list.style.left = '0px';
+            list.style.top = '32px';
+            // 管理区（固定在下拉列表最上端）：默认仅「管理预设」，进入管理模式后原位显示三个按钮
+            const manageArea = document.createElement('div');
+            manageArea.style.display = 'flex';
+            manageArea.style.marginBottom = '2px';
+            const manageButton = document.createElement('button');
+            manageButton.type = 'button';
+            manageButton.textContent = MWI_Calculator_I18n.isChinese() ? '管理预设' : 'Manage presets';
+            manageButton.style.cssText = 'flex:1;color:#fff;border:none;border-radius:4px;padding:4px;margin:2px;cursor:pointer';
+            manageButton.style.background = '#1976D2';
+            const editButtons = document.createElement('div');
+            editButtons.style.display = 'none';
+            editButtons.style.flex = '1';
+            const enterManageMode = () => {
+                MWI_Calculator_Calculator.presetManageMode = true;
+                manageButton.style.display = 'none';
+                editButtons.style.display = 'flex';
+                MWI_Calculator_Calculator.refreshPresetOptions();
+            };
+            const exitManageMode = () => {
+                MWI_Calculator_Calculator.presetManageMode = false;
+                editButtons.style.display = 'none';
+                manageButton.style.display = '';
+                MWI_Calculator_Calculator.refreshPresetOptions();
+            };
+            manageButton.addEventListener('click', (event) => {
+                event.stopPropagation();
+                enterManageMode();
+            });
+            const newPresetButton = document.createElement('button');
+            newPresetButton.type = 'button';
+            newPresetButton.textContent = MWI_Calculator_I18n.isChinese() ? '新增' : 'New';
+            newPresetButton.style.cssText = 'flex:1;color:#fff;border:none;border-radius:4px;padding:4px;margin:2px;cursor:pointer';
+            newPresetButton.style.background = '#4CAF50';
+            newPresetButton.addEventListener('click', (event) => {
+                event.stopPropagation();
+                exitManageMode();
+                MWI_Calculator_Calculator.closeCalculatorDropdowns();
+                MWI_Calculator_Calculator.showPresetEditorDialog();
+            });
+            const exitPresetButton = document.createElement('button');
+            exitPresetButton.type = 'button';
+            exitPresetButton.textContent = MWI_Calculator_I18n.isChinese() ? '退出' : 'Exit';
+            exitPresetButton.style.cssText = 'flex:1;color:#fff;border:none;border-radius:4px;padding:4px;margin:2px;cursor:pointer';
+            exitPresetButton.style.background = '#6B7280';
+            exitPresetButton.addEventListener('click', (event) => {
+                event.stopPropagation();
+                exitManageMode();
+            });
+            editButtons.append(newPresetButton, exitPresetButton);
+            manageArea.append(manageButton, editButtons);
+            // 预设选项容器：已保存的预设名称条目渲染在此处
+            const presetOptions = document.createElement('div');
+            MWI_Calculator_Calculator.presetOptionsContainer = presetOptions;
+            MWI_Calculator_Calculator.refreshPresetOptions();
+            list.appendChild(manageArea);
+            list.appendChild(presetOptions);
+            selected.addEventListener('click', (event) => {
+                event.stopPropagation();
+                // 每次展开下拉都重置为「管理预设」默认状态（即使上次关闭时处于新增/退出管理模式）
+                if (list.style.display !== 'block') exitManageMode();
+                MWI_Calculator_Calculator.toggleCalculatorDropdown(list);
+            });
+            MWI_Calculator_Calculator.registerCalculatorDropdown(dropdown, list);
+            dropdown.appendChild(selected);
+            dropdown.appendChild(list);
+            section.appendChild(dropdown);
+            return section;
+        }
+        // ── 预设（Presets）────────────────────────────────────────
+        // 预设存储键：与 TargetItems 同前缀、按角色 ID 区分
+        static getPresetsStorageKey() {
+            const key = this.getStorageKey();
+            return key ? key.replace('TargetItems', 'Presets') : null;
+        }
+        // 预警比例规范化：0~1 的小数，非法/缺失按 0 处理
+        static normalizeAlertRatio(value) {
+            const num = Number(value);
+            if (!Number.isFinite(num) || num <= 0) return 0;
+            return Math.min(num, 1);
+        }
+        // 从 GM 存储读取预设；无角色 ID 时清空内存预设
+        static loadPresets() {
+            this.presetMap ||= new Map();
+            this.presetMap.clear();
+            const key = this.getPresetsStorageKey();
+            if (!key) return false;
+            try {
+                // 从未保存过预设（键不存在）时写入 BUILTIN_PRESETS 并立即落盘锁定，
+                // 避免之后用户清空预设又被内置模板还原。
+                if (GM_getValue(key, null) == null) {
+                    for (const preset of this.BUILTIN_PRESETS || []) {
+                        if (!preset || typeof preset.name !== 'string' || !preset.name) continue;
+                        if (!Array.isArray(preset.items)) continue;
+                        const items = preset.items
+                            .filter(item => item && typeof item.itemHrid === 'string' && Number.isFinite(item.count))
+                            .map(item => ({ itemHrid: item.itemHrid, count: item.count }));
+                        if (items.length > 0) this.presetMap.set(preset.name, { items, alertRatio: this.normalizeAlertRatio(preset.alertRatio) });
+                    }
+                    if (this.presetMap.size > 0) this.savePresets();
+                    return this.presetMap.size > 0;
+                }
+                const loaded = JSON.parse(GM_getValue(key, '[]'));
+                if (!Array.isArray(loaded)) return false;
+                for (const preset of loaded) {
+                    if (!preset || typeof preset.name !== 'string' || !preset.name) continue;
+                    if (!Array.isArray(preset.items)) continue;
+                    const items = [];
+                    for (const item of preset.items) {
+                        if (!item || typeof item.itemHrid !== 'string' || !Number.isFinite(item.count)) continue;
+                        items.push({ itemHrid: item.itemHrid, count: item.count });
+                    }
+                    this.presetMap.set(preset.name, { items, alertRatio: this.normalizeAlertRatio(preset.alertRatio) });
+                }
+                return true;
+            }
+            catch (error) {
+                console.error('[MWI_Calculator] 预设加载失败', error);
+                return false;
+            }
+        }
+        // 预设写入 GM 存储；无角色 ID 时仅保留内存数据并提示
+        static savePresets() {
+            const key = this.getPresetsStorageKey();
+            if (!key) {
+                console.warn('[MWI_Calculator] 角色数据未就绪，预设暂存于内存，请稍后重新保存');
+                return false;
+            }
+            try {
+                const data = [...this.presetMap.entries()].map(([name, preset]) => ({ name, items: preset.items, alertRatio: this.normalizeAlertRatio(preset.alertRatio) }));
+                GM_setValue(key, JSON.stringify(data));
+                return true;
+            }
+            catch (error) {
+                console.error('[MWI_Calculator] 预设保存失败', error);
+                return false;
+            }
+        }
+        // 重建下拉列表中的预设名称条目：仅管理模式下点击名称打开编辑弹窗、
+        // 显示 "-" 删除按钮；普通模式（按钮为「管理预设」时）点击应用/取消应用预设。
+        // BUILTIN_PRESETS 中同名条目视为内置预设，始终显示在下拉列表底部。
+        static refreshPresetOptions() {
+            const container = this.presetOptionsContainer;
+            if (!container) return;
+            const zh = MWI_Calculator_I18n.isChinese();
+            const manageMode = this.presetManageMode === true;
+            const builtinPresets = this.BUILTIN_PRESETS || [];
+            const builtinNames = new Set(builtinPresets.map(preset => preset?.name).filter(Boolean));
+            container.innerHTML = '';
+            // 用户预设在上（按存储顺序），内置预设固定垫底（按模板顺序）
+            const userNames = [];
+            const builtinOrder = [];
+            for (const name of this.presetMap.keys()) {
+                if (builtinNames.has(name)) builtinOrder.push(name);
+                else userNames.push(name);
+            }
+            builtinOrder.sort((a, b) =>
+                builtinPresets.findIndex(preset => preset?.name === a)
+                - builtinPresets.findIndex(preset => preset?.name === b));
+            const renderEntry = (name, isBuiltin) => {
+                const option = document.createElement('div');
+                option.style.borderBottom = '1px solid #98a7e9';
+                option.style.borderRadius = '4px';
+                option.style.padding = '4px';
+                option.style.alignItems = 'center';
+                option.style.display = 'flex';
+                option.style.cursor = 'default';
+                const nameLabel = document.createElement('span');
+                nameLabel.textContent = isBuiltin ? `${name}（内置）` : name;
+                nameLabel.title = isBuiltin ? (zh ? '内置预设' : 'Built-in preset') : '';
+                nameLabel.style.cssText = 'flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis';
+                if (manageMode) {
+                    nameLabel.style.cursor = 'pointer';
+                    nameLabel.addEventListener('click', (event) => {
+                        event.stopPropagation();
+                        MWI_Calculator_Calculator.closeCalculatorDropdowns();
+                        MWI_Calculator_Calculator.showPresetEditorDialog(name);
+                    });
+                    const deleteButton = document.createElement('button');
+                    deleteButton.type = 'button';
+                    deleteButton.textContent = '-';
+                    deleteButton.title = zh ? '删除预设' : 'Delete preset';
+                    deleteButton.style.cssText = 'flex:0 0 auto;margin-left:4px;color:#fff;border:none;border-radius:4px;padding:1px 7px;cursor:pointer;background:#c05621';
+                    deleteButton.addEventListener('click', (event) => {
+                        event.stopPropagation();
+                        if (!confirm(zh ? `确定删除预设「${name}」？` : `Delete preset "${name}"?`)) return;
+                        // 若该预设已应用，先移除其同层级类（会恢复此前被自动取消勾选的物品）
+                        this.removeAppliedPreset(name);
+                        this.presetMap.delete(name);
+                        this.savePresets();
+                        this.refreshPresetOptions();
+                    });
+                    option.append(nameLabel, deleteButton);
+                }
+                else {
+                    // 普通模式：点击名称应用/取消应用预设（建立同层级类并自动取消勾选重合项）
+                    nameLabel.style.cursor = 'pointer';
+                    nameLabel.addEventListener('click', (event) => {
+                        event.stopPropagation();
+                        MWI_Calculator_Calculator.applyPreset(name);
+                    });
+                    option.appendChild(nameLabel);
+                }
+                option.addEventListener('mouseenter', () => { option.style.background = '#4a4c6a'; });
+                option.addEventListener('mouseleave', () => { option.style.background = 'transparent'; });
+                container.appendChild(option);
+            };
+            for (const name of [...userNames, ...builtinOrder]) renderEntry(name, builtinNames.has(name));
+        }
+        // 普通模式点击预设名称：在原大类（食物/茶/咖啡等）同层级建立以预设命名的
+        // details 类，展示预设内全部物品与数量；与原大类重合的物品自动取消勾选
+        //（不再参与计算）。再次点击同一预设名称 = 取消应用并恢复勾选。
+        static applyPreset(name) {
+            if (this.presetAppliedMap.has(name)) {
+                this.removeAppliedPreset(name);
+                return;
+            }
+            const source = this.presetMap.get(name);
+            if (!source || !Array.isArray(source.items) || source.items.length === 0) return;
+            // 应用视图使用副本：行内改数量不影响预设数据，点保存才覆盖
+            this.applyPresetItems(name, source.items.map(entry => ({ ...entry })));
+        }
+        // 以给定物品列表建立应用视图（正常应用与刷新后恢复共用）
+        static applyPresetItems(name, items) {
+            if (this.presetAppliedMap.has(name)) return;
+            if (!items || items.length === 0) return;
+            const host = this.presetDetailsHost;
+            if (!host) return;
+            const checkedItems = [];
+            for (const item of items) {
+                const target = this.targetItemsMap.get(item.itemHrid);
+                if (target && target.needCalc) {
+                    target.needCalc = false;
+                    target.updateDisplayElement();
+                    checkedItems.push(item.itemHrid);
+                }
+            }
+            const zh = MWI_Calculator_I18n.isChinese();
+            const { details } = MWI_Calculator_UI.createCategory(name, null, null);
+            // 预设名字框（summary）内的保存按钮：行内数量被修改后显示，点击覆盖预设
+            const summary = details.querySelector('summary');
+            const saveButton = document.createElement('button');
+            saveButton.type = 'button';
+            saveButton.textContent = zh ? '保存' : 'Save';
+            saveButton.title = zh ? '将修改后的数量保存回预设' : 'Save modified counts back to preset';
+            saveButton.style.cssText = 'margin-left:6px;color:#fff;border:none;border-radius:4px;padding:1px 7px;cursor:pointer;background:#2e7d32;display:none';
+            summary.appendChild(saveButton);
+            // 名称右侧：预警状态（最低 现有/需求 与预警比例比较，绿=安全→自动折叠，红=预警→自动展开）
+            // + 最右侧补满按钮（与分类「清空」按钮同款角标布局）
+            const alertRatio = this.normalizeAlertRatio(this.presetMap.get(name)?.alertRatio);
+            Object.assign(summary.style, MWI_Calculator_UIStyles.summaryWithAction);
+            const statusSpan = document.createElement('span');
+            statusSpan.title = zh ? '当前最低 现有/需求 与预警比例的比较' : 'Min owned/required vs alert ratio';
+            statusSpan.style.cssText = 'margin-left:6px;font-weight:bold;white-space:nowrap';
+            summary.appendChild(statusSpan);
+            const fillButton = document.createElement('button');
+            fillButton.type = 'button';
+            fillButton.textContent = zh ? '补满' : 'Fill';
+            fillButton.title = zh ? '补满：全部勾选并计入缺口计算（按钮变为「监测」）；点击「监测」恢复自动预警评估' : 'Fill: check all into shortage; click Monitor to resume auto alerting';
+            fillButton.style.cssText = 'color:#fff;border:none;border-radius:4px;cursor:pointer;background:#1976D2';
+            Object.assign(fillButton.style, MWI_Calculator_UIStyles.cornerAction);
+            summary.appendChild(fillButton);
+            // 物品行与原大类目标行同布局，需求数量自动填入预设值，可修改
+            const applied = { details, checkedItems, rows: [], saveButton, dirty: false, alertRatio, manualFull: false, statusSpan, fillButton };
+            for (const item of items) {
+                const row = this.createPresetItemDisplayElement(item, applied);
+                applied.rows.push({ item, container: row.container, ownedSpan: row.ownedSpan, checkbox: row.checkbox, checked: true });
+                details.appendChild(row.container);
+            }
+            fillButton.addEventListener('click', event => {
+                event.preventDefault();
+                event.stopPropagation();
+                this.toggleAppliedPresetFill(applied);
+            });
+            saveButton.addEventListener('click', event => {
+                event.preventDefault();
+                event.stopPropagation();
+                // 行内修改后的数量覆盖预设并持久化（预警比例沿用原值）
+                const previousPreset = this.presetMap.get(name);
+                this.presetMap.set(name, {
+                    items: applied.rows.map(row => ({ itemHrid: row.item.itemHrid, count: row.item.count })),
+                    alertRatio: this.normalizeAlertRatio(previousPreset?.alertRatio),
+                });
+                this.savePresets();
+                this.refreshPresetOptions();
+                this.saveAppliedPresets();
+                applied.dirty = false;
+                saveButton.style.display = 'none';
+            });
+            host.appendChild(details);
+            this.presetAppliedMap.set(name, applied);
+            // 立即评估一次：填充预警状态显示与自动折叠/展开
+            this.updateAppliedPresetRows();
+            // 预设物品并入缺口计算，无论是否与原清单重合都需要重算
+            this.saveAndScheduleRender();
+            this.saveAppliedPresets();
+        }
+        // 取消已应用的预设：移除同层级类，恢复此前被自动取消勾选的物品
+        static removeAppliedPreset(name) {
+            const applied = this.presetAppliedMap.get(name);
+            if (!applied) return;
+            for (const itemHrid of applied.checkedItems) {
+                const target = this.targetItemsMap.get(itemHrid);
+                if (target && !target.needCalc) {
+                    target.needCalc = true;
+                    target.updateDisplayElement();
+                }
+            }
+            applied.details.remove();
+            this.presetAppliedMap.delete(name);
+            this.saveAndScheduleRender();
+            this.saveAppliedPresets();
+        }
+        // 已应用预设的存储键：与 TargetItems 同前缀、按角色 ID 区分
+        static getAppliedPresetsStorageKey() {
+            const key = this.getStorageKey();
+            return key ? key.replace('TargetItems', 'AppliedPresets') : null;
+        }
+        // 持久化已应用的预设（名称 + 行内当前数量，含未保存回预设的修改）
+        static saveAppliedPresets() {
+            const key = this.getAppliedPresetsStorageKey();
+            if (!key) return false;
+            try {
+                const data = [...this.presetAppliedMap.entries()].map(([appliedName, applied]) => ({
+                    name: appliedName,
+                    items: (applied.rows || []).map(row => ({ itemHrid: row.item.itemHrid, count: row.item.count })),
+                }));
+                GM_setValue(key, JSON.stringify(data));
+                return true;
+            }
+            catch (error) {
+                console.error('[MWI_Calculator] 已应用预设保存失败', error);
+                return false;
+            }
+        }
+        // 刷新/重开页面后恢复上次的预设应用状态（含行内改过的数量）
+        static loadAppliedPresets() {
+            const key = this.getAppliedPresetsStorageKey();
+            if (!key) return false;
+            try {
+                const loaded = JSON.parse(GM_getValue(key, '[]'));
+                if (!Array.isArray(loaded)) return false;
+                for (const entry of loaded) {
+                    if (!entry || typeof entry.name !== 'string' || !entry.name) continue;
+                    if (!Array.isArray(entry.items) || entry.items.length === 0) continue;
+                    if (this.presetAppliedMap.has(entry.name)) continue;
+                    // 预设本体已被删除时不再恢复其应用状态
+                    if (!this.presetMap.has(entry.name)) continue;
+                    const items = [];
+                    for (const item of entry.items) {
+                        if (!item || typeof item.itemHrid !== 'string' || !Number.isFinite(item.count)) continue;
+                        items.push({ itemHrid: item.itemHrid, count: item.count });
+                    }
+                    if (items.length > 0) this.applyPresetItems(entry.name, items);
+                }
+                return true;
+            }
+            catch (error) {
+                console.error('[MWI_Calculator] 已应用预设恢复失败', error);
+                return false;
+            }
+        }
+        // 预设类内物品行：布局与原大类目标行一致（勾选框/拥有/需求），
+        // 需求数量自动填入预设值且可修改；修改后在预设名字框显示保存按钮；无删除按钮。
+        static createPresetItemDisplayElement(presetItem, applied) {
+            const displayItem = {
+                itemHrid: presetItem.itemHrid,
+                count: presetItem.count,
+                iconHref: MWI_Calculator_Utils.getIconHrefByItemHrid(presetItem.itemHrid),
+                displayName: MWI_Calculator_I18n.getItemName(presetItem.itemHrid),
+            };
+            const { container, itemContainer, leftDiv, rightDiv } = this.createBaseItemDisplayItem(displayItem);
+            const needCalcCheckbox = document.createElement('input');
+            needCalcCheckbox.type = 'checkbox';
+            needCalcCheckbox.checked = true;
+            needCalcCheckbox.disabled = true;
+            needCalcCheckbox.title = MWI_Calculator_I18n.isChinese() ? '是否计入缺口：由预警比例自动控制，可用「补满」全部勾选' : 'Counted in shortage: controlled by alert ratio; use Fill to check all';
+            container.prepend(needCalcCheckbox);
+            // 拥有数量
+            const ownedSpan = document.createElement('span');
+            ownedSpan.style.padding = '4px 1px';
+            ownedSpan.style.marginLeft = '4px';
+            ownedSpan.textContent = String(MWI_Calculator_ItemsMap.getCount(presetItem.itemHrid));
+            // 斜杠分隔符
+            const slash = document.createElement('span');
+            slash.textContent = '/';
+            slash.style.padding = '4px 1px';
+            // 需求数量输入框：自动填入预设值，可修改；保存后覆盖预设
+            const targetInput = document.createElement('input');
+            targetInput.type = 'text';
+            targetInput.value = String(presetItem.count);
+            targetInput.placeholder = '需求';
+            targetInput.title = MWI_Calculator_I18n.isChinese() ? '数量由预设填入，可修改，保存后覆盖预设' : 'Preset count, editable; save to overwrite preset';
+            targetInput.style.background = '#dde2f8';
+            targetInput.style.color = '#000000';
+            targetInput.style.border = 'none';
+            targetInput.style.borderRadius = '4px';
+            targetInput.style.padding = '4px';
+            targetInput.style.margin = '2px';
+            Object.assign(targetInput.style, MWI_Calculator_UIStyles.quantityInput);
+            // 仅允许数字
+            targetInput.addEventListener('input', function () {
+                this.value = this.value.replace(/(?!^)-|[^\d-]/g, '');
+            });
+            // 输入框获得焦点时全选内容
+            targetInput.addEventListener('focus', () => {
+                setTimeout(() => { targetInput.select(); }, 0);
+            });
+            // 修改后更新行状态，显示保存按钮，并重算缺口
+            targetInput.addEventListener('change', () => {
+                const value = Math.max(1, parseInt(targetInput.value, 10) || 1);
+                targetInput.value = String(value);
+                presetItem.count = value;
+                applied.dirty = true;
+                if (applied.saveButton) applied.saveButton.style.display = '';
+                const owned = MWI_Calculator_ItemsMap.getCount(presetItem.itemHrid);
+                MWI_Calculator_UI.renderTargetState(container, owned >= value ? 'completed' : 'pending');
+                MWI_Calculator_Calculator.saveAndScheduleRender();
+                MWI_Calculator_Calculator.saveAppliedPresets();
+            });
+            targetInput.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter') targetInput.blur();
+            });
+            rightDiv.appendChild(ownedSpan);
+            rightDiv.appendChild(slash);
+            rightDiv.appendChild(targetInput);
+            leftDiv.remove();
+            // 与目标行相同的自适应布局（无删除按钮，传占位元素占位）
+            MWI_Calculator_UI.attachTargetLayout(container, itemContainer, rightDiv, ownedSpan, targetInput, document.createElement('button'));
+            // 行状态与目标行同规则：达标=completed，未达标=pending
+            const state = MWI_Calculator_ItemsMap.getCount(presetItem.itemHrid) >= presetItem.count ? 'completed' : 'pending';
+            MWI_Calculator_UI.renderTargetState(container, state);
+            return { container, ownedSpan, checkbox: needCalcCheckbox };
+        }
+        // 库存变化触发重渲染时，同步已应用预设行的拥有数量与达标状态，
+        // 并按预警比例评估各行勾选状态（是否计入缺口计算）：
+        //   0 < 预警比例 < 1 时：任一 item 现有/需求 < 预警比例 → 全部勾选（进入预警）；
+        //     否则「现有 < 需求 且 现有/需求 > 预警比例」的 item 取消勾选（暂不计入缺口）。
+        //   预警比例不在 (0,1) 区间时全部勾选（不做预警筛选）。
+        //   「补满」后进入手动状态保持全部勾选；任一 item 跌破预警线后恢复自动评估。
+        static updateAppliedPresetRows() {
+            this.presetAppliedMap?.forEach(applied => {
+                const rows = applied.rows || [];
+                const alertActive = applied.alertRatio > 0;
+                let hasCritical = false;
+                let minRatio = Number.POSITIVE_INFINITY;
+                for (const row of rows) {
+                    const owned = MWI_Calculator_ItemsMap.getCount(row.item.itemHrid);
+                    row.ownedSpan.textContent = String(owned);
+                    if (row.item.count > 0) {
+                        const ratio = owned / row.item.count;
+                        if (ratio < minRatio) minRatio = ratio;
+                        if (alertActive && ratio < applied.alertRatio) hasCritical = true;
+                    }
+                }
+                // 手动补满状态保持全部勾选；出现跌破预警线的物品后恢复自动评估
+                if (applied.manualFull && hasCritical) applied.manualFull = false;
+                const manualFull = applied.manualFull === true;
+                for (const row of rows) {
+                    const owned = MWI_Calculator_ItemsMap.getCount(row.item.itemHrid);
+                    let checked = true;
+                    if (alertActive && !manualFull && !hasCritical) {
+                        checked = !(row.item.count > 0 && owned < row.item.count && owned / row.item.count > applied.alertRatio);
+                    }
+                    row.checked = checked;
+                    if (row.checkbox) row.checkbox.checked = checked;
+                    const state = owned >= row.item.count ? 'completed' : 'pending';
+                    MWI_Calculator_UI.renderTargetState(row.container, state);
+                }
+                // 标题状态：最低 现有/需求 与预警比例比较；绿色自动折叠，红色自动展开
+                // （手动补满状态下不干预展开/折叠，仅刷新比较值）
+                if (applied.statusSpan) {
+                    if (!alertActive) {
+                        applied.statusSpan.style.display = 'none';
+                    }
+                    else {
+                        applied.statusSpan.style.display = '';
+                        const fmtRatio = value => String(Math.round(value * 100) / 100);
+                        if (!Number.isFinite(minRatio)) {
+                            applied.statusSpan.textContent = `--${fmtRatio(applied.alertRatio)}`;
+                            applied.statusSpan.style.color = '#4CAF50';
+                            if (!manualFull && applied.details) applied.details.open = false;
+                        }
+                        else {
+                            const critical = minRatio < applied.alertRatio;
+                            const op = critical ? '<' : (minRatio > applied.alertRatio ? '>' : '=');
+                            applied.statusSpan.textContent = `${fmtRatio(minRatio)}${op}${fmtRatio(applied.alertRatio)}`;
+                            applied.statusSpan.style.color = critical ? '#e0533d' : '#4CAF50';
+                            if (!manualFull && applied.details) applied.details.open = critical;
+                        }
+                    }
+                }
+                // 补满/监测 按钮文案跟随状态
+                if (applied.fillButton) {
+                    applied.fillButton.textContent = manualFull
+                        ? (MWI_Calculator_I18n.isChinese() ? '监测' : 'Monitor')
+                        : (MWI_Calculator_I18n.isChinese() ? '补满' : 'Fill');
+                }
+            });
+        }
+        // 补满/监测 切换：
+        //   补满 → 手动全部勾选（manualFull），不自动折叠，按钮变为「监测」；
+        //   监测 → 取消补满设定，立即按预警比例重新评估勾选与展开/折叠。
+        static toggleAppliedPresetFill(applied) {
+            if (applied.manualFull) {
+                applied.manualFull = false;
+                this.updateAppliedPresetRows();
+                this.saveAndScheduleRender();
+                return;
+            }
+            this.fillAppliedPreset(applied);
+        }
+        // 补满：勾选全部物品（全部计入缺口计算）并重算；
+        // 保持展开（即使比例是绿色也不折叠），直到点击「监测」恢复自动评估
+        static fillAppliedPreset(applied) {
+            applied.manualFull = true;
+            let changed = false;
+            for (const row of applied.rows || []) {
+                if (row.checked !== true) changed = true;
+                row.checked = true;
+                if (row.checkbox) row.checkbox.checked = true;
+            }
+            if (applied.details) applied.details.open = true;
+            if (applied.fillButton) applied.fillButton.textContent = MWI_Calculator_I18n.isChinese() ? '监测' : 'Monitor';
+            if (changed) this.saveAndScheduleRender();
+        }
+        // 预设编辑弹窗：第一条为预设名称输入，第二条为物品搜索框（搜索选中后
+        // 连同数量加入该名称对应的预设，可反复添加）；保存后写入存储并刷新下拉。
+        // initialItems：新建时预填的物品列表（配装页《创建消耗预设》使用）。
+        // initialName：新建时预填的预设名称（配装页默认填入当前配装名）。
+        static showPresetEditorDialog(existingName = null, initialItems = null, initialName = null) {
+            const zh = MWI_Calculator_I18n.isChinese();
+            const sourcePreset = existingName != null ? this.presetMap.get(existingName) : null;
+            let alertRatio = this.normalizeAlertRatio(sourcePreset?.alertRatio);
+            const items = existingName != null
+                ? (sourcePreset?.items || []).map(entry => ({ ...entry }))
+                : (Array.isArray(initialItems)
+                    ? initialItems
+                        .filter(entry => entry && typeof entry.itemHrid === 'string' && Number.isFinite(entry.count) && entry.count > 0)
+                        .map(entry => ({ itemHrid: entry.itemHrid, count: entry.count }))
+                    : []);
+            const overlay = document.createElement('div');
+            overlay.style.cssText = 'position:fixed;inset:0;z-index:2147483647;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center';
+            const box = document.createElement('div');
+            box.style.cssText = 'position:relative;width:min(420px,92vw);max-height:88vh;overflow-y:auto;padding:16px;border-radius:12px;'
+                + 'background:linear-gradient(145deg,#152447,#1d3566);color:#eef3ff;border:1px solid #6f9bd8;'
+                + 'box-shadow:0 10px 28px rgba(3,10,26,.55);font:13px/1.6 system-ui,sans-serif';
+            // 第一条：预设名称
+            const nameRow = document.createElement('div');
+            nameRow.style.cssText = 'display:flex;align-items:center;margin-bottom:8px';
+            const nameLabel = document.createElement('span');
+            nameLabel.textContent = zh ? '预设名称' : 'Preset name';
+            nameLabel.style.cssText = 'flex:0 0 auto;margin-right:8px;white-space:nowrap';
+            const nameInput = document.createElement('input');
+            nameInput.type = 'text';
+            nameInput.value = existingName || initialName || '';
+            nameInput.placeholder = zh ? '输入预设名称' : 'Enter preset name';
+            nameInput.style.cssText = 'flex:1;min-width:0;padding:4px;border:none;border-radius:4px;background:#dde2f8;color:#000';
+            nameRow.append(nameLabel, nameInput);
+            // 第二行：暴饮（读取玩家是否持有暴饮之囊，有则显示其最高强化等级，无则显示「无」）
+            const guzzlingRow = document.createElement('div');
+            guzzlingRow.style.cssText = 'display:flex;align-items:center;margin-bottom:8px';
+            const guzzlingLabel = document.createElement('span');
+            guzzlingLabel.textContent = zh ? '暴饮' : 'Guzzling';
+            guzzlingLabel.style.cssText = 'flex:0 0 auto;margin-right:8px;white-space:nowrap';
+            let guzzlingLevel = -1;
+            try { guzzlingLevel = MWI_Calculator_ItemsMap.getMaxEnhancementLevel('/items/guzzling_pouch'); }
+            catch (_) { /* 库存数据未就绪时按未持有处理 */ }
+            const guzzlingValue = document.createElement('span');
+            guzzlingValue.textContent = guzzlingLevel >= 0 ? String(guzzlingLevel) : (zh ? '无' : 'None');
+            guzzlingValue.style.cssText = 'flex:0 0 auto;color:#ffd76e;margin-right:12px';
+            // 天数输入框（紧凑排列）：变更时按规则填入食物/咖啡数量
+            const daysLabel = document.createElement('span');
+            daysLabel.textContent = zh ? '天数' : 'Days';
+            daysLabel.style.cssText = 'flex:0 0 auto;margin-right:8px;white-space:nowrap';
+            const daysInput = document.createElement('input');
+            daysInput.type = 'text';
+            daysInput.value = '1';
+            daysInput.title = zh
+                ? '食物 1440/天；咖啡 288/天（有暴饮之囊时按强化等级加成并向上取整）'
+                : 'Food 1440/day; coffee 288/day (guzzling bonus, rounded up)';
+            daysInput.style.cssText = 'flex:0 0 56px;min-width:0;width:56px;padding:4px;border:none;border-radius:4px;background:#dde2f8;color:#000;text-align:right';
+            // 暴饮强化加成表（+0~+20，百分比）；比例为 0.1×(1+加成)
+            const GUZZLING_BONUS_TABLE = [0, 2.0, 4.2, 6.6, 9.2, 12.0, 15.0, 18.2, 21.6, 25.2, 29.0, 33.4, 38.4, 44.0, 50.2, 57.0, 64.4, 72.4, 81.0, 90.2, 100];
+            // 当前天数（搜索添加物品的规则数量基准）
+            let currentDays = 1;
+            // 数量输入框是否被手动修改过（未修改时食物/咖啡按规则数量添加）
+            let countEdited = false;
+            // 食物/咖啡的规则数量：食物 1440/天；咖啡 ceil(288×(1+暴饮比例))/天；其余返回 null
+            const ruleCountForItem = (itemHrid, days) => {
+                const bonus = guzzlingLevel >= 0 ? (GUZZLING_BONUS_TABLE[Math.min(guzzlingLevel, GUZZLING_BONUS_TABLE.length - 1)] || 0) / 100 : 0;
+                const ratio = guzzlingLevel >= 0 ? 0.1 * (1 + bonus) : 0;
+                const coffeePerDay = Math.ceil(288 * (1 + ratio));
+                let categoryHrid = '';
+                if (itemHrid.endsWith('_coffee')) categoryHrid = '/item_categories/coffee';
+                else if (itemHrid.endsWith('_tea')) categoryHrid = '/item_categories/tea';
+                else categoryHrid = MWI_Calculator.initClientData?.itemDetailMap?.[itemHrid]?.categoryHrid || '';
+                if (categoryHrid === '/item_categories/food') return 1440 * days;
+                if (categoryHrid === '/item_categories/coffee') return coffeePerDay * days;
+                return null;
+            };
+            const applyDaysToItems = (days) => {
+                for (const entry of items) {
+                    const rule = ruleCountForItem(entry.itemHrid, days);
+                    if (rule != null) entry.count = rule;
+                }
+                renderPresetItems();
+            };
+            // 创建消耗预设预填的物品同样按 当前暴饮×天数 规则填充数量
+            if (existingName == null && Array.isArray(initialItems) && initialItems.length > 0) {
+                for (const entry of items) {
+                    const rule = ruleCountForItem(entry.itemHrid, currentDays);
+                    if (rule != null) entry.count = rule;
+                }
+            }
+            daysInput.addEventListener('input', function () {
+                this.value = this.value.replace(/[^\d]/g, '');
+            });
+            daysInput.addEventListener('change', () => {
+                const days = Math.max(1, parseInt(daysInput.value, 10) || 1);
+                daysInput.value = String(days);
+                currentDays = days;
+                countEdited = false;
+                countInput.value = '1';
+                applyDaysToItems(days);
+            });
+            daysInput.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter') daysInput.blur();
+            });
+            // 预警比例（0~1）：随预设保存，显示在该行右侧
+            const ratioSpacer = document.createElement('div');
+            ratioSpacer.style.cssText = 'flex:1';
+            const ratioLabel = document.createElement('span');
+            ratioLabel.textContent = zh ? '预警比例' : 'Alert ratio';
+            ratioLabel.style.cssText = 'flex:0 0 auto;margin-left:12px;margin-right:8px;white-space:nowrap';
+            ratioLabel.title = zh ? '0~1 的小数，随预设一起保存' : 'A decimal between 0 and 1, saved with the preset';
+            const ratioInput = document.createElement('input');
+            ratioInput.type = 'text';
+            ratioInput.value = String(alertRatio);
+            ratioInput.style.cssText = 'flex:0 0 56px;min-width:0;width:56px;padding:4px;border:none;border-radius:4px;background:#dde2f8;color:#000;text-align:right';
+            ratioInput.addEventListener('input', function () {
+                this.value = this.value.replace(/[^\d.]/g, '').replace(/(\..*?)\./g, '$1');
+            });
+            ratioInput.addEventListener('change', () => {
+                alertRatio = MWI_Calculator_Calculator.normalizeAlertRatio(parseFloat(ratioInput.value));
+                ratioInput.value = String(alertRatio);
+            });
+            ratioInput.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter') ratioInput.blur();
+            });
+            guzzlingRow.append(guzzlingLabel, guzzlingValue, daysLabel, daysInput, ratioSpacer, ratioLabel, ratioInput);
+            // 已加入预设的物品列表
+            const itemsList = document.createElement('div');
+            itemsList.style.cssText = 'max-height:200px;overflow-y:auto;margin-bottom:12px;border-radius:4px;background:rgba(0,0,0,.25)';
+            const renderPresetItems = () => {
+                itemsList.innerHTML = '';
+                if (items.length === 0) {
+                    const emptyTip = document.createElement('div');
+                    emptyTip.textContent = zh ? '尚未添加物品' : 'No items added';
+                    emptyTip.style.cssText = 'padding:6px 4px;opacity:.6';
+                    itemsList.appendChild(emptyTip);
+                    return;
+                }
+                items.forEach((entry, index) => {
+                    const row = document.createElement('div');
+                    row.style.cssText = 'display:flex;align-items:center;padding:4px;border-bottom:1px solid #98a7e9';
+                    const itemIcon = document.createElement('div');
+                    const iconHref = MWI_Calculator_Utils.getIconHrefByItemHrid(entry.itemHrid);
+                    itemIcon.appendChild(MWI_Calculator_Utils.createIconSvg(iconHref));
+                    const itemName = document.createElement('span');
+                    itemName.textContent = MWI_Calculator_I18n.getItemName(entry.itemHrid);
+                    itemName.style.cssText = 'flex:1;min-width:0;margin-left:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis';
+                    const countEdit = document.createElement('input');
+                    countEdit.type = 'text';
+                    countEdit.value = String(entry.count);
+                    countEdit.title = zh ? '数量（可直接修改）' : 'Count (editable)';
+                    countEdit.style.cssText = 'flex:0 0 48px;margin-right:6px;padding:2px 4px;border:none;border-radius:4px;background:#dde2f8;color:#000;text-align:right';
+                    countEdit.addEventListener('input', () => {
+                        countEdit.value = countEdit.value.replace(/[^\d]/g, '');
+                    });
+                    countEdit.addEventListener('change', () => {
+                        entry.count = Math.max(1, parseInt(countEdit.value, 10) || 1);
+                        countEdit.value = String(entry.count);
+                    });
+                    countEdit.addEventListener('keydown', (e) => {
+                        if (e.key === 'Enter') countEdit.blur();
+                    });
+                    const removeButton = document.createElement('button');
+                    removeButton.type = 'button';
+                    removeButton.textContent = zh ? '删除' : 'Remove';
+                    removeButton.style.cssText = 'flex:0 0 auto;color:#fff;border:none;border-radius:4px;padding:2px 6px;cursor:pointer;background:#c05621';
+                    removeButton.addEventListener('click', () => {
+                        items.splice(index, 1);
+                        renderPresetItems();
+                    });
+                    row.append(itemIcon, itemName, countEdit, removeButton);
+                    itemsList.appendChild(row);
+                });
+            };
+            // 第二条：物品搜索框 + 数量 + 添加
+            const searchRow = document.createElement('div');
+            searchRow.style.cssText = 'display:flex;align-items:stretch;position:relative;margin-bottom:8px';
+            const searchInput = document.createElement('input');
+            searchInput.type = 'text';
+            searchInput.placeholder = zh ? '搜索物品名称...' : 'Search item name...';
+            searchInput.style.cssText = 'flex:1;min-width:0;padding:4px;margin-right:6px;border:none;border-radius:4px;background:#dde2f8;color:#000';
+            const countInput = document.createElement('input');
+            countInput.type = 'text';
+            countInput.value = '1';
+            countInput.placeholder = zh ? '数量' : 'Count';
+            countInput.style.cssText = 'flex:0 0 52px;padding:4px;margin-right:6px;border:none;border-radius:4px;background:#dde2f8;color:#000';
+            countInput.addEventListener('input', function () {
+                this.value = this.value.replace(/[^\d]/g, '');
+                countEdited = true;
+            });
+            const addEntryButton = document.createElement('button');
+            addEntryButton.type = 'button';
+            addEntryButton.textContent = zh ? '添加' : 'Add';
+            addEntryButton.style.cssText = 'flex:0 0 auto;color:#fff;border:none;border-radius:4px;padding:4px 10px;cursor:pointer;background:#4CAF50';
+            const searchResults = document.createElement('div');
+            searchResults.style.cssText = 'position:absolute;left:0;top:32px;width:220px;max-height:260px;overflow-y:auto;'
+                + 'z-index:1000;display:none;padding:4px;border-radius:4px;background:' + MWI_Calculator_UITheme.surface;
+            this.registerCalculatorDropdown(searchRow, searchResults);
+            const close = () => {
+                this.calculatorDropdowns?.delete(searchResults);
+                overlay.remove();
+            };
+            const addEntry = () => {
+                const itemHrid = MWI_Calculator_I18n.getItemHridByName(searchInput.value.trim());
+                if (!itemHrid) return;
+                let count = Math.max(1, parseInt(countInput.value, 10) || 1);
+                // 数量未被手动修改时，食物/咖啡按 当前暴饮×天数 的规则数量添加
+                if (!countEdited) {
+                    const rule = ruleCountForItem(itemHrid, currentDays);
+                    if (rule != null) count = rule;
+                }
+                const existing = items.find(entry => entry.itemHrid === itemHrid);
+                if (existing) existing.count += count;
+                else items.push({ itemHrid, count });
+                searchInput.value = '';
+                countInput.value = '1';
+                countEdited = false;
+                searchResults.style.display = 'none';
+                renderPresetItems();
+            };
+            searchInput.addEventListener('input', () => {
+                // 多关键词 AND 搜索，与主搜索框同逻辑
+                const searchTerms = searchInput.value.toLowerCase().trim().split(/\s+/).filter(Boolean);
+                if (searchTerms.length < 1) { searchResults.style.display = 'none'; return; }
+                const itemDetailMap = MWI_Calculator?.initClientData?.itemDetailMap;
+                if (!itemDetailMap) return;
+                const filteredItems = Object.keys(itemDetailMap)
+                    .filter(itemHrid => {
+                        const name = MWI_Calculator_I18n.getItemName(itemHrid).toLowerCase();
+                        return searchTerms.every(term => name.includes(term));
+                    })
+                    .sort((a, b) => MWI_Calculator_Utils.getSortIndexByItemHrid(a) - MWI_Calculator_Utils.getSortIndexByItemHrid(b));
+                if (filteredItems.length === 0) { searchResults.style.display = 'none'; return; }
+                this.populateSearchResults(searchResults, filteredItems, (itemHrid) => {
+                    searchInput.value = MWI_Calculator_I18n.getItemName(itemHrid);
+                    // 选中物品后，数量默认按 当前暴饮×天数 规则填入（食物/咖啡）
+                    const rule = ruleCountForItem(itemHrid, currentDays);
+                    countInput.value = String(rule != null ? rule : 1);
+                    countEdited = false;
+                    searchResults.style.display = 'none';
+                });
+                this.openCalculatorDropdown(searchResults);
+            });
+            searchInput.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter') { e.preventDefault(); addEntry(); }
+            });
+            countInput.addEventListener('input', () => {
+                countInput.value = countInput.value.replace(/(?!^)-|[^\d-]/g, '');
+            });
+            countInput.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter') { e.preventDefault(); addEntry(); }
+            });
+            addEntryButton.addEventListener('click', addEntry);
+            searchRow.append(searchInput, countInput, addEntryButton, searchResults);
+            renderPresetItems();
+            // 底部按钮：导入 / 导出（最左）…… 保存 / 取消（右）
+            const buttonRow = document.createElement('div');
+            buttonRow.style.cssText = 'display:flex;gap:8px;align-items:center';
+            // 剪贴板写入：GM_setClipboard → navigator.clipboard → execCommand 兜底
+            const copyTextToClipboard = async (text) => {
+                try {
+                    if (typeof GM_setClipboard === 'function') { GM_setClipboard(text, 'text'); return true; }
+                }
+                catch (_) { /* 退化到浏览器剪贴板 */ }
+                try {
+                    if (navigator.clipboard?.writeText) { await navigator.clipboard.writeText(text); return true; }
+                }
+                catch (_) { /* 退化到 execCommand */ }
+                try {
+                    const textarea = document.createElement('textarea');
+                    textarea.value = text;
+                    textarea.style.cssText = 'position:fixed;top:0;left:0;opacity:0';
+                    document.body.appendChild(textarea);
+                    textarea.select();
+                    const ok = document.execCommand('copy');
+                    textarea.remove();
+                    return ok;
+                }
+                catch (_) { return false; }
+            };
+            // 解析并导入 BUILTIN_PRESETS 条目格式（也兼容条目数组，取第一个有效项）
+            const importPresetPayload = (text) => {
+                let data;
+                try { data = JSON.parse(text); }
+                catch (_) { alert(zh ? '导入内容不是有效的 JSON' : 'Invalid JSON'); return; }
+                const entry = Array.isArray(data) ? data.find(item => item && typeof item === 'object') : data;
+                if (!entry || typeof entry !== 'object' || typeof entry.name !== 'string' || !entry.name.trim() || !Array.isArray(entry.items)) {
+                    alert(zh ? '导入格式无效：需要 { name, items: [{ itemHrid, count }] }' : 'Expected { name, items: [{ itemHrid, count }] }');
+                    return;
+                }
+                const validItems = [];
+                for (const item of entry.items) {
+                    if (!item || typeof item.itemHrid !== 'string' || !Number.isFinite(item.count) || item.count <= 0) continue;
+                    validItems.push({ itemHrid: item.itemHrid, count: item.count });
+                }
+                if (validItems.length === 0) {
+                    alert(zh ? '导入内容中没有有效物品' : 'No valid items in imported content');
+                    return;
+                }
+                // 导入覆盖当前编辑中的名称与物品列表
+                items.length = 0;
+                items.push(...validItems);
+                nameInput.value = entry.name.trim();
+                alertRatio = MWI_Calculator_Calculator.normalizeAlertRatio(entry.alertRatio);
+                ratioInput.value = String(alertRatio);
+                renderPresetItems();
+            };
+            const importButton = document.createElement('button');
+            importButton.type = 'button';
+            importButton.textContent = zh ? '导入' : 'Import';
+            importButton.title = zh ? '从剪贴板导入预设（格式同 BUILTIN_PRESETS 条目，覆盖当前编辑内容）' : 'Import preset from clipboard (BUILTIN_PRESETS entry format)';
+            importButton.style.cssText = 'color:#fff;border:none;border-radius:7px;padding:6px 14px;cursor:pointer;background:#1976D2';
+            importButton.addEventListener('click', async () => {
+                let text = '';
+                try {
+                    if (navigator.clipboard?.readText) text = await navigator.clipboard.readText();
+                }
+                catch (_) { text = ''; }
+                if (text && text.trim()) { importPresetPayload(text); return; }
+                // 剪贴板不可读（无权限/不支持）时退化为手动粘贴
+                const pasteOverlay = document.createElement('div');
+                pasteOverlay.style.cssText = 'position:fixed;inset:0;z-index:2147483647;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center';
+                const pasteBox = document.createElement('div');
+                pasteBox.style.cssText = 'width:min(460px,92vw);padding:16px;border-radius:12px;background:linear-gradient(145deg,#152447,#1d3566);color:#eef3ff;border:1px solid #6f9bd8;font:13px/1.6 system-ui,sans-serif';
+                const pasteTip = document.createElement('div');
+                pasteTip.textContent = zh ? '无法直接读取剪贴板，请手动粘贴预设 JSON 后点击确定：' : 'Cannot read clipboard; paste the preset JSON below:';
+                pasteTip.style.cssText = 'margin-bottom:8px';
+                const pasteTextarea = document.createElement('textarea');
+                pasteTextarea.style.cssText = 'width:100%;height:120px;box-sizing:border-box;padding:6px;border:none;border-radius:4px;background:#dde2f8;color:#000;resize:vertical;font:12px/1.5 monospace';
+                const pasteRow = document.createElement('div');
+                pasteRow.style.cssText = 'display:flex;gap:8px;justify-content:flex-end;margin-top:8px';
+                const pasteOk = document.createElement('button');
+                pasteOk.type = 'button';
+                pasteOk.textContent = zh ? '确定' : 'OK';
+                pasteOk.style.cssText = 'color:#fff;border:none;border-radius:7px;padding:6px 14px;cursor:pointer;background:#2e7d32';
+                pasteOk.addEventListener('click', () => {
+                    const value = pasteTextarea.value.trim();
+                    pasteOverlay.remove();
+                    if (value) importPresetPayload(value);
+                });
+                const pasteCancel = document.createElement('button');
+                pasteCancel.type = 'button';
+                pasteCancel.textContent = zh ? '取消' : 'Cancel';
+                pasteCancel.style.cssText = 'color:#fff;border:none;border-radius:7px;padding:6px 14px;cursor:pointer;background:#344879';
+                pasteCancel.addEventListener('click', () => pasteOverlay.remove());
+                pasteRow.append(pasteOk, pasteCancel);
+                pasteBox.append(pasteTip, pasteTextarea, pasteRow);
+                pasteOverlay.appendChild(pasteBox);
+                document.body.appendChild(pasteOverlay);
+                pasteTextarea.focus();
+            });
+            const exportButton = document.createElement('button');
+            exportButton.type = 'button';
+            exportButton.textContent = zh ? '导出' : 'Export';
+            exportButton.title = zh ? '将当前预设（名称+物品+数量）按 BUILTIN_PRESETS 条目格式复制到剪贴板' : 'Copy current preset as BUILTIN_PRESETS entry';
+            exportButton.style.cssText = 'color:#fff;border:none;border-radius:7px;padding:6px 14px;cursor:pointer;background:#1976D2';
+            exportButton.addEventListener('click', async () => {
+                const payload = JSON.stringify({
+                    name: nameInput.value.trim(),
+                    items: items.map(entry => ({ itemHrid: entry.itemHrid, count: entry.count })),
+                    alertRatio,
+                });
+                const ok = await copyTextToClipboard(payload);
+                if (ok) alert(zh ? '已将当前预设导出到剪贴板' : 'Preset copied to clipboard');
+                else {
+                    console.log('[MWI_Calculator] 预设导出 JSON:', payload);
+                    alert(zh ? '复制失败，JSON 已输出到控制台，请手动复制' : 'Copy failed; JSON printed to console');
+                }
+            });
+            const saveButton = document.createElement('button');
+            saveButton.type = 'button';
+            saveButton.textContent = zh ? '保存' : 'Save';
+            saveButton.style.cssText = 'color:#fff;border:none;border-radius:7px;padding:6px 14px;cursor:pointer;background:#2e7d32';
+            saveButton.addEventListener('click', () => {
+                const presetName = nameInput.value.trim();
+                if (!presetName) {
+                    alert(zh ? '请先输入预设名称' : 'Please enter a preset name first');
+                    nameInput.focus();
+                    return;
+                }
+                if (items.length === 0) {
+                    alert(zh ? '请至少添加一个物品' : 'Please add at least one item');
+                    return;
+                }
+                if (this.presetMap.has(presetName) && presetName !== existingName
+                    && !confirm(zh ? `预设「${presetName}」已存在，是否覆盖？` : `Preset "${presetName}" already exists. Overwrite?`)) {
+                    return;
+                }
+                this.presetMap.set(presetName, { items, alertRatio });
+                // 从已有预设改名保存时视为重命名，移除旧名称条目；
+                // 若旧名已应用则同步转移应用记录并更新类标题
+                if (existingName != null && existingName !== presetName) {
+                    this.presetMap.delete(existingName);
+                    const applied = this.presetAppliedMap.get(existingName);
+                    if (applied) {
+                        this.presetAppliedMap.delete(existingName);
+                        this.presetAppliedMap.set(presetName, applied);
+                        const appliedSummary = applied.details.querySelector('summary');
+                        if (appliedSummary) appliedSummary.textContent = presetName;
+                    }
+                }
+                // 覆盖同名旧预设时，若旧预设已应用则先移除其应用状态
+                if (presetName !== existingName && this.presetAppliedMap.has(presetName)) {
+                    this.removeAppliedPreset(presetName);
+                }
+                this.savePresets();
+                this.refreshPresetOptions();
+                close();
+            });
+            const cancelButton = document.createElement('button');
+            cancelButton.type = 'button';
+            cancelButton.textContent = zh ? '取消' : 'Cancel';
+            cancelButton.style.cssText = 'color:#fff;border:none;border-radius:7px;padding:6px 14px;cursor:pointer;background:#344879';
+            cancelButton.addEventListener('click', close);
+            const buttonSpacer = document.createElement('div');
+            buttonSpacer.style.cssText = 'flex:1';
+            buttonRow.append(importButton, exportButton, buttonSpacer, saveButton, cancelButton);
+            box.append(nameRow, guzzlingRow, searchRow, itemsList, buttonRow);
+            overlay.appendChild(box);
+            document.body.appendChild(overlay);
+            nameInput.focus();
+        }
+        // 创建大类添加框：选择物品大类后一次性加入该类全部物品
+        // 与物品添加栏使用相同的自然行高、4px 内边距和 2px 外边距。
+        static compactSelectionControls(controls) {
+            Object.assign(controls.style, {
+                alignItems: 'stretch', flexWrap: 'nowrap', minWidth: '0'
+            });
+            const [dropdown, input, button] = controls.children;
+            Object.assign(dropdown.style, {
+                flex: '1 1 0', minWidth: '0', height: 'auto'
+            });
+            Object.assign(dropdown.firstElementChild.style, {
+                minWidth: '0', whiteSpace: 'nowrap', overflow: 'hidden'
+            });
+            Object.assign(input.style, MWI_Calculator_UIStyles.quantityInput, {
+                height: 'auto',
+                padding: '4px', margin: '2px'
+            });
+            Object.assign(button.style, {
+                height: 'auto', width: 'auto', flex: '0 0 auto',
+                whiteSpace: 'nowrap', padding: '4px', margin: '2px'
+            });
+        }
+        static createCategoryAddComponent() {
+            const section = document.createElement('div');
+            section.style.background = MWI_Calculator_UITheme.surface;
+            section.style.border = 'none';
+            section.style.borderRadius = '4px';
+            section.style.padding = '4px';
+            section.style.margin = '2px';
+            section.style.display = 'flex';
+            section.style.flexDirection = 'column';
+            const controls = document.createElement('div');
+            controls.style.display = 'flex';
+            controls.style.width = '100%';
+            const dropdown = document.createElement('div');
+            dropdown.style.display = 'flex';
+            dropdown.style.minWidth = '20px';
+            dropdown.style.flex = '1';
+            dropdown.style.position = 'relative';
+            const selected = document.createElement('div');
+            selected.style.background = MWI_Calculator_UITheme.heading;
+            selected.style.color = MWI_Calculator_UITheme.onAction;
+            selected.style.borderRadius = '4px';
+            selected.style.paddingLeft = '4px';
+            selected.style.margin = '2px';
+            selected.style.minWidth = '40px';
+            selected.style.flex = '1';
+            selected.style.cursor = 'pointer';
+            selected.style.display = 'flex';
+            selected.style.alignItems = 'center';
+            selected.style.whiteSpace = 'nowrap';
+            selected.textContent = MWI_Calculator_I18n.isChinese() ? '选择大类' : 'Select item category';
+            const list = document.createElement('div');
+            list.style.background = MWI_Calculator_UITheme.surface;
+            list.style.borderRadius = '4px';
+            list.style.padding = '4px';
+            list.style.margin = '2px';
+            list.style.width = '150px';
+            list.style.maxHeight = '335px';
+            list.style.overflowY = 'auto';
+            list.style.zIndex = '1000';
+            list.style.display = 'none';
+            list.style.position = 'absolute';
+            list.style.left = '0px';
+            list.style.top = '32px';
+            const hiddenCategoryOptions = new Set([
+                '/item_categories/house_rooms',
+                '/item_categories/ability_book',
+                '/item_categories/equipment',
+                '/item_categories/materials',
+                '/item_categories/resource',
+                '/item_categories/loot',
+                '/item_categories/currency',
+                '/item_categories/key',
+                '/item_categories/drink'
+            ]);
+            const categoryOptions = MWI_Calculator_Calculator.itemCategoryList
+                .filter(categoryHrid => !hiddenCategoryOptions.has(categoryHrid))
+                .map(categoryHrid => {
+                    const option = document.createElement('div');
+                    option.style.borderBottom = '1px solid #98a7e9';
+                    option.style.borderRadius = '4px';
+                    option.style.padding = '4px';
+                    option.style.alignItems = 'center';
+                    option.style.display = 'flex';
+                    option.style.cursor = 'pointer';
+                    option.textContent = MWI_Calculator_I18n.getName(categoryHrid, 'itemCategoryNames') || categoryHrid;
+                    option.dataset.categoryHrid = categoryHrid;
+                    option.addEventListener('mouseenter', () => { option.style.background = '#4a4c6a'; });
+                    option.addEventListener('mouseleave', () => { option.style.background = 'transparent'; });
+                    option.addEventListener('click', (event) => {
+                        event.stopPropagation();
+                        selected.textContent = option.textContent;
+                        dropdown.dataset.categoryHrid = categoryHrid;
+                        list.style.display = 'none';
+                    });
+                    return option;
+                });
+            categoryOptions.forEach(option => list.appendChild(option));
+            selected.addEventListener('click', (event) => {
+                event.stopPropagation();
+                MWI_Calculator_Calculator.toggleCalculatorDropdown(list);
+            });
+            MWI_Calculator_Calculator.registerCalculatorDropdown(dropdown, list);
+            dropdown.appendChild(selected);
+            dropdown.appendChild(list);
+            const countInput = document.createElement('input');
+            countInput.type = 'number';
+            countInput.min = '0';
+            countInput.step = '1';
+            countInput.value = '0';
+            countInput.title = MWI_Calculator_I18n.isChinese() ? '每个物品添加数量' : 'Quantity per item';
+            countInput.classList.add('mwi-category-quantity');
+            countInput.style.background = '#dde2f8';
+            countInput.style.color = '#000000';
+            countInput.style.border = 'none';
+            countInput.style.borderRadius = '4px';
+            countInput.style.padding = '4px';
+            countInput.style.margin = '2px';
+            Object.assign(countInput.style, MWI_Calculator_UIStyles.quantityInput);
+            const addButton = document.createElement('button');
+            addButton.type = 'button';
+            addButton.textContent = MWI_Calculator_I18n.isChinese() ? '添加' : 'Add';
+            addButton.style.background = '#4CAF50';
+            addButton.style.color = MWI_Calculator_UITheme.onAction;
+            addButton.style.border = 'none';
+            addButton.style.borderRadius = '4px';
+            addButton.style.padding = '4px';
+            addButton.style.margin = '2px';
+            addButton.style.cursor = 'pointer';
+            addButton.addEventListener('click', () => {
+                const count = Math.max(0, parseInt(countInput.value, 10) || 0);
+                MWI_Calculator_Calculator.addAllItemsByCategory(dropdown.dataset.categoryHrid, count);
+            });
+            addButton.style.width = '35px';
+            controls.appendChild(dropdown);
+            controls.appendChild(countInput);
+            controls.appendChild(addButton);
+            MWI_Calculator_Calculator.compactSelectionControls(controls);
+            section.appendChild(controls);
+            return section;
+        }
+        static addAllItemsByCategory(categoryHrid, count = 1) {
+            if (!this.canUseCharacterData()) return;
+            if (!categoryHrid) return;
+            const itemDetailMap = MWI_Calculator.initClientData?.itemDetailMap;
+            if (!itemDetailMap) return;
+            let addedCount = 0;
+            Object.entries(itemDetailMap).forEach(([itemHrid, detail]) => {
+                if (!itemHrid.startsWith('/items/')) return;
+                // 与 DisplayItem 保持一致：加工产物、茶和咖啡可能需要特殊归类
+                let itemCategoryHrid = detail?.categoryHrid;
+                if ([...(MWI_Calculator_ActionDetailPlus.processableItemMap ?? new Map()).values()].includes(itemHrid)) {
+                    itemCategoryHrid = '/item_categories/materials';
+                }
+                else if (itemHrid.endsWith('_tea')) {
+                    itemCategoryHrid = '/item_categories/tea';
+                }
+                else if (itemHrid.endsWith('_coffee')) {
+                    itemCategoryHrid = '/item_categories/coffee';
+                }
+                if (itemCategoryHrid !== categoryHrid) return;
+                const item = MWI_Calculator_Calculator.targetItemsMap.get(itemHrid);
+                if (item) {
+                    item.count += count;
+                    item.updateDisplayElement();
+                }
+                else {
+                    MWI_Calculator_Calculator.targetItemsMap.set(itemHrid, new TargetItem(itemHrid, count));
+                }
+                addedCount++;
+            });
+            if (addedCount > 0) MWI_Calculator_Calculator.saveAndScheduleRender();
+        }
+        // 三个下拉框共享互斥管理；捕获阶段处理，不受选项stopPropagation影响。
+        static registerCalculatorDropdown(root, menu) {
+            this.calculatorDropdowns ||= new Map();
+            this.calculatorDropdowns.set(menu, root);
+            menu.dataset.calculatorDropdown = 'true';
+            if (this.dropdownEventsBound) return;
+            this.dropdownEventsBound = true;
+            const closeOutside = event => {
+                let inside = null;
+                this.calculatorDropdowns.forEach((owner, list) => {
+                    if (owner.contains(event.target)) inside = list;
+                });
+                this.closeCalculatorDropdowns(inside);
+            };
+            document.addEventListener('pointerdown', closeOutside, true);
+            document.addEventListener('click', closeOutside, true);
+            document.addEventListener('focusin', closeOutside, true);
+            document.addEventListener('keydown', event => {
+                if (event.key === 'Escape') this.closeCalculatorDropdowns();
+            }, true);
+        }
+        static closeCalculatorDropdowns(except = null) {
+            this.calculatorDropdowns?.forEach((root, menu) => {
+                if (menu !== except) menu.style.display = 'none';
+            });
+        }
+        static openCalculatorDropdown(menu) {
+            this.closeCalculatorDropdowns(menu);
+            menu.style.display = 'block';
+        }
+        static toggleCalculatorDropdown(menu) {
+            if (menu.style.display === 'block') menu.style.display = 'none';
+            else this.openCalculatorDropdown(menu);
+        }
+        // 创建物品搜索组件
+        static createItemSearchComponent() {
+            const itemSearchComponent = document.createElement('div');
+            itemSearchComponent.style.background = MWI_Calculator_UITheme.surface;
+            itemSearchComponent.style.border = 'none';
+            itemSearchComponent.style.borderRadius = '4px';
+            itemSearchComponent.style.padding = '4px';
+            itemSearchComponent.style.margin = '2px';
+            itemSearchComponent.style.display = 'flex';
+            itemSearchComponent.style.position = 'relative';
+            // 物品搜索输入框
+            const itemSearchInput = document.createElement('input');
+            itemSearchInput.type = 'text';
+            itemSearchInput.placeholder = (MWI_Calculator_I18n.isChinese()) ? '搜索物品名称...' : 'Search item name...';
+            itemSearchInput.style.background = '#dde2f8';
+            itemSearchInput.style.color = '#000000';
+            itemSearchInput.style.border = 'none';
+            itemSearchInput.style.borderRadius = '4px';
+            itemSearchInput.style.padding = '4px';
+            itemSearchInput.style.margin = '2px';
+            itemSearchInput.style.minWidth = '40px';
+            itemSearchInput.style.flex = '1';
+            // 搜索结果下拉列表
+            const searchResults = document.createElement('div');
+            searchResults.style.background = MWI_Calculator_UITheme.surface;
+            searchResults.style.border = 'none';
+            searchResults.style.borderRadius = '4px';
+            searchResults.style.padding = '4px';
+            searchResults.style.margin = '2px';
+            searchResults.style.width = '200px';
+            searchResults.style.maxHeight = '335px';
+            searchResults.style.overflowY = 'auto';
+            searchResults.style.zIndex = '1000';
+            searchResults.style.display = 'none';
+            searchResults.style.position = 'absolute';
+            searchResults.style.left = '4px';
+            searchResults.style.top = '32px';
+            // 数量输入框
+            const countInput = document.createElement('input');
+            countInput.type = 'text';
+            countInput.value = '1';
+            countInput.placeholder = (MWI_Calculator_I18n.isChinese()) ? '数量' : 'Count';
+            countInput.style.background = '#dde2f8';
+            countInput.style.color = '#000000';
+            countInput.style.border = 'none';
+            countInput.style.borderRadius = '4px';
+            countInput.style.padding = '4px';
+            countInput.style.margin = '2px';
+            countInput.style.width = '60px';
+            // 添加按钮
+            const addButton = document.createElement('button');
+            addButton.textContent = (MWI_Calculator_I18n.isChinese()) ? '添加' : 'Add';
+            addButton.style.background = '#4CAF50';
+            addButton.style.color = MWI_Calculator_UITheme.onAction;
+            addButton.style.border = 'none';
+            addButton.style.borderRadius = '4px';
+            addButton.style.padding = '4px';
+            addButton.style.margin = '2px';
+            addButton.style.cursor = 'pointer';
+            // 清空按钮
+            const clearAllButton = document.createElement('button');
+            clearAllButton.textContent = (MWI_Calculator_I18n.isChinese()) ? '清空' : 'Clear';
+            MWI_Calculator_UI.styleDangerButton(clearAllButton, true);
+            MWI_Calculator_Calculator.registerCalculatorDropdown(itemSearchComponent, searchResults);
+            // 绑定搜索事件
+            MWI_Calculator_Calculator.bindItemSearchComponentEvents(itemSearchInput, countInput, searchResults, addButton, clearAllButton);
+            itemSearchComponent.appendChild(itemSearchInput);
+            itemSearchComponent.appendChild(countInput);
+            itemSearchComponent.appendChild(addButton);
+            itemSearchComponent.appendChild(clearAllButton);
+            itemSearchComponent.appendChild(searchResults);
+            return itemSearchComponent;
+        }
+        // 绑定搜索相关事件
+        static bindItemSearchComponentEvents(itemSearchInput, countInput, searchResults, addButton, clearAllButton) {
+            // 输入框获得焦点时全选内容
+            itemSearchInput.addEventListener('focus', () => {
+                setTimeout(() => {
+                    itemSearchInput.select();
+                }, 0);
+            });
+            // 搜索功能
+            itemSearchInput.addEventListener('input', () => {
+                // 支持多关键词（空格隔开）：物品名称需同时包含全部关键词（AND 语义）
+                const searchTerms = itemSearchInput.value.toLowerCase().trim().split(/\s+/).filter(Boolean);
+                if (searchTerms.length < 1) {
+                    searchResults.style.display = 'none';
+                    return;
+                }
+                // 获取并过滤物品
+                const itemDetailMap = MWI_Calculator?.initClientData?.itemDetailMap;
+                if (!itemDetailMap)
+                    return;
+                const filteredItems = Object.keys(itemDetailMap)
+                    .filter(itemHrid => {
+                    const name = MWI_Calculator_I18n.getItemName(itemHrid).toLowerCase();
+                    return searchTerms.every(term => name.includes(term));
+                })
+                    .sort((a, b) => {
+                    const sortIndexA = MWI_Calculator_Utils.getSortIndexByItemHrid(a);
+                    const sortIndexB = MWI_Calculator_Utils.getSortIndexByItemHrid(b);
+                    return sortIndexA - sortIndexB;
+                });
+                if (filteredItems.length === 0) {
+                    searchResults.style.display = 'none';
+                    return;
+                }
+                MWI_Calculator_Calculator.populateSearchResults(searchResults, filteredItems, (itemHrid) => {
+                    itemSearchInput.value = MWI_Calculator_I18n.getItemName(itemHrid);
+                    searchResults.style.display = 'none';
+                });
+                MWI_Calculator_Calculator.openCalculatorDropdown(searchResults);
+            });
+            // 键盘操作
+            itemSearchInput.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter') {
+                    e.preventDefault();
+                    MWI_Calculator_Calculator.addItemAndResetItemSearchComponent(itemSearchInput, countInput, searchResults);
+                }
+                else if (e.key === 'Escape') {
+                    searchResults.style.display = 'none';
+                }
+            });
+            // 输入框获得焦点时全选内容
+            countInput.addEventListener('focus', () => {
+                setTimeout(() => {
+                    countInput.select();
+                }, 0);
+            });
+            // 仅允许输入数字
+            countInput.addEventListener('input', () => {
+                // 只允许负号在首位，其余为数字
+                countInput.value = countInput.value.replace(/(?!^)-|[^\d-]/g, '');
+            });
+            // 键盘操作
+            countInput.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter') {
+                    e.preventDefault();
+                    MWI_Calculator_Calculator.addItemAndResetItemSearchComponent(itemSearchInput, countInput, searchResults);
+                }
+                else if (e.key === 'Escape') {
+                    searchResults.style.display = 'none';
+                }
+            });
+            // 添加按钮事件
+            addButton.addEventListener('click', () => {
+                MWI_Calculator_Calculator.addItemAndResetItemSearchComponent(itemSearchInput, countInput, searchResults);
+            });
+            // 清空按钮事件
+            clearAllButton.addEventListener('click', () => {
+                if (confirm((MWI_Calculator_I18n.isChinese()) ? '确定要清空所有目标物品吗？' : 'Are you sure you want to clear all target items?')) {
+                    // 通过事件处理器清空
+                    MWI_Calculator_Calculator.clearAllTargetItems();
+                }
+            });
+            // 保留搜索词，再次点击输入框时重新显示匹配结果。
+            itemSearchInput.addEventListener('click', () => {
+                itemSearchInput.dispatchEvent(new Event('input', { bubbles: true }));
+            });
+        }
+        // 填充搜索结果
+        static populateSearchResults(searchResults, filteredItems, onItemSelect) {
+            searchResults.innerHTML = '';
+            filteredItems.forEach((itemHrid, index) => {
+                const resultItem = document.createElement('div');
+                resultItem.style.borderBottom = '1px solid #98a7e9';
+                resultItem.style.borderRadius = '4px';
+                resultItem.style.padding = '4px';
+                resultItem.style.alignItems = 'center';
+                resultItem.style.display = 'flex';
+                resultItem.style.cursor = 'pointer';
+                if (index === 0) {
+                    resultItem.style.background = '#4a4c6a';
+                }
+                // 物品图标
+                const itemIcon = document.createElement('div');
+                const iconHref = MWI_Calculator_Utils.getIconHrefByItemHrid(itemHrid);
+                const svg = MWI_Calculator_Utils.createIconSvg(iconHref);
+                itemIcon.appendChild(svg);
+                // 物品名称
+                const itemName = document.createElement('span');
+                itemName.textContent = MWI_Calculator_I18n.getItemName(itemHrid);
+                itemName.style.marginLeft = '2px';
+                resultItem.appendChild(itemIcon);
+                resultItem.appendChild(itemName);
+                // 悬停高亮
+                resultItem.addEventListener('mouseenter', () => {
+                    resultItem.style.background = '#4a4c6a';
+                });
+                resultItem.addEventListener('mouseleave', () => {
+                    resultItem.style.background = 'transparent';
+                });
+                resultItem.addEventListener('click', () => onItemSelect(itemHrid));
+                searchResults.appendChild(resultItem);
+            });
+        }
+        // 添加物品并重置搜索组件（包含itemHrid获取和判空）
+        static addItemAndResetItemSearchComponent(itemSearchInput, countInput, searchResults) {
+            const InputValue = itemSearchInput.value.trim();
+            // 如果InputValue是纯数字，则视为从特定角色加载数据
+            if (/^\d+$/.test(InputValue)) {
+                const characterID = parseInt(InputValue, 10);
+                MWI_Calculator_Calculator.importCalculatorData(characterID);
+                return;
+            }
+            const itemHrid = MWI_Calculator_I18n.getItemHridByName(InputValue);
+            if (!itemHrid)
+                return;
+            const count = parseInt(countInput.value, 10) || 1;
+            MWI_Calculator_Calculator.addTargetItem(itemHrid, count);
+            itemSearchInput.value = '';
+            countInput.value = '1';
+            searchResults.style.display = 'none';
+        }
+        // 相邻整数随机取整模型：整数消耗无随机余量，非整数按单侧99.9%上界备料。
+        static getMaterialBudget(mean, times, variance = 0) {
+            if (times <= 0 || mean <= 0) return 0;
+            const expected = mean * times;
+            if (variance <= 0) return expected;
+            return Math.min(times * Math.ceil(mean),
+                Math.ceil(expected + 3.090232306167813 * Math.sqrt(times * variance)));
+        }
+        static setMaterialPlanningMode(mode) {
+            if (!['redundant', 'limit'].includes(mode) || mode === this.materialPlanningMode) return;
+            this.materialPlanningMode = mode;
+            // 丢弃旧模式购买跳转缓存，后续按新缺口填入。
+            this.marketAutoFillTarget = null;
+            if (this.renderTimeout) {
+                clearTimeout(this.renderTimeout);
+                this.renderTimeout = null;
+            }
+            this.renderItemsDisplay();
+        }
+        static createMaterialPlanningModeSelector() {
+            const selector = document.createElement('div');
+            selector.style.cssText = 'display:flex;align-items:center;background:#2c2e45;border-radius:4px;padding:4px;margin:2px';
+            const label = document.createElement('span');
+            selector.className = 'mwi-planning-selector';
+            label.className = 'mwi-planning-label';
+            label.textContent = MWI_Calculator_I18n.isChinese() ? '备料计算' : 'Material planning';
+            label.title = label.textContent;
+            label.style.cssText = 'flex:0 0 auto;white-space:nowrap;color:#fff;margin:0 6px 0 2px';
+            selector.appendChild(label);
+            const buttons = {};
+            const update = () => Object.entries(buttons).forEach(([mode, button]) => {
+                const selected = this.materialPlanningMode === mode;
+                button.style.background = selected ? '#1976D2' : '#6B7280';
+                button.setAttribute('aria-pressed', String(selected));
+            });
+            [['redundant', '冗余', 'Buffered'], ['limit', '极限', 'Lean']].forEach(([mode, zh, en]) => {
+                const button = document.createElement('button');
+                button.type = 'button';
+                button.textContent = MWI_Calculator_I18n.isChinese() ? zh : en;
+                button.style.cssText = 'flex:1;color:#fff;border:none;border-radius:4px;padding:4px;margin:2px;cursor:pointer';
+                button.addEventListener('click', () => {
+                    this.setMaterialPlanningMode(mode);
+                    update();
+                });
+                buttons[mode] = button;
+                selector.appendChild(button);
+            });
+            update();
+            return selector;
+        }
+        // 创建建筑获取方式枚举（独立于建筑添加控件）
+        static createHouseAcquisitionModeSelector() {
+            const modeSelector = document.createElement('div');
+            modeSelector.style.background = MWI_Calculator_UITheme.surface;
+            modeSelector.style.borderRadius = '4px';
+            modeSelector.style.padding = '4px';
+            modeSelector.style.margin = '2px';
+            modeSelector.style.display = 'flex';
+            const modeButtons = {};
+            const updateModeButtons = () => Object.entries(modeButtons).forEach(([mode, button]) => {
+                const selected = MWI_Calculator_Calculator.houseAcquisitionMode === mode;
+                button.style.background = selected ? (mode === 'craft' ? '#1976D2' : '#F2B01E') : '#6B7280';
+            });
+            [['craft', '制作', 'Craft'], ['buy', '购买', 'Buy']].forEach(([mode, zh, en]) => {
+                const button = document.createElement('button');
+                button.type = 'button';
+                button.textContent = MWI_Calculator_I18n.isChinese() ? zh : en;
+                button.style.flex = '1';
+                button.style.background = '#6B7280';
+                button.style.color = MWI_Calculator_UITheme.onAction;
+                button.style.border = 'none';
+                button.style.borderRadius = '4px';
+                button.style.padding = '4px';
+                button.style.margin = '2px';
+                button.style.cursor = 'pointer';
+                button.addEventListener('click', () => {
+                    MWI_Calculator_Calculator.houseAcquisitionMode = mode;
+                    updateModeButtons();
+                });
+                modeButtons[mode] = button;
+                modeSelector.appendChild(button);
+            });
+            updateModeButtons();
+            return modeSelector;
+        }
+        static isIronCowMode() {
+            const gameObject = MWI_Calculator.gameObject;
+            const gameMode = String(
+                gameObject?.state?.character?.gameMode ??
+                gameObject?.props?.character?.gameMode ??
+                MWI_Calculator.initClientData?.character?.gameMode ??
+                MWI_Calculator.characterGameMode ?? ''
+            ).toLowerCase();
+            return gameMode === 'ironcow' || gameMode === 'legacy_ironcow';
+        }
+        // 创建房屋选择区域
+        static createHouseRoomSelectionComponent() {
+            const HouseRoomSelectionComponent = document.createElement('div');
+            HouseRoomSelectionComponent.style.background = MWI_Calculator_UITheme.surface;
+            HouseRoomSelectionComponent.style.border = 'none';
+            HouseRoomSelectionComponent.style.borderRadius = '4px';
+            HouseRoomSelectionComponent.style.padding = '4px';
+            HouseRoomSelectionComponent.style.margin = '2px';
+            HouseRoomSelectionComponent.style.display = 'flex';
+            HouseRoomSelectionComponent.style.flexDirection = 'column';
+            const controls = document.createElement('div');
+            controls.style.display = 'flex';
+            controls.style.width = '100%';
+            // 下拉菜单
+            const dropdown = MWI_Calculator_Calculator.createHouseRoomTypeDropdown();
+            // 等级输入框
+            const levelInput = document.createElement('input');
+            levelInput.type = 'number';
+            levelInput.min = '1';
+            levelInput.max = '8';
+            levelInput.step = '1';
+            levelInput.value = '1';
+            levelInput.placeholder = (MWI_Calculator_I18n.isChinese()) ? '等级' : 'Level';
+            levelInput.style.background = '#dde2f8';
+            levelInput.style.color = '#000000';
+            levelInput.style.border = 'none';
+            levelInput.style.borderRadius = '4px';
+            levelInput.style.padding = '4px';
+            levelInput.style.margin = '2px';
+            Object.assign(levelInput.style, MWI_Calculator_UIStyles.quantityInput);
+            // 添加按钮
+            const addListButton = document.createElement('button');
+            addListButton.textContent = (MWI_Calculator_I18n.isChinese()) ? '添加' : 'Add';
+            addListButton.style.background = '#4CAF50';
+            addListButton.style.color = MWI_Calculator_UITheme.onAction;
+            addListButton.style.border = 'none';
+            addListButton.style.borderRadius = '4px';
+            addListButton.style.padding = '4px';
+            addListButton.style.margin = '2px';
+            addListButton.style.width = '35px';
+            addListButton.style.cursor = 'pointer';
+            // 绑定事件
+            MWI_Calculator_Calculator.bindHouseRoomSelectionComponentEvents(dropdown, levelInput, addListButton);
+            controls.appendChild(dropdown);
+            controls.appendChild(levelInput);
+            controls.appendChild(addListButton);
+            MWI_Calculator_Calculator.compactSelectionControls(controls);
+            HouseRoomSelectionComponent.appendChild(controls);
+            return HouseRoomSelectionComponent;
+        }
+        static addAllHouseRooms(level = 1) {
+            if (!this.canUseCharacterData()) return;
+            const houseRoomDetailMap = MWI_Calculator.initClientData?.houseRoomDetailMap;
+            if (!houseRoomDetailMap) return;
+            const normalizedLevel = Math.min(8, Math.max(1, parseInt(level, 10) || 1));
+            let addedCount = 0;
+            Object.values(houseRoomDetailMap).forEach(houseRoom => {
+                if (!houseRoom?.hrid) return;
+                const existing = MWI_Calculator_Calculator.targetItemsMap.get(houseRoom.hrid);
+                if (existing) {
+                    existing.count = normalizedLevel;
+                    existing.updateDisplayElement();
+                }
+                else {
+                    MWI_Calculator_Calculator.targetItemsMap.set(houseRoom.hrid, new TargetHouseRoom(houseRoom.hrid, normalizedLevel));
+                }
+                addedCount++;
+            });
+            if (addedCount > 0) MWI_Calculator_Calculator.saveAndScheduleRender();
+        }
+        // 创建房屋类型下拉菜单
+        static createHouseRoomTypeDropdown() {
+            // 创建容器
+            const dropdown = document.createElement('div');
+            dropdown.style.display = 'flex';
+            dropdown.style.minWidth = '20px';
+            dropdown.style.flex = '1';
+            dropdown.style.position = 'relative';
+            // 选中项显示区
+            const selected = document.createElement('div');
+            selected.style.background = MWI_Calculator_UITheme.heading;
+            selected.style.color = MWI_Calculator_UITheme.onAction;
+            selected.style.border = 'none';
+            selected.style.borderRadius = '4px';
+            selected.style.paddingLeft = '4px';
+            selected.style.margin = '2px';
+            selected.style.minWidth = '40px';
+            selected.style.flex = '1';
+            selected.style.cursor = 'pointer';
+            selected.style.display = 'flex';
+            selected.style.alignItems = 'center';
+            // 下拉菜单列表
+            const list = document.createElement('div');
+            list.style.background = MWI_Calculator_UITheme.surface;
+            list.style.border = 'none';
+            list.style.borderRadius = '4px';
+            list.style.padding = '4px';
+            list.style.margin = '2px';
+            list.style.width = '150px';
+            list.style.maxHeight = '335px';
+            list.style.overflowY = 'auto';
+            list.style.zIndex = '1000';
+            list.style.display = 'none';
+            list.style.position = 'absolute';
+            list.style.left = '0px';
+            list.style.top = '32px';
+            const HouseRoomTypeOptions = MWI_Calculator_Calculator.createHouseRoomTypeOptions(selected, dropdown);
+            HouseRoomTypeOptions.forEach(optionItem => { list.appendChild(optionItem); });
+            selected.textContent = MWI_Calculator_I18n.isChinese() ? '选择房屋' : 'Select house';
+            dropdown.appendChild(selected);
+            dropdown.appendChild(list);
+            // 点击展开/收起
+            selected.addEventListener('click', (e) => {
+                e.stopPropagation();
+                MWI_Calculator_Calculator.toggleCalculatorDropdown(list);
+            });
+            MWI_Calculator_Calculator.registerCalculatorDropdown(dropdown, list);
+            return dropdown;
+        }
+        // 创建房屋类型选项
+        static createHouseRoomTypeOptions(selected, dropdown) {
+            const houseRoomDetailMap = MWI_Calculator.initClientData?.houseRoomDetailMap;
+            if (!houseRoomDetailMap) {
+                return [];
+            }
+            const allOption = document.createElement('div');
+            allOption.style.borderBottom = '1px solid #98a7e9';
+            allOption.style.borderRadius = '4px';
+            allOption.style.padding = '4px';
+            allOption.style.alignItems = 'center';
+            allOption.style.display = 'flex';
+            allOption.style.cursor = 'pointer';
+            allOption.textContent = MWI_Calculator_I18n.isChinese() ? '所有房屋' : 'All houses';
+            allOption.dataset.houseRoomHrid = '__all_house_rooms__';
+            allOption.addEventListener('mouseenter', () => { allOption.style.background = '#4a4c6a'; });
+            allOption.addEventListener('mouseleave', () => { allOption.style.background = 'transparent'; });
+            allOption.addEventListener('click', (event) => {
+                event.stopPropagation();
+                selected.textContent = allOption.textContent;
+                dropdown.dataset.houseRoomHrid = '__all_house_rooms__';
+                allOption.parentElement.style.display = 'none';
+            });
+            const roomOptions = Object.values(houseRoomDetailMap)
+                .sort((a, b) => (a.sortIndex ?? 9999) - (b.sortIndex ?? 9999))
+                .map(houseRoomDetail => {
+                const optionItem = document.createElement('div');
+                optionItem.style.borderBottom = '1px solid #98a7e9';
+                optionItem.style.borderRadius = '4px';
+                optionItem.style.padding = '4px';
+                optionItem.style.alignItems = 'center';
+                optionItem.style.display = 'flex';
+                optionItem.style.cursor = 'pointer';
+                // 房屋房间图标
+                const houseRoomIcon = document.createElement('div');
+                const iconHref = MWI_Calculator_Utils.getIconHrefBySkillHrid(houseRoomDetail.skillHrid);
+                const svg = MWI_Calculator_Utils.createIconSvg(iconHref);
+                houseRoomIcon.appendChild(svg);
+                // 房屋房间名称
+                const houseRoomName = document.createElement('span');
+                houseRoomName.textContent = MWI_Calculator_I18n?.getName(houseRoomDetail.hrid, "houseRoomNames") || houseRoomDetail.hrid;
+                houseRoomName.style.marginLeft = '2px';
+                houseRoomName.style.whiteSpace = 'nowrap';
+                houseRoomName.style.overflow = 'hidden';
+                optionItem.appendChild(houseRoomIcon);
+                optionItem.appendChild(houseRoomName);
+                optionItem.addEventListener('click', () => {
+                    selected.innerHTML = '';
+                    const selectedIcon = houseRoomIcon.cloneNode(true);
+                    selected.appendChild(selectedIcon);
+                    const selectedName = houseRoomName.cloneNode(true);
+                    selectedName.style.color = MWI_Calculator_UITheme.onAction;
+                    selected.appendChild(selectedName);
+                    dropdown.dataset.houseRoomHrid = houseRoomDetail.hrid;
+                    optionItem.parentElement.style.display = 'none';
+                });
+                // 悬停高亮
+                optionItem.addEventListener('mouseenter', () => {
+                    optionItem.style.background = '#4a4c6a';
+                });
+                optionItem.addEventListener('mouseleave', () => {
+                    optionItem.style.background = 'transparent';
+                });
+                optionItem.dataset.houseRoomHrid = houseRoomDetail.hrid;
+                return optionItem;
+            });
+            return [allOption, ...roomOptions];
+        }
+        // 绑定房屋选择相关事件
+        static bindHouseRoomSelectionComponentEvents(dropdown, levelInput, addListButton) {
+            // 输入框获得焦点时全选内容
+            levelInput.addEventListener('focus', function () {
+                setTimeout(() => {
+                    levelInput.select();
+                }, 0);
+            });
+            // 添加按钮事件
+            addListButton.addEventListener('click', () => {
+                const houseRoomHrid = dropdown.dataset.houseRoomHrid;
+                const level = parseInt(levelInput.value) || 1;
+                if (houseRoomHrid === '__all_house_rooms__') {
+                    MWI_Calculator_Calculator.addAllHouseRooms(level);
+                    return;
+                }
+                if (!houseRoomHrid) return;
+                MWI_Calculator_Calculator.updateTargetItem(houseRoomHrid, level);
+            });
+        }
+        // 渲染物品列表
+        static renderItemsDisplay() {
+            if (!this.isPanelVisible()) { this.renderDirty = true; return; }
+            const previous = MWI_Calculator_ActionDetailPlus.renderRecipeCache;
+            MWI_Calculator_ActionDetailPlus.renderRecipeCache = new Map();
+            this.renderingVisible = true;
+            try { this.renderVisibleItems(); this.renderDirty = false; }
+            finally {
+                this.renderingVisible = false;
+                MWI_Calculator_ActionDetailPlus.renderRecipeCache = previous;
+            }
+        }
+        static renderVisibleItems() {
+            const targetGroups = this.groupItems(this.targetItemsMap.values());
+            MWI_Calculator_Calculator.targetItemCategoryMap.forEach((category) => {
+                category.updateDisplayElement(targetGroups.get(category.categoryHrid) || []);
+            });
+            // 这里只需要新增或更新，删除在targetItems变动时进行处理
+            MWI_Calculator_Calculator.itemCategoryList.forEach(categoryHrid => {
+                const details = MWI_Calculator_Calculator.targetItemDetailsMap.get(categoryHrid);
+                let lastElement = details.querySelector('summary');
+                let itemCount = 0;
+                (targetGroups.get(categoryHrid) || []).forEach(targetItem => {
+                    if (!targetItem.displayElement) {
+                        MWI_Calculator_Calculator.createTargetItemDisplayElement(targetItem);
+                        lastElement.insertAdjacentElement('afterend', targetItem.displayElement);
+                    }
+                    targetItem.updateDisplayElement();
+                    lastElement = targetItem.displayElement;
+                    itemCount++;
+                });
+                if (details.hidden !== (itemCount === 0)) details.hidden = itemCount === 0;
+            });
+            // 先同步拥有数量并评估预警勾选，缺口计算才能使用最新参与状态
+            this.updateAppliedPresetRows();
+            const inventoryMap = MWI_Calculator_ItemsMap.getInventoryMap();
+            const totalNeeds = MWI_Calculator_Calculator.calculateAllRequiredItems(new Map());
+            const downgradeItems = new Map();
+            const remainNeeds = this.calculateAllRequiredItems(inventoryMap, {
+                enhancedInventory: MWI_Calculator_ItemsMap.getEnhancedInventoryMap(), downgradeItems
+            });
+            this.renderDowngradeItems(downgradeItems);
+            // 移除不存在的物品
+            [...MWI_Calculator_Calculator.requiredItemsMap.keys()].forEach(itemHrid => {
+                if (!totalNeeds.has(itemHrid)) {
+                    MWI_Calculator_Calculator.requiredItemsMap.get(itemHrid)?.removeDisplayElement();
+                    MWI_Calculator_Calculator.requiredItemsMap.delete(itemHrid);
+                }
+            });
+            [...totalNeeds.keys()].forEach(itemHrid => {
+                const item = MWI_Calculator_Calculator.requiredItemsMap.get(itemHrid);
+                if (item) {
+                    item.count = totalNeeds.get(itemHrid) || 0;
+                    item.shortageCount = remainNeeds.get(itemHrid) || 0;
+                    item.overflowCount = inventoryMap.get(itemHrid) || 0;
+                }
+                else {
+                    MWI_Calculator_Calculator.requiredItemsMap.set(itemHrid, new RequiredItem(itemHrid, totalNeeds.get(itemHrid) || 0, remainNeeds.get(itemHrid) || 0, inventoryMap.get(itemHrid) || 0));
+                }
+            });
+            const requiredGroups = this.groupItems(this.requiredItemsMap.values());
+            MWI_Calculator_Calculator.itemCategoryList.forEach(categoryHrid => {
+                const shortageDetails = MWI_Calculator_Calculator.shortageItemDetailsMap.get(categoryHrid);
+                const requiredDetails = MWI_Calculator_Calculator.requiredItemDetailsMap.get(categoryHrid);
+                let lastShortageElement = shortageDetails.querySelector('summary');
+                let lastRequiredElement = requiredDetails.querySelector('summary');
+                let shortageItemCount = 0;
+                let requiredItemCount = 0;
+                (requiredGroups.get(categoryHrid) || []).forEach(requiredItem => {
+                    if (!requiredItem.shortageDisplayElement) {
+                        MWI_Calculator_Calculator.createShortageItemDisplayElement(requiredItem);
+                        lastShortageElement.insertAdjacentElement('afterend', requiredItem.shortageDisplayElement);
+                    }
+                    if (!requiredItem.requiredDisplayElement) {
+                        MWI_Calculator_Calculator.createRequiredItemDisplayElement(requiredItem);
+                        lastRequiredElement.insertAdjacentElement('afterend', requiredItem.requiredDisplayElement);
+                    }
+                    requiredItem.updateDisplayElement();
+                    lastShortageElement = requiredItem.shortageDisplayElement;
+                    lastRequiredElement = requiredItem.requiredDisplayElement;
+                    shortageItemCount += requiredItem.shortageCount > 0 ? 1 : 0;
+                    requiredItemCount++;
+                });
+                if (shortageDetails.hidden !== (shortageItemCount === 0)) shortageDetails.hidden = shortageItemCount === 0;
+                if (requiredDetails.hidden !== (requiredItemCount === 0)) requiredDetails.hidden = requiredItemCount === 0;
+            });
+        }
+        // 创建目标物品元素
+        static createTargetItemDisplayElement(targetItem) {
+            const { container, itemContainer, leftDiv, rightDiv } = MWI_Calculator_Calculator.createBaseItemDisplayItem(targetItem);
+            const needCalcCheckbox = document.createElement('input');
+            needCalcCheckbox.type = 'checkbox';
+            container.prepend(needCalcCheckbox);
+            needCalcCheckbox.addEventListener('change', () => {
+                targetItem.needCalc = needCalcCheckbox.checked;
+                MWI_Calculator_Calculator.saveAndScheduleRender();
+            });
+            // 拥有数量
+            const ownedSpan = document.createElement('span');
+            ownedSpan.style.padding = '4px 1px';
+            ownedSpan.style.marginLeft = '4px';
+            // 斜杠分隔符
+            const slash = document.createElement('span');
+            slash.textContent = "/";
+            slash.style.padding = '4px 1px';
+            // 可编辑的需求数量输入框
+            const targetInput = document.createElement('input');
+            targetInput.type = 'text';
+            targetInput.placeholder = '需求';
+            targetInput.style.background = '#dde2f8';
+            targetInput.style.color = '#000000';
+            targetInput.style.border = 'none';
+            targetInput.style.borderRadius = '4px';
+            targetInput.style.padding = '4px';
+            targetInput.style.margin = '2px';
+            Object.assign(targetInput.style, MWI_Calculator_UIStyles.quantityInput);
+            // 绑定输入事件
+            targetInput.addEventListener('input', function () {
+                // 清理非数字字符
+                this.value = this.value.replace(/(?!^)-|[^\d-]/g, '');
+                const newCount = parseInt(this.value) || 0;
+                MWI_Calculator_Calculator.updateTargetItem(targetItem.itemHrid, newCount);
+            });
+            // 输入框获得焦点时全选内容
+            targetInput.addEventListener('focus', function () {
+                setTimeout(() => {
+                    targetInput.select();
+                }, 0);
+            });
+            // 删除按钮
+            const removeButton = document.createElement('button');
+            MWI_Calculator_UI.styleDangerButton(removeButton);
+            const iconHref = MWI_Calculator_Utils.getIconHrefByMiscHrid('remove');
+            const removeSvg = MWI_Calculator_Utils.createIconSvg(iconHref);
+            removeButton.appendChild(removeSvg);
+            removeButton.addEventListener('click', () => {
+                MWI_Calculator_Calculator.removeTargetItem(targetItem.itemHrid);
+            });
+            rightDiv.appendChild(ownedSpan);
+            rightDiv.appendChild(slash);
+            rightDiv.appendChild(targetInput);
+            rightDiv.appendChild(removeButton);
+            targetItem.displayElement = container;
+            targetItem.needCalcCheckbox = needCalcCheckbox;
+            targetItem.ownedSpan = ownedSpan;
+            targetItem.targetInput = targetInput;
+            leftDiv.remove();
+            MWI_Calculator_UI.attachTargetLayout(container, itemContainer, rightDiv, ownedSpan, targetInput, removeButton);
+            targetInput.addEventListener('input', () => MWI_Calculator_UI.scheduleTargetLayout(container));
+        }
+        static createDowngradeSection() {
+            const details = document.createElement('details');
+            details.className = 'mwi-downgrade-section';
+            details.hidden = true;
+            details.open = true;
+            const summary = document.createElement('summary');
+            summary.textContent = MWI_Calculator_I18n.isChinese() ? '强化降级' : 'Enhancement downgrade';
+            details.appendChild(summary);
+            // 虚拟分类仅承载圆角底框，不增加分类标题或折叠操作。
+            const itemsContainer = document.createElement('div');
+            itemsContainer.className = 'mwi-downgrade-items';
+            Object.assign(itemsContainer.style, MWI_Calculator_UIStyles.category);
+            details.appendChild(itemsContainer);
+            this.downgradeItemsContainer = itemsContainer;
+            this.downgradeDetails = details;
+            this.downgradeRows = new Map();
+            return details;
+        }
+        static renderDowngradeItems(items) {
+            if (!this.downgradeDetails) return;
+            for (const [key, row] of this.downgradeRows) {
+                if (!items.has(key)) { row.element.remove(); this.downgradeRows.delete(key); }
+            }
+            const sorted = [...items.entries()].sort(([, a], [, b]) =>
+                MWI_Calculator_Utils.getSortIndexByItemHrid(a.itemHrid) - MWI_Calculator_Utils.getSortIndexByItemHrid(b.itemHrid)
+                || a.itemHrid.localeCompare(b.itemHrid) || a.enhancementLevel - b.enhancementLevel);
+            let previous = null;
+            for (const [key, item] of sorted) {
+                let row = this.downgradeRows.get(key);
+                if (!row) {
+                    // 复用缺口物品行，保持图标、名称、数量框及间距一致。
+                    const displayItem = {
+                        iconHref: MWI_Calculator_Utils.getIconHrefByItemHrid(item.itemHrid),
+                        displayName: MWI_Calculator_I18n.getItemName(item.itemHrid),
+                    };
+                    this.createShortageItemDisplayElement(displayItem, () => this.gotoDowngradeEnhancing(item));
+                    const element = displayItem.shortageDisplayElement;
+                    element.classList.add('mwi-downgrade-item');
+                    const label = displayItem.itemJumpButton.querySelector('span');
+                    label.classList.add('mwi-downgrade-name');
+                    const level = document.createElement('span');
+                    level.className = 'mwi-downgrade-level';
+                    level.textContent = `+${item.enhancementLevel}`;
+                    const itemContainer = displayItem.itemJumpButton.firstElementChild;
+                    // 图标固定、名称可收缩、等级按内容宽度保留；短名称不占满余宽。
+                    itemContainer.style.display = 'flex';
+                    itemContainer.style.justifyContent = 'flex-start';
+                    itemContainer.style.textAlign = 'left';
+                    itemContainer.firstElementChild.style.flex = '0 0 22px';
+                    label.style.flex = '0 1 auto';
+                    label.style.textAlign = 'left';
+                    displayItem.itemJumpButton.style.justifyContent = 'flex-start';
+                    displayItem.itemJumpButton.style.flex = '1 1 0';
+                    level.style.flex = '0 0 auto';
+                    level.style.maxWidth = 'none';
+                    level.style.marginLeft = '2px';
+                    level.style.whiteSpace = 'nowrap';
+                    level.style.overflow = 'visible';
+                    level.style.textOverflow = 'clip';
+                    level.style.textAlign = 'left';
+                    itemContainer.appendChild(level);
+                    const quantity = displayItem.shortageSpan;
+                    quantity.classList.add('mwi-downgrade-count');
+                    row = { element, quantity };
+                    this.downgradeRows.set(key, row);
+                }
+                const equippedNeeded = Math.max(0, item.count - MWI_Calculator_ItemsMap.getInventoryOnlyCount(item.itemHrid, item.enhancementLevel));
+                const title = `${MWI_Calculator_I18n.getItemName(item.itemHrid)} +${item.enhancementLevel}`
+                    + (equippedNeeded > 0 ? `（其中 ${equippedNeeded} 件已装备，请先手动卸下）` : '');
+                if (row.element.title !== title) row.element.title = title;
+                const text = MWI_Calculator_Utils.formatNumber(item.count);
+                if (row.quantity.textContent !== text) row.quantity.textContent = text;
+                if (previous) {
+                    if (previous.nextElementSibling !== row.element) previous.insertAdjacentElement('afterend', row.element);
+                } else if (this.downgradeItemsContainer.firstElementChild !== row.element) {
+                    this.downgradeItemsContainer.prepend(row.element);
+                }
+                previous = row.element;
+            }
+            this.downgradeDetails.hidden = sorted.length === 0;
+        }
+        static gotoDowngradeEnhancing(item) {
+            if (!this.canUseCharacterData()) return false;
+            const game = MWI_Calculator.getGameObject() || MWI_Calculator.gameObject;
+            if (this.normalizeCharacterID(game?.state?.character?.id) !== this.activeCharacterID) return false;
+            // 使用游戏真实库存hash（含角色、库存位置、物品及强化等级），不猜测参数。
+            for (const [hash, owned] of game?.state?.characterItemMap || []) {
+                if (owned.itemHrid === item.itemHrid && owned.enhancementLevel === item.enhancementLevel
+                    && owned.itemLocationHrid === '/item_locations/inventory' && owned.count > 0
+                    && typeof game.handleEnhanceItem === 'function') {
+                    game.handleEnhanceItem(hash);
+                    return true;
+                }
+            }
+            const equipped = [...(game?.state?.characterItemMap?.values() || [])].some(owned =>
+                owned.itemHrid === item.itemHrid && owned.enhancementLevel === item.enhancementLevel && owned.count > 0
+                && owned.itemLocationHrid !== '/item_locations/inventory' && MWI_Calculator_ItemsMap.isMaterialLocation(owned.itemLocationHrid));
+            if (equipped) alert('该材料当前已装备，请先手动卸下，再点击进入强化界面。');
+            else console.warn('[MWI_Calculator] 强化跳转目标已不在库存或游戏接口未就绪');
+            return false;
+        }
+        // 创建缺口物品元素
+        static createShortageItemDisplayElement(requiredItem, onNavigate = null) {
+            const { container, itemContainer, leftDiv, rightDiv } = MWI_Calculator_Calculator.createBaseItemDisplayItem(requiredItem);
+            // 将图标和名称包裹在可点击按钮中，按“制作/购买”枚举跳转
+            const itemJumpButton = document.createElement('button');
+            itemJumpButton.type = 'button';
+            itemJumpButton.style.display = 'flex';
+            itemJumpButton.style.alignItems = 'center';
+            // 占据数量区域之前的全部剩余宽度，同时保留图标和名称的最小可见宽度
+            itemJumpButton.style.flex = '1 1 auto';
+            itemJumpButton.style.minWidth = '0';
+            itemJumpButton.style.maxWidth = 'none';
+            itemJumpButton.style.width = 'auto';
+            itemJumpButton.style.padding = '0';
+            itemJumpButton.style.margin = '0';
+            itemJumpButton.style.border = 'none';
+            itemJumpButton.style.background = 'transparent';
+            itemJumpButton.style.color = 'inherit';
+            itemJumpButton.style.font = 'inherit';
+            itemJumpButton.style.textAlign = 'left';
+            itemJumpButton.style.cursor = 'pointer';
+            itemJumpButton.title = MWI_Calculator_I18n.isChinese() ? '点击跳转' : 'Click to navigate';
+            itemContainer.style.cursor = 'pointer';
+            itemContainer.style.width = '100%';
+            itemContainer.style.minWidth = '0';
+            const displayNameSpan = itemContainer.querySelector('span');
+            if (displayNameSpan) {
+                displayNameSpan.style.flex = '1 1 auto';
+                displayNameSpan.style.minWidth = '0';
+                displayNameSpan.style.overflow = 'hidden';
+                displayNameSpan.style.textOverflow = 'ellipsis';
+            }
+            // 基础项中的空白占位仅用于非按钮项；缺口项由跳转按钮直接填充
+            leftDiv?.remove();
+            itemJumpButton.appendChild(itemContainer);
+            container.insertBefore(itemJumpButton, container.firstChild);
+            itemJumpButton.addEventListener('click', () => {
+                if (onNavigate) { onNavigate(); return; }
+                if (MWI_Calculator_Calculator.houseAcquisitionMode === 'buy') {
+                    MWI_Calculator_Calculator.TryGotoMarketplaceByRequiredItem(requiredItem);
+                }
+                else {
+                    MWI_Calculator_Calculator.TryGotoActionDetailByRequiredItem(requiredItem);
+                }
+            });
+            const shortageSpan = document.createElement('span');
+            shortageSpan.style.background = MWI_Calculator_UITheme.heading;
+            shortageSpan.style.borderRadius = '4px';
+            shortageSpan.style.padding = '2px 6px';
+            shortageSpan.style.marginLeft = '4px';
+            // 数量区域保持自身宽度，跳转按钮仅占据其左侧剩余空间
+            rightDiv.style.flex = '0 0 auto';
+            rightDiv.appendChild(shortageSpan);
+            requiredItem.shortageDisplayElement = container;
+            requiredItem.shortageSpan = shortageSpan;
+            requiredItem.itemJumpButton = itemJumpButton;
+        }
+        // 创建需求物品元素
+        static createRequiredItemDisplayElement(requiredItem) {
+            const { container, itemContainer, rightDiv } = MWI_Calculator_Calculator.createBaseItemDisplayItem(requiredItem);
+            const RequiredCountDiv = document.createElement('div');
+            RequiredCountDiv.style.padding = '4px 1px';
+            RequiredCountDiv.style.marginLeft = '4px';
+            const overflowSpan = document.createElement('span');
+            const requiredSpan = document.createElement('span');
+            requiredSpan.style.display = 'inline-block';
+            requiredSpan.style.textAlign = 'right';
+            requiredSpan.style.width = '45px';
+            const slash = document.createElement('span');
+            slash.textContent = '/';
+            slash.style.margin = '0px 2px';
+            rightDiv.appendChild(overflowSpan);
+            rightDiv.appendChild(slash);
+            rightDiv.appendChild(requiredSpan);
+            requiredItem.requiredDisplayElement = container;
+            requiredItem.overflowSpan = overflowSpan;
+            requiredItem.requiredSpan = requiredSpan;
+            requiredItem.displayNameSpan = itemContainer.querySelector('span');
+            rightDiv.appendChild(RequiredCountDiv);
+        }
+        // 创建基础物品显示项（包含图标+名称+右侧区域）
+        static createBaseItemDisplayItem(displayItem) {
+            const container = document.createElement('div');
+            container.className = 'Toolkit_Calculator_Container';
+            Object.assign(container.style, MWI_Calculator_UIStyles.itemRow);
+            const itemContainer = MWI_Calculator_Calculator.createItemContainer(displayItem);
+            container.appendChild(itemContainer);
+            const leftDiv = document.createElement('div');
+            leftDiv.style.flex = '1';
+            container.appendChild(leftDiv);
+            // 右侧内容
+            const rightDiv = document.createElement('div');
+            rightDiv.style.display = 'flex';
+            container.appendChild(rightDiv);
+            return { container, itemContainer, leftDiv, rightDiv };
+        }
+        // 创建物品容器（图标+名称）
+        static createItemContainer(displayItem) {
+            const container = document.createElement('div');
+            container.style.minWidth = '40px';
+            container.style.alignItems = 'center';
+            container.style.display = 'flex';
+            // 物品图标
+            const iconContainer = document.createElement('div');
+            iconContainer.style.marginLeft = '2px';
+            const svg = MWI_Calculator_Utils.createIconSvg(displayItem.iconHref);
+            iconContainer.appendChild(svg);
+            // 物品名称
+            const displayNameSpan = document.createElement('span');
+            displayNameSpan.textContent = displayItem.displayName;
+            displayNameSpan.style.padding = "4px 1px";
+            displayNameSpan.style.marginLeft = '2px';
+            displayNameSpan.style.whiteSpace = 'nowrap';
+            displayNameSpan.style.overflow = 'hidden';
+            container.appendChild(iconContainer);
+            container.appendChild(displayNameSpan);
+            return container;
+        }
+        // 尝试打开动作面板
+        static TryGotoActionDetailByRequiredItem(requiredItem) {
+            const actionHrid = MWI_Calculator_ActionDetailPlus.getActionHrid(requiredItem.displayName)
+                ?? MWI_Calculator_ActionDetailPlus.processableActionMap.get(requiredItem.itemHrid);
+            if (!actionHrid) {
+                // 无制作渠道时沿用购买跳转，不切换全局制作/购买模式。
+                return this.TryGotoMarketplaceByRequiredItem(requiredItem);
+            }
+            const { upgradeItemHrid, inputItems, outputItems } = MWI_Calculator_ActionDetailPlus.calculateActionDetail(actionHrid);
+            const outputCount = outputItems.find(oi => oi.itemHrid === requiredItem.itemHrid)?.count;
+            if (!outputCount) {
+                // 动作缺失、不支持或未产出该物品时同样进入购买界面。
+                return this.TryGotoMarketplaceByRequiredItem(requiredItem);
+            }
+            if (!actionHrid.includes('/milking/') && !actionHrid.includes('/foraging/') && !actionHrid.includes('/woodcutting/')) {
+                // 与备料展开共用产出参数、模式和保底上限。
+                const production = MWI_Calculator_ActionDetailPlus.getProductionOutputStats(
+                    actionHrid, requiredItem.itemHrid, outputCount);
+                const actionCount = MWI_Calculator_Calculator.getProductionActionCount(production, requiredItem.shortageCount);
+                MWI_Calculator.gameObject.handleGoToAction(actionHrid, actionCount);
+            }
+            else {
+                // 三采使用单侧99.9%正态近似增加随机产出余量
+                const processedItemHrid = MWI_Calculator_ActionDetailPlus.processableItemMap.get(requiredItem.itemHrid);
+                if (processedItemHrid) {
+                    // 对于可加工物品，检查加工茶和工匠茶的影响
+                    const processedItemOutputCount = outputItems.find(oi => oi.itemHrid === processedItemHrid)?.count || 0;
+                    const processedItemShortageCount = MWI_Calculator_Calculator.requiredItemsMap.get(processedItemHrid)?.shortageCount || 0;
+                    if (processedItemOutputCount !== 0 && processedItemShortageCount !== 0) {
+                        const processedItemInputCount = MWI_Calculator_ActionDetailPlus.tryGetRecipe(processedItemHrid)
+                            .inputs.find(ii => ii.itemHrid === requiredItem.itemHrid)?.count || 2;
+                        if (requiredItem.shortageCount < (processedItemShortageCount / processedItemOutputCount * outputCount)) {
+                            // 加工茶效果产物不能完全覆盖需求，按比例计算
+                            const actionCount = MWI_Calculator_Calculator.getRequiredTrials999(outputCount, requiredItem.shortageCount / (outputCount + processedItemOutputCount * processedItemInputCount) * outputCount);
+                            MWI_Calculator.gameObject.handleGoToAction(actionHrid, actionCount);
+                        }
+                        else {
+                            // 加工茶效果产物可以完全覆盖需求，从原材料中扣除总数对应原料
+                            const actionCount = MWI_Calculator_Calculator.getRequiredTrials999(outputCount, requiredItem.shortageCount - processedItemShortageCount * processedItemInputCount);
+                            MWI_Calculator.gameObject.handleGoToAction(actionHrid, actionCount);
+                        }
+                        return;
+                    }
+                }
+                // 使用单侧99.9%正态近似计算所需次数
+                const actionCount = MWI_Calculator_Calculator.getRequiredTrials999(outputCount, requiredItem.shortageCount);
+                MWI_Calculator.gameObject.handleGoToAction(actionHrid, actionCount);
+            }
+        }
+        // 购买模式进入游戏市场并预选物品（独立实现）
+        static TryGotoMarketplaceByRequiredItem(requiredItem) {
+            const itemHrid = String(requiredItem?.itemHrid || '');
+            if (!itemHrid) return false;
+            const level = Number(requiredItem?.enhancementLevel) || 0;
+            const resolved = MWI_Calculator_Calculator.resolveMarketplaceHandler();
+            if (!resolved) return false;
+            const target = itemHrid.startsWith('/items/') ? itemHrid : `/items/${itemHrid}`;
+            const bareItemId = target.replace(/^\/items\//, '');
+            MWI_Calculator_Calculator.marketAutoFillTarget = {
+                itemHrid: target,
+                quantity: Math.max(1, Math.ceil(Number(requiredItem?.shortageCount) || 1)),
+                // 市场组件切换和购买弹窗渲染可能跨越多个 React 更新周期，保留目标一段时间
+                expiresAt: Date.now() + 30000
+            };
+            MWI_Calculator_Calculator.ensureMarketAutoFillObserver();
+            try {
+                if (resolved.floating && typeof resolved.host.setState === 'function') {
+                    resolved.host.setState({
+                        showMarketplaceModal: true,
+                        marketViewOverrideData: { itemHrid: target, enhancementLevel: level }
+                    });
+                    return true;
+                }
+                const argumentSets = [[target, level], [target], [bareItemId, level], [bareItemId]];
+                for (const args of argumentSets) {
+                    try {
+                        resolved.fn.call(resolved.host, ...args);
+                        return true;
+                    }
+                    catch { /* 尝试下一个兼容参数签名 */ }
+                }
+            }
+            catch (error) {
+                console.warn('[MWI_Calculator] 市场跳转失败', error);
+            }
+            return false;
+        }
+        // 从 React Fiber 树中查找游戏市场导航组件
+        static resolveMarketplaceHandler() {
+            const root = document.getElementById('root');
+            const fibers = [];
+            const pushFiber = value => {
+                const fiber = value?.current ?? value;
+                if (fiber && typeof fiber === 'object' && !fibers.includes(fiber)) fibers.push(fiber);
+            };
+            pushFiber(root?._reactRootContainer?.current);
+            pushFiber(root?._reactRootContainer?._internalRoot?.current);
+            for (const element of [root, document.body]) {
+                for (const key of Object.getOwnPropertyNames(element || {})) {
+                    if (key.startsWith('__reactContainer') || key.startsWith('__reactFiber') || key.startsWith('__reactInternalInstance')) pushFiber(element[key]);
+                }
+            }
+            const seen = new Set();
+            let fallback = null;
+            while (fibers.length && seen.size < 50000) {
+                const fiber = fibers.pop();
+                if (!fiber || seen.has(fiber)) continue;
+                seen.add(fiber);
+                const host = fiber.stateNode;
+                if (typeof host?.handleGoToMarketplace === 'function' && typeof host?.handleCloseMarketplaceModal === 'function' && typeof host?.setState === 'function') return { host, fn: host.handleGoToMarketplace, floating: true };
+                const fn = host?.handleGoToMarketplace ?? host?.goToMarketplace ?? host?.openMarketplace;
+                if (!fallback && typeof fn === 'function') fallback = { host, fn, floating: false };
+                if (fiber.child) fibers.push(fiber.child);
+                if (fiber.sibling) fibers.push(fiber.sibling);
+            }
+            return fallback;
+        }
+        // 监听市场购买弹窗并自动填入当前缺口数量。市场按钮点击后，弹窗
+        // 是异步渲染的，因此不能只给按钮绑定 click 事件。
+        static ensureMarketAutoFillObserver() {
+            this.marketAutoFillEnabled = true;
+            if (!this.isPanelVisible()) { this.suspendPanelWork(); return; }
+            if (MWI_Calculator_Calculator.marketAutoFillObserver || typeof MutationObserver === 'undefined') {
+                MWI_Calculator_Calculator.prefillMarketplacePurchaseModal();
+            }
+            else {
+                MWI_Calculator_Calculator.marketAutoFillObserver = new MutationObserver(() => {
+                    if (!this.isPanelVisible()) { this.suspendPanelWork(); return; }
+                    if (this.marketFillFrame) return;
+                    this.marketFillFrame = requestAnimationFrame(() => {
+                        this.marketFillFrame = null;
+                        this.prefillMarketplacePurchaseModal();
+                    });
+                });
+                const root = document.body || document.documentElement;
+                if (root) {
+                    MWI_Calculator_Calculator.marketAutoFillObserver.observe(root, {
+                        childList: true,
+                        subtree: true,
+                        attributes: true,
+                        attributeFilter: ['class', 'style', 'aria-hidden']
+                    });
+                }
+            }
+            MWI_Calculator_Calculator.prefillMarketplacePurchaseModal();
+            // 某些版本的市场弹窗只切换既有节点的可见状态，不会产生 childList
+            // 变更；短时轮询可覆盖这类 React 渲染路径。
+            if (!MWI_Calculator_Calculator.marketAutoFillTimer) {
+                MWI_Calculator_Calculator.marketAutoFillTimer = setInterval(() => {
+                    const active = MWI_Calculator_Calculator.marketAutoFillTarget;
+                    if (!active || Date.now() > active.expiresAt) {
+                        clearInterval(MWI_Calculator_Calculator.marketAutoFillTimer);
+                        MWI_Calculator_Calculator.marketAutoFillTimer = null;
+                        return;
+                    }
+                    MWI_Calculator_Calculator.prefillMarketplacePurchaseModal();
+                }, 100);
+            }
+        }
+        static prefillMarketplacePurchaseModal() {
+            if (!this.isPanelVisible()) { this.suspendPanelWork(); return false; }
+            let target = MWI_Calculator_Calculator.marketAutoFillTarget;
+            if (target && Date.now() > target.expiresAt) {
+                MWI_Calculator_Calculator.marketAutoFillTarget = null;
+                target = null;
+            }
+            const visible = element => element && element.getClientRects && element.getClientRects().length > 0;
+            const modals = document.querySelectorAll('[class*="MarketplacePanel_modalContent"]');
+            for (const modal of modals) {
+                if (!visible(modal)) continue;
+                const header = modal.querySelector('[class*="MarketplacePanel_header"]')?.textContent || '';
+                if (!/立即购买|购买挂牌|购买订单|buy|purchase/i.test(header)) continue;
+                const use = modal.querySelector('svg use');
+                const href = use?.getAttribute('href') || use?.getAttribute('xlink:href') || '';
+                const rawId = String(href).split('#').pop()?.replace(/^\/items\//, '') || '';
+                if (!rawId) continue;
+                const modalItemHrid = `/items/${rawId}`;
+                const targetItemHrid = target ? String(target.itemHrid).replace(/^([^/])/, '/$1') : '';
+                if (target && modalItemHrid !== targetItemHrid) continue;
+                // 未通过缺口按钮跳转时，直接从当前缺口清单匹配物品和数量
+                const shortage = MWI_Calculator_Calculator.requiredItemsMap?.get(modalItemHrid);
+                const quantity = target ? target.quantity : Number(shortage?.shortageCount) || 0;
+                if (!quantity || (!target && !shortage)) continue;
+                if (modal.dataset.mwiCalculatorPrefilled === modalItemHrid) continue;
+                // 仅接受数量专属区域；数字框可能是强化等级或价格，禁止按位置兜底。
+                const quantityInputs = [...modal.querySelectorAll('[class*="MarketplacePanel_quantityInputs"] input')]
+                     .filter(input => visible(input) && !input.disabled && !input.readOnly
+                         && ['text', 'number', 'tel'].includes(input.type));
+                 if (quantityInputs.length !== 1) continue;
+                const input = quantityInputs[0];
+                const value = String(quantity);
+                try {
+                    const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set;
+                    if (setter) setter.call(input, value);
+                    else input.value = value;
+                    input.dispatchEvent(new Event('input', { bubbles: true }));
+                    input.dispatchEvent(new Event('change', { bubbles: true }));
+                    modal.dataset.mwiCalculatorPrefilled = modalItemHrid;
+                    MWI_Calculator_Calculator.marketAutoFillTarget = null;
+                    return true;
+                }
+                catch (error) {
+                    console.debug('[MWI_Calculator] 市场数量填充失败', error);
+                }
+            }
+            return false;
+        }
+        // 制作备料与跳转共用：冗余取概率次数，极限取平均次数；均不超过保底次数。
+        static getProductionActionCount(recipe, target) {
+            const count = this.getRequiredTrials999(recipe.outputCount, target,
+                this.materialPlanningMode === 'redundant' ? (recipe.outputStdDev || 0) : 0);
+            const minimum = recipe.minimumOutputCount;
+            return Number.isFinite(minimum) && minimum > 0
+                ? Math.min(count, Math.max(0, Math.ceil(target / minimum))) : count;
+        }
+        // 单侧99.9%正态近似；默认标准差沿用0.3mu估算，并非实际掉落分布保证。
+        static getRequiredTrials999(mu, target, stdDev = 0.3 * mu) {
+            if (!Number.isFinite(target)) throw new RangeError('Invalid target');
+            if (target <= 0) return 0;
+            if (!Number.isFinite(mu) || mu <= 0 || !Number.isFinite(stdDev) || stdDev < 0) {
+                throw new RangeError('Invalid output distribution');
+            }
+            if (stdDev === 0) return Math.ceil(target / mu);
+            const margin = 3.090232306167813 * stdDev;
+            // 解 n*mu - z*stdDev*sqrt(n) >= target，向上取整。
+            const x = (margin + Math.sqrt(margin * margin + 4 * mu * target)) / (2 * mu);
+            return Math.ceil(x * x);
+        }
+    }
+    MWI_Calculator_Calculator.targetItemCategoryMap = new Map();
+    MWI_Calculator_Calculator.targetItemsMap = new Map();
+    MWI_Calculator_Calculator.requiredItemsMap = new Map();
+    MWI_Calculator_Calculator.presetMap = new Map();
+    MWI_Calculator_Calculator.presetOptionsContainer = null;
+    MWI_Calculator_Calculator.presetManageMode = false;
+    MWI_Calculator_Calculator.presetAppliedMap = new Map();
+    MWI_Calculator_Calculator.presetDetailsHost = null;
+    // ── 内置预设模板（按需增删）────────────────────────────────
+    // 格式：{ name: 预设名, items: [{ itemHrid: '/items/xxx', count: 数量 }],
+    //        alertRatio: 预警比例（0~1 小数，可选，缺省按 0 处理） }
+    // 仅当该角色「从未保存过预设」时自动写入；写入后与普通预设无异，
+    // 可改名/修改/删除，清空后也不会被刷新还原。
+
+    MWI_Calculator_Calculator.BUILTIN_PRESETS = [
+        {
+            name: '生活咖啡',
+            alertRatio: 1,
+            items: [
+                { itemHrid: '/items/gathering_tea', count: 1000 },
+                { itemHrid: '/items/processing_tea', count: 1000 },
+                { itemHrid: '/items/efficiency_tea', count: 1000 },
+                { itemHrid: '/items/foraging_tea', count: 1000 },
+                { itemHrid: '/items/artisan_tea', count: 1000 },
+                { itemHrid: '/items/wisdom_tea', count: 1000 },
+                { itemHrid: '/items/gourmet_tea', count: 1000 },
+                { itemHrid: '/items/alchemy_tea', count: 300 },
+                { itemHrid: '/items/catalytic_tea', count: 300 },
+                { itemHrid: '/items/enhancing_tea', count: 300 },
+                { itemHrid: '/items/blessed_tea', count: 300 },
+            ],
+        },
+        {
+            name: 'D1坦克吃喝',
+            alertRatio: 1,
+            items: [
+                { itemHrid: '/items/super_defense_coffee', count: 1 },
+                { itemHrid: '/items/super_stamina_coffee', count: 1 },
+                { itemHrid: '/items/super_intelligence_coffee', count: 1 },
+                { itemHrid: '/items/spaceberry_donut', count: 1 },
+                { itemHrid: '/items/spaceberry_cake', count: 1 },
+                { itemHrid: '/items/star_fruit_yogurt', count: 1 },
+            ],
+        },
+        {
+            name: 'D1搬空',
+            alertRatio: 1,
+            items: [
+                { itemHrid: '/items/jackalope_staff', count: 1 },
+                { itemHrid: '/items/griffin_bulwark', count: 1 },
+                { itemHrid: '/items/manticore_shield', count: 1 },
+                { itemHrid: '/items/dodocamel_gauntlets', count: 1 },
+                { itemHrid: '/items/griffin_tunic', count: 1 },
+                { itemHrid: '/items/griffin_chaps', count: 1 },
+            ],
+        },
+    ];
+    MWI_Calculator_Calculator.houseAcquisitionMode = 'craft';
+    MWI_Calculator_Calculator.materialPlanningMode = 'redundant';
+    MWI_Calculator_Calculator.tabButton = null;
+    MWI_Calculator_Calculator.tabPanel = null;
+    MWI_Calculator_Calculator.targetItemDetailsMap = new Map();
+    MWI_Calculator_Calculator.shortageItemDetailsMap = new Map();
+    MWI_Calculator_Calculator.requiredItemDetailsMap = new Map();
+    MWI_Calculator_Calculator.itemCategoryList = [
+        '/item_categories/house_rooms',
+        '/item_categories/currency',
+        '/item_categories/loot',
+        '/item_categories/key',
+        '/item_categories/labyrinth',
+        "/item_categories/dungeon_key",
+        '/item_categories/food',
+        '/item_categories/tea',
+        '/item_categories/coffee',
+        '/item_categories/drink',
+        '/item_categories/ability_book',
+        '/item_categories/equipment',
+        '/item_categories/materials',
+        '/item_categories/resource'
+    ];
+    MWI_Calculator_Calculator.renderTimeout = null;
+    MWI_Calculator_Calculator.marketAutoFillTarget = null;
+    MWI_Calculator_Calculator.marketAutoFillObserver = null;
+    MWI_Calculator_Calculator.marketAutoFillTimer = null;
+    //#endregion
+    //#region ActionDetailPlus
+    class UpgradeItemComponent {
+    }
+    class InputItemComponent {
+    }
+    class OutputItemComponent {
+    }
+    class ProcessingTeaComponent {
+    }
+    class MWI_Calculator_ActionDetailPlus {
+        // 初始化监听器
+        static initialize() {
+            let lastPanel = null;
+            let frame = null;
+            const observer = new MutationObserver(records => {
+                if (document.hidden || records.every(record => record.target.closest?.('#mwi-calculator-panel'))) return;
+                if (frame) return;
+                frame = requestAnimationFrame(() => {
+                frame = null;
+                const panel = document.querySelector('[class^="SkillActionDetail_regularComponent"]');
+                if (panel && panel !== lastPanel) {
+                    lastPanel = panel;
+                    setTimeout(() => {
+                        if (panel.isConnected && !document.hidden) MWI_Calculator_ActionDetailPlus.enhanceSkillActionDetail();
+                    }, 50);
+                }
+                });
+            });
+            observer.observe(document.body, { childList: true, subtree: true });
+        }
+        // 增强技能动作详情面板
+        static enhanceSkillActionDetail() {
+            const actionName = MWI_Calculator_ActionDetailPlus.getActionName();
+            const actionHrid = MWI_Calculator_ActionDetailPlus.getActionHrid(actionName);
+            const { upgradeItemHrid, inputItems, outputItems } = MWI_Calculator_ActionDetailPlus.calculateActionDetail(actionHrid);
+            const skillActionTimeInput = document.querySelector('[class^="SkillActionDetail_maxActionCountInput"]').querySelector('input');
+            const skillActionTimeButtons = document.querySelector('[class^="SkillActionDetail_maxActionCountInput"]').querySelectorAll('button');
+            MWI_Calculator_ActionDetailPlus.createUpgradeItemComponent(upgradeItemHrid);
+            MWI_Calculator_ActionDetailPlus.createInputItemComponents(inputItems);
+            MWI_Calculator_ActionDetailPlus.createOutputItemComponents(outputItems);
+            // 联动
+            let linking = false;
+            let editingOutput = null;
+            function updateSkillActionDetail(e) {
+                if (linking)
+                    return;
+                linking = true;
+                const target = e.target;
+                const index = MWI_Calculator_ActionDetailPlus.outputItemComponents.findIndex(component => component.outputItemInput === target);
+                const targetValue = parseInt(target.value, 10);
+                if (index !== -1) {
+                    skillActionTimeInput.value = (isNaN(targetValue)) ? '∞' : Math.ceil(targetValue / MWI_Calculator_ActionDetailPlus.outputItemComponents[index].count).toString();
+                    MWI_Calculator_Utils.reactInputTriggerHack(skillActionTimeInput);
+                }
+                const skillActionTimes = parseInt(skillActionTimeInput.value, 10);
+                MWI_Calculator_ActionDetailPlus.outputItemComponents.forEach(component => {
+                    if (component.outputItemInput !== target && component.outputItemInput !== editingOutput) {
+                        component.outputItemInput.value = (isNaN(skillActionTimes)) ? '∞' : Math.ceil(skillActionTimes * component.count).toString();
+                    }
+                });
+                MWI_Calculator_ActionDetailPlus.inputItemComponents.forEach(component => {
+                    const inventoryCount = MWI_Calculator_ItemsMap.getCount(component.itemHrid);
+                    const requiredCount = component.count * skillActionTimes;
+                    if (isNaN(skillActionTimes)) {
+                        component.shortageCountSpan.textContent = '';
+                        component.inventoryCountSpan.style.color = '';
+                    }
+                    else {
+                        if (requiredCount > inventoryCount) {
+                            component.shortageCountSpan.textContent = MWI_Calculator_Utils.formatNumber(requiredCount - inventoryCount);
+                            component.inventoryCountSpan.style.color = MWI_Calculator_UITheme.danger;
+                        }
+                        else {
+                            component.shortageCountSpan.textContent = ' ';
+                            component.inventoryCountSpan.style.color = '#E7E7E7';
+                        }
+                    }
+                    component.inputCountSpan.textContent = '\u00A0/ ' + MWI_Calculator_Utils.formatNumber(component.count * ((isNaN(skillActionTimes) ? 1 : skillActionTimes))) + '\u00A0';
+                });
+                if (MWI_Calculator_ActionDetailPlus.upgradeItemComponent) {
+                    if (isNaN(skillActionTimes)) {
+                        MWI_Calculator_ActionDetailPlus.upgradeItemComponent.shortageCountSpan.textContent = '';
+                    }
+                    else {
+                        const requiredCount = MWI_Calculator_ActionDetailPlus.upgradeItemComponent.count * skillActionTimes;
+                        const inventoryCount = MWI_Calculator_ItemsMap.getCount(MWI_Calculator_ActionDetailPlus.upgradeItemComponent.itemHrid);
+                        if (requiredCount > inventoryCount) {
+                            MWI_Calculator_ActionDetailPlus.upgradeItemComponent.shortageCountSpan.textContent = MWI_Calculator_Utils.formatNumber(requiredCount - inventoryCount);
+                        }
+                        else {
+                            MWI_Calculator_ActionDetailPlus.upgradeItemComponent.shortageCountSpan.textContent = ' ';
+                        }
+                    }
+                }
+                if (MWI_Calculator_ActionDetailPlus.processingTeaComponent) {
+                    MWI_Calculator_ActionDetailPlus.processingTeaComponent.CountSpan.textContent =
+                        (isNaN(skillActionTimes)) ? '∞' : Math.ceil(skillActionTimes * MWI_Calculator_ActionDetailPlus.processingTeaComponent.count).toString();
+                }
+                linking = false;
+            }
+            // React 受控输入会在当前事件结束后才提交状态；使用下一帧统一刷新，避免预期产物滞后一拍
+            let refreshFramePending = false;
+            let pendingTarget = skillActionTimeInput;
+            const scheduleSkillActionDetailRefresh = (target = skillActionTimeInput) => {
+                // 程序更新次数所派发的 React input/change 不再反向排队覆盖产出输入。
+                if (linking) return;
+                pendingTarget = editingOutput || target || skillActionTimeInput;
+                if (refreshFramePending)
+                    return;
+                refreshFramePending = true;
+                const refresh = () => {
+                    refreshFramePending = false;
+                    const targetToRefresh = pendingTarget;
+                    pendingTarget = skillActionTimeInput;
+                    updateSkillActionDetail({ target: targetToRefresh, deferred: true });
+                };
+                if (typeof requestAnimationFrame === 'function')
+                    requestAnimationFrame(refresh);
+                else
+                    setTimeout(refresh, 0);
+            };
+            skillActionTimeInput.addEventListener('input', event => scheduleSkillActionDetailRefresh(event.target));
+            skillActionTimeInput.addEventListener('change', event => scheduleSkillActionDetailRefresh(event.target));
+            MWI_Calculator_ActionDetailPlus.outputItemComponents.forEach(component => {
+                const input = component.outputItemInput;
+                input.addEventListener('focus', () => { editingOutput = input; });
+                input.addEventListener('input', event => scheduleSkillActionDetailRefresh(event.target));
+                input.addEventListener('change', event => scheduleSkillActionDetailRefresh(event.target));
+                input.addEventListener('blur', () => {
+                    // 先消化最后一次输入（可能尚未执行到下一帧），再允许自身取整回写。
+                    updateSkillActionDetail({ target: input });
+                    if (editingOutput === input) editingOutput = null;
+                    scheduleSkillActionDetailRefresh(skillActionTimeInput);
+                });
+            });
+            skillActionTimeButtons.forEach(btn => {
+                btn.addEventListener('click', () => {
+                    scheduleSkillActionDetailRefresh(skillActionTimeInput);
+                });
+            });
+            MWI_Calculator_ItemsMap.itemsUpdatedCallbacks.push(() => {
+                scheduleSkillActionDetailRefresh(skillActionTimeInput);
+            });
+            // 初次填充
+            scheduleSkillActionDetailRefresh(skillActionTimeInput);
+        }
+        // 创建升级物品组件
+        static createUpgradeItemComponent(upgradeItemHrid) {
+            MWI_Calculator_ActionDetailPlus.upgradeItemComponent = null;
+            if (!upgradeItemHrid) {
+                return;
+            }
+            const shortageCountContainer = document.querySelector('[class^="SkillActionDetail_upgradeItemSelectorInput"]')?.parentElement?.previousElementSibling;
+            if (!shortageCountContainer) {
+                return;
+            }
+            const newTextSpan = document.createElement('span');
+            newTextSpan.textContent = shortageCountContainer.textContent;
+            newTextSpan.style.height = window.getComputedStyle(document.querySelector('[class*="SkillActionDetail_levelRequirement"]')).height;
+            shortageCountContainer.innerHTML = '';
+            shortageCountContainer.appendChild(newTextSpan);
+            const shortageCountDiv = document.createElement('div');
+            shortageCountDiv.style.display = 'flex';
+            shortageCountDiv.style.alignItems = 'flex-end';
+            shortageCountDiv.style.flexDirection = 'column';
+            const shortageCountSpan = document.createElement('span');
+            shortageCountSpan.style.display = 'flex';
+            shortageCountSpan.style.alignItems = 'center';
+            shortageCountSpan.style.color = '#faa21e';
+            shortageCountDiv.appendChild(shortageCountSpan);
+            shortageCountContainer.appendChild(shortageCountDiv);
+            MWI_Calculator_ActionDetailPlus.upgradeItemComponent = new UpgradeItemComponent();
+            MWI_Calculator_ActionDetailPlus.upgradeItemComponent.itemHrid = upgradeItemHrid;
+            MWI_Calculator_ActionDetailPlus.upgradeItemComponent.count = 1; // 升级物品固定需求1个
+            MWI_Calculator_ActionDetailPlus.upgradeItemComponent.shortageCountSpan = shortageCountSpan;
+        }
+        // 创建所有输入物品组件
+        static createInputItemComponents(inputItems) {
+            MWI_Calculator_ActionDetailPlus.inputItemComponents = new Array();
+            if (!inputItems || inputItems.length === 0) {
+                return;
+            }
+            const inputItemComponentContainer = document.querySelector('[class^="SkillActionDetail_itemRequirements"]');
+            const shortageCountContainer = inputItemComponentContainer?.parentElement?.previousElementSibling;
+            if (shortageCountContainer) {
+                const newTextSpan = document.createElement('span');
+                newTextSpan.textContent = shortageCountContainer.textContent;
+                newTextSpan.style.height = window.getComputedStyle(document.querySelector('[class*="SkillActionDetail_levelRequirement"]')).height;
+                const shortageCountComponent = document.createElement('div');
+                shortageCountComponent.style.display = 'flex';
+                shortageCountComponent.style.alignItems = 'flex-end';
+                shortageCountComponent.style.flexDirection = 'column';
+                shortageCountContainer.innerHTML = '';
+                shortageCountContainer.appendChild(newTextSpan);
+                shortageCountContainer.appendChild(shortageCountComponent);
+                const inventoryCountSpans = inputItemComponentContainer?.querySelectorAll('[class*="SkillActionDetail_inventoryCount"]');
+                const inputCountSpans = inputItemComponentContainer?.querySelectorAll('[class*="SkillActionDetail_inputCount"]');
+                const itemContainers = inputItemComponentContainer?.querySelectorAll('[class*="Item_itemContainer"]');
+                for (let i = 0; i < itemContainers.length; i++) {
+                    inputCountSpans[i].style.color = '#E7E7E7';
+                    const inputItemHrid = '/items/' + itemContainers[i].querySelector('svg use').getAttribute('href').split('#').pop();
+                    const inputItemCount = inputItems.find(item => item.itemHrid === inputItemHrid)?.count || 0;
+                    const shortageCountSpan = document.createElement('span');
+                    shortageCountSpan.style.height = window.getComputedStyle(itemContainers[i]).height;
+                    shortageCountSpan.style.display = 'flex';
+                    shortageCountSpan.style.alignItems = 'center';
+                    shortageCountSpan.style.color = '#faa21e';
+                    shortageCountComponent.appendChild(shortageCountSpan);
+                    const inputItemComponent = new InputItemComponent();
+                    inputItemComponent.itemHrid = inputItemHrid;
+                    inputItemComponent.count = inputItemCount;
+                    inputItemComponent.shortageCountSpan = shortageCountSpan;
+                    inputItemComponent.inventoryCountSpan = inventoryCountSpans[i];
+                    inputItemComponent.inputCountSpan = inputCountSpans[i];
+                    MWI_Calculator_ActionDetailPlus.inputItemComponents.push(inputItemComponent);
+                }
+            }
+        }
+        // 创建所有输出物品组件
+        static createOutputItemComponents(outputItems) {
+            MWI_Calculator_ActionDetailPlus.outputItemComponents = Array();
+            MWI_Calculator_ActionDetailPlus.processingTeaComponent = null;
+            let lastOutputItemComponent = document.querySelector('[class^="SkillActionDetail_maxActionCountInput"]');
+            for (const outputItem of outputItems) {
+                if (outputItem.count === 1 && outputItems.length === 1)
+                    break; // 仅有一个产出且数量为1时不创建额外输入框
+                const processedItemHrid = [...MWI_Calculator_ActionDetailPlus.processableItemMap.values()].find(v => v === outputItem.itemHrid);
+                if (processedItemHrid) {
+                    // 加工茶产物
+                    const processedItemComponent = MWI_Calculator_ActionDetailPlus.createProcessingTeaComponent(outputItem, outputItems);
+                    lastOutputItemComponent.insertAdjacentElement('afterend', processedItemComponent);
+                    lastOutputItemComponent = processedItemComponent;
+                }
+                else {
+                    // 直接采集产物
+                    const outputItemComponent = MWI_Calculator_ActionDetailPlus.createOutputItemComponent(outputItem);
+                    lastOutputItemComponent.insertAdjacentElement('afterend', outputItemComponent);
+                    lastOutputItemComponent = outputItemComponent;
+                }
+            }
+        }
+        // 创建输出物品组件
+        static createOutputItemComponent(outputItem) {
+            const origComponent = document.querySelector('[class^="SkillActionDetail_maxActionCountInput"]');
+            if (!origComponent)
+                return null;
+            // 克隆外层div（不带子内容）
+            const component = origComponent.cloneNode(false);
+            const originalActionLabel = document.querySelector('[class^="SkillActionDetail_actionContainer"] [class^="SkillActionDetail_label"]');
+            // 物品图标
+            const itemIcon = document.createElement('div');
+            itemIcon.style.width = window.getComputedStyle(originalActionLabel).width;
+            itemIcon.style.marginRight = '2px';
+            itemIcon.style.display = 'flex';
+            itemIcon.style.alignItems = 'center';
+            itemIcon.style.justifyContent = 'center';
+            const iconHref = MWI_Calculator_Utils.getIconHrefByItemHrid(outputItem.itemHrid);
+            const svg = MWI_Calculator_Utils.createIconSvg(iconHref);
+            itemIcon.appendChild(svg);
+            component.appendChild(itemIcon);
+            // 输入框
+            const origInputWrap = origComponent.querySelector('[class^="SkillActionDetail_input"]');
+            const inputWrap = origInputWrap.cloneNode(true);
+            const origInput = origInputWrap.querySelector('input');
+            const input = inputWrap.querySelector('input');
+            input.addEventListener('focus', () => { input.select(); });
+            input.addEventListener('keydown', (event) => {
+                if (event.key === 'Enter' && origInput) {
+                    origInput.dispatchEvent(event);
+                }
+            });
+            component.appendChild(inputWrap);
+            // 快捷填充按钮
+            const btns = [
+                { val: 1000, txt: '1k' },
+                { val: 2000, txt: '2k' },
+                { val: 5000, txt: '5k' }
+            ];
+            const origButtons = origComponent.querySelectorAll('button');
+            const buttonClass = origButtons.length > 0 ? origButtons[0].className : '';
+            btns.forEach(({ val, txt }) => {
+                const btn = document.createElement('button');
+                btn.className = buttonClass;
+                btn.textContent = txt;
+                btn.addEventListener('click', () => {
+                    input.value = val.toString();
+                    input.dispatchEvent(new Event('input', { bubbles: true }));
+                });
+                component.appendChild(btn);
+            });
+            const outputItemComponent = new OutputItemComponent();
+            outputItemComponent.count = outputItem.count;
+            outputItemComponent.outputItemInput = input;
+            MWI_Calculator_ActionDetailPlus.outputItemComponents.push(outputItemComponent);
+            return component;
+        }
+        // 创建加工茶产出组件
+        static createProcessingTeaComponent(processedItem, outputItems) {
+            const origComponent = document.querySelector('[class^="SkillActionDetail_maxActionCountInput"]');
+            if (!origComponent)
+                return null;
+            // 克隆外层div（不带子内容）
+            const component = origComponent.cloneNode(false);
+            // 制表符
+            const originalActionLabel = document.querySelector('[class^="SkillActionDetail_actionContainer"] [class^="SkillActionDetail_label"]');
+            const tab = originalActionLabel.cloneNode(false);
+            tab.textContent = '┗';
+            tab.style.width = '24px';
+            component.appendChild(tab);
+            // 物品图标
+            const itemIcon = document.createElement('div');
+            itemIcon.style.width = '24px';
+            itemIcon.style.marginRight = '2px';
+            itemIcon.style.display = 'flex';
+            itemIcon.style.alignItems = 'center';
+            itemIcon.style.justifyContent = 'center';
+            const iconHref = MWI_Calculator_Utils.getIconHrefByItemHrid(processedItem.itemHrid);
+            const svg = MWI_Calculator_Utils.createIconSvg(iconHref);
+            itemIcon.appendChild(svg);
+            component.appendChild(itemIcon);
+            // 输入框
+            const origInputWrap = origComponent.querySelector('[class^="SkillActionDetail_input"]');
+            const origInput = origInputWrap.querySelector('input');
+            const inputWrap = origInputWrap.cloneNode(true);
+            const input = inputWrap.querySelector('input');
+            input.disabled = (processedItem.count === 0);
+            input.addEventListener('focus', () => { input.select(); });
+            input.addEventListener('keydown', (event) => {
+                if (event.key === 'Enter' && origInput) {
+                    origInput.dispatchEvent(event);
+                }
+            });
+            component.appendChild(inputWrap);
+            const outputItemComponent = new OutputItemComponent();
+            outputItemComponent.count = processedItem.count;
+            outputItemComponent.outputItemInput = input;
+            MWI_Calculator_ActionDetailPlus.outputItemComponents.push(outputItemComponent);
+            const processableItemHrid = [...MWI_Calculator_ActionDetailPlus.processableItemMap.entries()]
+                .find(([, v]) => v === processedItem.itemHrid)?.[0];
+            const processableItem = outputItems.find(oi => oi.itemHrid === processableItemHrid);
+            const recipeInputItem = MWI_Calculator_ActionDetailPlus.tryGetRecipe(processedItem.itemHrid).inputs[0];
+            const slash1 = document.createElement('span');
+            slash1.textContent = '+';
+            slash1.style.margin = '0px 2px';
+            const processingTeaSpan = document.createElement('span');
+            const slash2 = document.createElement('span');
+            slash2.textContent = '=';
+            slash2.style.margin = '0px 2px';
+            component.appendChild(slash1);
+            component.appendChild(processingTeaSpan);
+            component.appendChild(slash2);
+            const processingTeaComponent = new ProcessingTeaComponent();
+            processingTeaComponent.count = processableItem.count / recipeInputItem.count;
+            processingTeaComponent.CountSpan = processingTeaSpan;
+            MWI_Calculator_ActionDetailPlus.processingTeaComponent = processingTeaComponent;
+            const totalInputWrap = origInputWrap.cloneNode(true);
+            const totalInput = totalInputWrap.querySelector('input');
+            totalInput.addEventListener('focus', () => { totalInput.select(); });
+            totalInput.addEventListener('keydown', (event) => {
+                if (event.key === 'Enter' && origInput) {
+                    origInput.dispatchEvent(event);
+                }
+            });
+            component.appendChild(totalInputWrap);
+            const totalItemComponent = new OutputItemComponent();
+            totalItemComponent.count = processedItem.count + processableItem.count / recipeInputItem.count;
+            totalItemComponent.outputItemInput = totalInput;
+            MWI_Calculator_ActionDetailPlus.outputItemComponents.push(totalItemComponent);
+            return component;
+        }
+        // 获取物品配方
+        static tryGetRecipe(itemHrid) {
+            const cache = this.renderRecipeCache;
+            if (!cache) return this.buildRecipe(itemHrid);
+            if (!cache.has(itemHrid)) cache.set(itemHrid, this.buildRecipe(itemHrid));
+            return cache.get(itemHrid);
+        }
+        static buildRecipe(itemHrid) {
+            const itemName = itemHrid.split('/').pop() || '';
+            // 检查商店兑换
+            const shopHrid = `/shop_items/${itemName}`;
+            if (MWI_Calculator.initClientData?.shopItemDetailMap?.hasOwnProperty(shopHrid)) {
+                const shopItemDetail = MWI_Calculator.initClientData?.shopItemDetailMap[shopHrid];
+                if (shopItemDetail.category === "/shop_categories/dungeon") {
+                    const recipe = { inputs: new Array, outputCount: 1 };
+                    shopItemDetail.costs.forEach(cost => {
+                        recipe.inputs.push({ itemHrid: cost.itemHrid, count: cost.count });
+                    });
+                    return recipe;
+                }
+            }
+            // 检查制造配方
+            const actionTypes = ["cheesesmithing", "crafting", "tailoring", "cooking", "brewing"];
+            for (const actionType of actionTypes) {
+                const actionHrid = `/actions/${actionType}/${itemName}`;
+                if (MWI_Calculator.initClientData?.actionDetailMap?.hasOwnProperty(actionHrid)) {
+                    // 复用 MWI_Calculator_ActionDetailPlus 的计算逻辑以获得输入/输出（考虑茶水等加成在 calculateRequiredItems 中已处理）
+                    const { upgradeItemHrid, inputItems, outputItems } = MWI_Calculator_ActionDetailPlus.calculateActionDetail(actionHrid);
+                    if (upgradeItemHrid) {
+                        inputItems.push({ itemHrid: upgradeItemHrid, count: 1, isUpgradeBase: true });
+                    } // 升级物品固定需求数量1，添加到输入中
+                    let outputCount = 1;
+                    if (outputItems && outputItems.length > 0) {
+                        const matching = outputItems.find(o => o.itemHrid === itemHrid);
+                        if (matching)
+                            outputCount = matching.count || 1;
+                    }
+                    return { inputs: inputItems,
+                        ...MWI_Calculator_ActionDetailPlus.getProductionOutputStats(actionHrid, itemHrid, outputCount) };
+                }
+            }
+            return null;
+        }
+        // 保底只读取制造配方的固定outputItems，不将三采平均掉落当成保底。
+        static getProductionOutputStats(actionHrid, itemHrid, outputCount) {
+            const actionType = actionHrid.split('/')[2];
+            const production = ['cheesesmithing', 'crafting', 'tailoring', 'cooking', 'brewing'].includes(actionType);
+            const baseOutput = production
+                ? MWI_Calculator_ActionDetailPlus.getActionDetail(actionHrid)?.outputItems?.find(item => item.itemHrid === itemHrid)?.count
+                : 0;
+            const randomOutput = ['cooking', 'brewing'].includes(actionType)
+                && MWI_Calculator_ActionDetailPlus.getActionTypeDrinkSlots(actionType).includes('/items/gourmet_tea');
+            return { outputCount, outputStdDev: randomOutput ? 0.3 * outputCount : 0,
+                minimumOutputCount: Number.isFinite(baseOutput) && baseOutput > 0 ? baseOutput : 0 };
+        }
+        // 计算动作详情
+        static calculateActionDetail(actionHrid) {
+            const actionDetail = MWI_Calculator_ActionDetailPlus.getActionDetail(actionHrid);
+            const actionType = actionDetail?.type?.split('/').pop() || '';
+            // 仅支持八种常规类型
+            if (!actionDetail || !actionType || !['milking', 'foraging', 'woodcutting', 'cheesesmithing', 'crafting', 'tailoring', 'cooking', 'brewing'].includes(actionType)) {
+                console.warn('[MWI_Calculator] 无法获取动作详情' + actionHrid);
+                return { upgradeItemHrid: null, inputItems: [], outputItems: [] };
+            }
+            // console.log('MWI_Calculator_ActionDetailPlus: 获取到动作详情', actionDetail);
+            const upgradeItemHrid = actionDetail.upgradeItemHrid;
+            const inputItems = actionDetail.inputItems ? JSON.parse(JSON.stringify(actionDetail.inputItems)) : Array();
+            const outputItems = actionDetail.outputItems ? JSON.parse(JSON.stringify(actionDetail.outputItems)) : Array();
+            const drinkSlots = MWI_Calculator_ActionDetailPlus.getActionTypeDrinkSlots(actionType);
+            const drinkConcentration = MWI_Calculator_ActionDetailPlus.getDrinkConcentration();
+            // console.log('MWI_Calculator_ActionDetailPlus: 获取到茶列表', drinkSlots, drinkConcentration);
+            // 检查采集数量加成
+            const gatheringBuff = (drinkSlots?.some(itemHrid => itemHrid === '/items/gathering_tea') ? 0.15 * drinkConcentration : 0)
+                + MWI_Calculator_ActionDetailPlus.getEquipmentGatheringBuff() + MWI_Calculator_ActionDetailPlus.getCommunityGatheringBuff();
+            // 检查加工茶加成
+            const processingBuff = (drinkSlots?.some(itemHrid => itemHrid === '/items/processing_tea') ? 0.15 * drinkConcentration : 0);
+            // 检查美食茶加成
+            const gourmetBuff = (drinkSlots?.some(itemHrid => itemHrid === '/items/gourmet_tea') ? 0.12 * drinkConcentration : 0);
+            // 检查工匠茶加成
+            const artisanBuff = (drinkSlots?.some(itemHrid => itemHrid === '/items/artisan_tea') ? 0.1 * drinkConcentration : 0);
+            if (['milking', 'foraging', 'woodcutting', /*'cheesesmithing', 'crafting', 'tailoring', 'cooking', 'brewing'*/].includes(actionType)) {
+                const dropTable = actionDetail.dropTable;
+                for (const dropItem of dropTable) {
+                    const averageCount = dropItem.dropRate * (dropItem.minCount + dropItem.maxCount) / 2 * (1 + gatheringBuff);
+                    const processedItemHrid = MWI_Calculator_ActionDetailPlus.processableItemMap.get(dropItem.itemHrid);
+                    if (processedItemHrid) {
+                        outputItems.push({ itemHrid: dropItem.itemHrid, count: averageCount * (1 - processingBuff), });
+                        outputItems.push({ itemHrid: processedItemHrid, count: averageCount * processingBuff / 2, });
+                    }
+                    else {
+                        outputItems.push({ itemHrid: dropItem.itemHrid, count: averageCount, });
+                    }
+                }
+            }
+            if ([/*'milking', 'foraging', 'woodcutting', 'cheesesmithing', 'crafting', 'tailoring',*/ 'cooking', 'brewing'].includes(actionType)) {
+                for (const outputItem of outputItems) {
+                    outputItem.count = outputItem.count * (1 + gourmetBuff);
+                }
+            }
+            if ([/*'milking', 'foraging', 'woodcutting',*/ 'cheesesmithing', 'crafting', 'tailoring', 'cooking', 'brewing'].includes(actionType)) {
+                for (const inputItem of inputItems) {
+                    inputItem.count = inputItem.count * (1 - artisanBuff);
+                    // 仅工匠茶的非整数消耗有随机取整方差；过滤浮点误差。
+                    const nearest = Math.round(inputItem.count);
+                    const fractional = Math.abs(inputItem.count - nearest) < 1e-9
+                        ? 0 : inputItem.count - Math.floor(inputItem.count);
+                    inputItem.consumptionVariance = artisanBuff > 0 ? fractional * (1 - fractional) : 0;
+                }
+            }
+            return { upgradeItemHrid, inputItems, outputItems };
+        }
+        // 获取当前动作名称
+        static getActionName() {
+            const actionNameDiv = document.querySelector('[class^="SkillActionDetail_name"]');
+            return actionNameDiv ? actionNameDiv.textContent : '';
+        }
+        // 获取动作HRID
+        static getActionHrid(actionName) {
+            return MWI_Calculator_I18n.getHridByName(actionName, 'actionNames');
+        }
+        // 获取动作详情
+        static getActionDetail(actionHrid) {
+            return MWI_Calculator.initClientData?.actionDetailMap?.[`${actionHrid}`];
+        }
+        // 获取动作类型对应的饮品栏物品列表
+        static getActionTypeDrinkSlots(actionType) {
+            if (!actionType) {
+                return [];
+            }
+            const drinkSlots = [];
+            MWI_Calculator.gameObject?.state?.actionTypeDrinkSlotsDict?.[`/action_types/${actionType}`].forEach(drink => {
+                if (drink && drink.itemHrid) {
+                    drinkSlots.push(drink.itemHrid);
+                }
+            });
+            // 对三采添加对应的工匠茶数据用于计算加工数量
+            const processActionType = { milking: 'cheesesmithing', foraging: 'tailoring', woodcutting: 'crafting' }[actionType] || null;
+            if (processActionType) {
+                const processDrinkSlots = MWI_Calculator.gameObject?.state?.actionTypeDrinkSlotsDict?.[`/action_types/${processActionType}`];
+                processDrinkSlots.forEach(drink => {
+                    if (drink && drink.itemHrid == '/items/artisan_tea') {
+                        drinkSlots.push(drink.itemHrid);
+                    }
+                });
+            }
+            return drinkSlots;
+        }
+        // 获取饮品浓缩倍率
+        static getDrinkConcentration() {
+            const enhancementLevel = MWI_Calculator_ItemsMap.getMaxEnhancementLevel("/items/guzzling_pouch");
+            if (enhancementLevel != -1) {
+                return 1
+                    + MWI_Calculator.initClientData?.itemDetailMap?.[`/items/guzzling_pouch`].equipmentDetail.noncombatStats.drinkConcentration
+                    + MWI_Calculator.initClientData?.itemDetailMap?.[`/items/guzzling_pouch`].equipmentDetail.noncombatEnhancementBonuses.drinkConcentration
+                        * MWI_Calculator.initClientData?.enhancementLevelTotalBonusMultiplierTable[enhancementLevel];
+            }
+            return 1;
+        }
+        // 获取装备采集数量加成
+        static getEquipmentGatheringBuff() {
+            let equipmentGatheringBuff = 0;
+            const philosophers_earrings_enhancementLevel = MWI_Calculator_ItemsMap.getMaxEnhancementLevel("/items/philosophers_earrings");
+            const earrings_of_gathering_enhancementLevel = MWI_Calculator_ItemsMap.getMaxEnhancementLevel("/items/earrings_of_gathering");
+            const philosophers_ring_enhancementLevel = MWI_Calculator_ItemsMap.getMaxEnhancementLevel("/items/philosophers_ring");
+            const ring_of_gathering_enhancementLevel = MWI_Calculator_ItemsMap.getMaxEnhancementLevel("/items/ring_of_gathering");
+            if (philosophers_earrings_enhancementLevel != -1) {
+                equipmentGatheringBuff = equipmentGatheringBuff
+                    + MWI_Calculator.initClientData?.itemDetailMap?.[`/items/philosophers_earrings`].equipmentDetail.noncombatStats.gatheringQuantity
+                    + MWI_Calculator.initClientData?.itemDetailMap?.[`/items/philosophers_earrings`].equipmentDetail.noncombatEnhancementBonuses.gatheringQuantity
+                        * MWI_Calculator.initClientData?.enhancementLevelTotalBonusMultiplierTable[philosophers_earrings_enhancementLevel];
+            }
+            else if (earrings_of_gathering_enhancementLevel != -1) {
+                equipmentGatheringBuff = equipmentGatheringBuff
+                    + MWI_Calculator.initClientData?.itemDetailMap?.[`/items/earrings_of_gathering`].equipmentDetail.noncombatStats.gatheringQuantity
+                    + MWI_Calculator.initClientData?.itemDetailMap?.[`/items/earrings_of_gathering`].equipmentDetail.noncombatEnhancementBonuses.gatheringQuantity
+                        * MWI_Calculator.initClientData?.enhancementLevelTotalBonusMultiplierTable[earrings_of_gathering_enhancementLevel];
+            }
+            if (philosophers_ring_enhancementLevel != -1) {
+                equipmentGatheringBuff = equipmentGatheringBuff
+                    + MWI_Calculator.initClientData?.itemDetailMap?.[`/items/philosophers_ring`].equipmentDetail.noncombatStats.gatheringQuantity
+                    + MWI_Calculator.initClientData?.itemDetailMap?.[`/items/philosophers_ring`].equipmentDetail.noncombatEnhancementBonuses.gatheringQuantity
+                        * MWI_Calculator.initClientData?.enhancementLevelTotalBonusMultiplierTable[philosophers_ring_enhancementLevel];
+            }
+            else if (ring_of_gathering_enhancementLevel != -1) {
+                equipmentGatheringBuff = equipmentGatheringBuff
+                    + MWI_Calculator.initClientData?.itemDetailMap?.[`/items/ring_of_gathering`].equipmentDetail.noncombatStats.gatheringQuantity
+                    + MWI_Calculator.initClientData?.itemDetailMap?.[`/items/ring_of_gathering`].equipmentDetail.noncombatEnhancementBonuses.gatheringQuantity
+                        * MWI_Calculator.initClientData?.enhancementLevelTotalBonusMultiplierTable[ring_of_gathering_enhancementLevel];
+            }
+            return equipmentGatheringBuff;
+        }
+        // 获取社区采集数量加成
+        static getCommunityGatheringBuff() {
+            const communityBuffs = MWI_Calculator.gameObject?.state?.communityBuffs || [];
+            for (const buff of communityBuffs) {
+                if (buff.hrid === "/community_buff_types/gathering_quantity" && !buff.isDone) {
+                    return buff.level * 0.005 + 0.195;
+                }
+            }
+            return 0;
+        }
+    }
+    MWI_Calculator_ActionDetailPlus.processableActionMap = new Map([
+        ["/items/milk", "/actions/milking/cow"],
+        ["/items/verdant_milk", "/actions/milking/verdant_cow"],
+        ["/items/azure_milk", "/actions/milking/azure_cow"],
+        ["/items/burble_milk", "/actions/milking/burble_cow"],
+        ["/items/crimson_milk", "/actions/milking/crimson_cow"],
+        ["/items/rainbow_milk", "/actions/milking/unicow"],
+        ["/items/holy_milk", "/actions/milking/holy_cow"],
+        ["/items/log", "/actions/woodcutting/tree"],
+        ["/items/birch_log", "/actions/woodcutting/birch_tree"],
+        ["/items/cedar_log", "/actions/woodcutting/cedar_tree"],
+        ["/items/purpleheart_log", "/actions/woodcutting/purpleheart_tree"],
+        ["/items/ginkgo_log", "/actions/woodcutting/ginkgo_tree"],
+        ["/items/redwood_log", "/actions/woodcutting/redwood_tree"],
+        ["/items/arcane_log", "/actions/woodcutting/arcane_tree"],
+        ["/items/cotton", "/actions/foraging/cotton"],
+        ["/items/flax", "/actions/foraging/flax"],
+        ["/items/bamboo_branch", "/actions/foraging/bamboo_branch"],
+        ["/items/cocoon", "/actions/foraging/cocoon"],
+        ["/items/radiant_fiber", "/actions/foraging/radiant_fiber"]
+    ]);
+    MWI_Calculator_ActionDetailPlus.processableItemMap = new Map([
+        ["/items/milk", "/items/cheese"],
+        ["/items/verdant_milk", "/items/verdant_cheese"],
+        ["/items/azure_milk", "/items/azure_cheese"],
+        ["/items/burble_milk", "/items/burble_cheese"],
+        ["/items/crimson_milk", "/items/crimson_cheese"],
+        ["/items/rainbow_milk", "/items/rainbow_cheese"],
+        ["/items/holy_milk", "/items/holy_cheese"],
+        ["/items/log", "/items/lumber"],
+        ["/items/birch_log", "/items/birch_lumber"],
+        ["/items/cedar_log", "/items/cedar_lumber"],
+        ["/items/purpleheart_log", "/items/purpleheart_lumber"],
+        ["/items/ginkgo_log", "/items/ginkgo_lumber"],
+        ["/items/redwood_log", "/items/redwood_lumber"],
+        ["/items/arcane_log", "/items/arcane_lumber"],
+        ["/items/cotton", "/items/cotton_fabric"],
+        ["/items/flax", "/items/linen_fabric"],
+        ["/items/bamboo_branch", "/items/bamboo_fabric"],
+        ["/items/cocoon", "/items/silk_fabric"],
+        ["/items/radiant_fiber", "/items/radiant_fabric"],
+        ["/items/rough_hide", "/items/rough_leather"],
+        ["/items/reptile_hide", "/items/reptile_leather"],
+        ["/items/gobo_hide", "/items/gobo_leather"],
+        ["/items/beast_hide", "/items/beast_leather"],
+        ["/items/umbral_hide", "/items/umbral_leather"]
+    ]);
+    //#endregion
+    //#region Utils
+    class MWI_Calculator_Utils {
+        // 格式化数字
+        static formatNumber(num) {
+            // 类型和有效性检查
+            if (!Number.isFinite(num)) {
+                return '0';
+            }
+            // // 确保非负数
+            // const normalizedNum = Math.max(0, num);
+            const normalizedNum = num;
+            // 小于1000：保留1位小数，但如果小数为0则只显示整数
+            if (normalizedNum <= 999) {
+                const fixed = normalizedNum.toFixed(1);
+                return fixed.endsWith('.0') ? Math.round(normalizedNum).toString() : fixed;
+            }
+            // 小于100,000：向上取整
+            if (normalizedNum <= 99999) {
+                return Math.ceil(normalizedNum).toString();
+            }
+            // 小于10,000,000：显示xxxK (100K~9999K)
+            if (normalizedNum <= 9999999) {
+                return `${Math.floor(normalizedNum / 1000)}K`;
+            }
+            // 小于10,000,000,000：显示xxxM (100M~9999M)
+            if (normalizedNum <= 9999999999) {
+                return `${Math.floor(normalizedNum / 1000000)}M`;
+            }
+            // 小于10,000,000,000,000：显示xxxB (100B~9999B)
+            if (normalizedNum <= 9999999999999) {
+                return `${Math.floor(normalizedNum / 1000000000)}B`;
+            }
+            // 更大的数值显示NaN
+            return 'NaN';
+        }
+        // 获取物品排序索引
+        static getSortIndexByItemHrid(hrid) {
+            return (MWI_Calculator.initClientData?.itemDetailMap?.[hrid]?.sortIndex || 9999);
+        }
+        // 获取技能排序索引
+        static getSortIndexByHouseRoomHrid(hrid) {
+            return (MWI_Calculator.initClientData?.houseRoomDetailMap?.[hrid]?.sortIndex || 0) - 9999;
+        }
+        // 获取物品图标链接
+        static getIconHrefByItemHrid(itemHrid) {
+            return '/static/media/items_sprite.9c39e2ec.svg#' + (itemHrid.split('/').pop() || '');
+        }
+        // 获取技能图标链接
+        static getIconHrefBySkillHrid(skillHrid) {
+            return '/static/media/skills_sprite.3bb4d936.svg#' + (skillHrid.split('/').pop() || '');
+        }
+        // 获取房屋图标链接
+        static getIconHrefByHouseRoomHrid(houseRoomHrid) {
+            return MWI_Calculator_Utils.getIconHrefBySkillHrid(MWI_Calculator.initClientData?.houseRoomDetailMap?.[houseRoomHrid]?.skillHrid || houseRoomHrid);
+        }
+        // 获取杂项图标链接
+        static getIconHrefByMiscHrid(hrid) {
+            return '/static/media/misc_sprite.6fa5e97c.svg#' + (hrid.split('/').pop() || '');
+        }
+        // 创建图标SVG元素
+        static createIconSvg(iconHref) {
+            const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+            svg.setAttribute('width', '18px');
+            svg.setAttribute('height', '18px');
+            svg.style.display = 'block';
+            const use = document.createElementNS('http://www.w3.org/2000/svg', 'use');
+            use.setAttributeNS('http://www.w3.org/1999/xlink', 'href', iconHref);
+            svg.appendChild(use);
+            return svg;
+        }
+        // 触发React对input元素的变更检测
+        static reactInputTriggerHack(inputElem) {
+            const lastValue = inputElem.value;
+            const event = new Event("input", { bubbles: true });
+            // 添加自定义标记
+            event.simulated = true;
+            // 访问React内部的value tracker
+            const tracker = inputElem._valueTracker;
+            if (tracker) {
+                // 触发变更：设置为不同的值以触发React的change检测
+                tracker.setValue(lastValue === '' ? ' ' : '');
+            }
+            inputElem.dispatchEvent(event);
+        }
+    }
+    //#endregion
+    //#region I18n
+    class MWI_Calculator_I18n {
+        // 获取当前游戏语言
+        static getGameLanguage() {
+            return MWI_Calculator.gameObject?.props.i18n.language || 'zh';
+        }
+        static isChinese() {
+            return String(this.getGameLanguage() || '').replaceAll('_', '-').toLowerCase().startsWith('zh');
+        }
+        // 获取物品名称
+        static getItemName(itemHrid) {
+            return MWI_Calculator_I18n.getName(itemHrid, "itemNames");
+        }
+        // 获取名称
+        static getName(hrid, category) {
+            if (!hrid || !category) {
+                return hrid;
+            }
+            // 特例自定义itemCategory名称
+            if (category === 'itemCategoryNames') {
+                switch (hrid) {
+                    case '/item_categories/house_rooms':
+                        return MWI_Calculator_I18n.isChinese() ? '房屋' : 'House';
+                    case '/item_categories/tea':
+                        return MWI_Calculator_I18n.isChinese() ? '茶' : 'Tea';
+                    case '/item_categories/coffee':
+                        return MWI_Calculator_I18n.isChinese() ? '咖啡' : 'Coffee';
+                    case '/item_categories/materials':
+                        return MWI_Calculator_I18n.isChinese() ? '材料' : 'Materials';
+                }
+            }
+            const resources = MWI_Calculator.gameObject?.props?.i18n?.options?.resources || {};
+            const language = String(MWI_Calculator_I18n.getGameLanguage() || "").replaceAll("_", "-");
+            const localeCandidates = [language, language.split("-")[0], language.toLowerCase(), language.toLowerCase().split("-")[0]];
+            for (const locale of localeCandidates) {
+                const translated = resources?.[locale]?.translation?.[category]?.[hrid];
+                if (translated) return translated;
+                const matchedKey = Object.keys(resources).find((key) => key.toLowerCase() === locale.toLowerCase());
+                const matched = matchedKey && resources?.[matchedKey]?.translation?.[category]?.[hrid];
+                if (matched) return matched;
+            }
+            const detailName = category === "itemNames" ? MWI_Calculator.initClientData?.itemDetailMap?.[hrid]?.name : null;
+            if (detailName) return detailName;
+            return hrid;
+        }
+        // 通过物品名称获取物品HRID
+        static getItemHridByName(itemName) {
+            return MWI_Calculator_I18n.getHridByName(itemName, "itemNames");
+        }
+        // 通过名称获取HRID
+        static getHridByName(name, category) {
+            if (!name || !category) {
+                return null;
+            }
+            const resources = MWI_Calculator.gameObject?.props?.i18n?.options?.resources || {};
+            const language = String(MWI_Calculator_I18n.getGameLanguage() || "").replaceAll("_", "-");
+            const locales = [language, language.split("-")[0], language.toLowerCase()];
+            for (const locale of locales) {
+                const key = Object.keys(resources).find((candidate) => candidate.toLowerCase() === locale.toLowerCase());
+                const table = resources?.[locale]?.translation?.[category] || resources?.[key]?.translation?.[category] || {};
+                const found = Object.entries(table).find(([, value]) => (value || "").toLowerCase() === name.toLowerCase().trim());
+                if (found) return found[0];
+            }
+            return null;
+        }
+    }
+    //#endregion
+    //#region ItemsMap
+    class MWI_Calculator_ItemsMap {
+        // 获取物品数量
+        static getCount(itemHrid, enhancementLevel = 0) {
+            return MWI_Calculator_ItemsMap.map.get(itemHrid)?.get(enhancementLevel) ?? 0;
+        }
+        static getEnhancedInventoryMap() {
+            const result = new Map();
+            for (const [hrid, levels] of this.map) {
+                const enhanced = new Map([...levels].filter(([level, count]) => level > 0 && count > 0));
+                if (enhanced.size) result.set(hrid, enhanced);
+            }
+            return result;
+        }
+        static getInventoryOnlyCount(itemHrid, level = 0) {
+            return this.locationItems?.get(itemHrid)?.get('/item_locations/inventory')?.get(level) || 0;
+        }
+        static isMaterialLocation(location) {
+            return location === '/item_locations/inventory' || /^\/item_locations\/(two_hand|main_hand|off_hand|back|head|body|legs|hands|feet|pouch|neck|earrings|ring|charm|trinket|milking_tool|foraging_tool|woodcutting_tool|cheesesmithing_tool|crafting_tool|tailoring_tool|cooking_tool|brewing_tool|alchemy_tool|enhancing_tool)$/.test(location);
+        }
+        // 获取所有物品数量
+        static getInventoryMap() {
+            const inventoryMap = new Map();
+            MWI_Calculator_ItemsMap.map.forEach((enhancementMap, itemHrid) => {
+                inventoryMap.set(itemHrid, enhancementMap.get(0) || 0);
+            });
+            return inventoryMap;
+        }
+        // 获取物品最高强化等级
+        static getMaxEnhancementLevel(itemHrid) {
+            const m = MWI_Calculator_ItemsMap.map.get(itemHrid);
+            if (!m) {
+                return -1;
+            }
+            let max = -1;
+            for (const [level, count] of m) {
+                if (count > 0 && level > max) {
+                    max = level;
+                }
+            }
+            return max;
+        }
+        // 更新物品数据
+        static update(endCharacterItems) {
+            if (!endCharacterItems) {
+                return;
+            }
+            let changed = false;
+            this.locationItems ||= new Map();
+            const touched = new Set();
+            for (const item of endCharacterItems) {
+                const location = item.itemLocationHrid || '/item_locations/inventory';
+                const level = item.enhancementLevel;
+                if (!this.isMaterialLocation(location) || !Number.isInteger(level) || level < 0 || !Number.isFinite(item.count)) continue;
+                if (!this.locationItems.has(item.itemHrid)) this.locationItems.set(item.itemHrid, new Map());
+                const locations = this.locationItems.get(item.itemHrid);
+                if (!locations.has(location)) locations.set(location, new Map());
+                const levels = locations.get(location);
+                const count = Math.max(0, item.count);
+                // 位置变化即使不改变总数也通知刷新（强化跳转/卸装提示需要最新位置）。
+                if ((levels.get(level) || 0) !== count) changed = true;
+                if (count > 0) levels.set(level, count);
+                else levels.delete(level);
+                if (!levels.size) locations.delete(location);
+                if (!locations.size) this.locationItems.delete(item.itemHrid);
+                touched.add(item.itemHrid);
+            }
+            // 同一批穿脱消息全部处理完后汇总，避免仓库与装备槽互相覆盖。
+            for (const hrid of touched) {
+                const totals = new Map();
+                for (const levels of this.locationItems.get(hrid)?.values() || []) {
+                    for (const [level, count] of levels) totals.set(level, (totals.get(level) || 0) + count);
+                }
+                if (totals.size) this.map.set(hrid, totals);
+                else this.map.delete(hrid);
+            }
+            if (!changed) return;
+            MWI_Calculator_ItemsMap.itemsUpdatedCallbacks.forEach(cb => {
+                try {
+                    cb(endCharacterItems);
+                }
+                catch (e) {
+                    console.error('[MWI_Calculator] Error in item updated callback:', e);
+                }
+            });
+        }
+        // 清空物品数据
+        static clear() {
+            MWI_Calculator_ItemsMap.map.clear();
+            this.locationItems?.clear();
+        }
+    }
+    /** 物品数据映射表：itemHrid -> (enhancementLevel -> count) */
+    MWI_Calculator_ItemsMap.map = new Map();
+    MWI_Calculator_ItemsMap.itemsUpdatedCallbacks = [];
+    //#endregion
+    //#region MWI_Calculator
+    class MWI_Calculator {
+        // 启动
+        static start() {
+            MWI_Calculator.setupWebSocketInterceptor();
+            MWI_Calculator.waitForElement('[class^="GamePage"]', () => {
+                MWI_Calculator.initialize();
+            });
+        }
+        /**
+         * 设置 WebSocket 消息拦截器（**只读取**，不发送任何东西）。
+         * ⚠️ 与其它 MWI 系列脚本共存时必须"协作"，否则互相包裹 getter：
+         *    前一个脚本把 data 定义成实例自有属性（默认 configurable:false），
+         *    后一个脚本再 defineProperty 会抛 TypeError，异常从 getter 冒出去打断游戏收包 → 游戏卡死。
+         * 做法：① 共享消息总线 unsafeWindow.MWI_MessageBus；
+         *      ② 共享标记 unsafeWindow.MWI_WS_HOOKED，只挂一层；
+         *      ③ 防重入的 defineProperty 带 configurable:true 且 try/catch 兜住。
+         * 游戏消息的筛选由 handleWebSocketMessage 按消息类型完成（非游戏消息解析失败会被忽略）。
+         */
+        static setupWebSocketInterceptor() {
+            const win = (typeof unsafeWindow !== "undefined" && unsafeWindow) || window;
+            const bus = win.MWI_MessageBus || (win.MWI_MessageBus = new Set());
+            bus.add(message => {
+                try {
+                    MWI_Calculator?.handleWebSocketMessage(message);
+                }
+                catch (e) {
+                    // 拦截失败不能影响游戏本身的收发
+                }
+            });
+            if (win.MWI_WS_HOOKED) {
+                console.log("[MWI_Calculator] 已有 MWI 脚本挂过 WebSocket 拦截，这里只订阅（避免双重包装导致卡死）");
+                return;
+            }
+            const oriGet = Object.getOwnPropertyDescriptor(MessageEvent.prototype, "data")?.get;
+            if (!oriGet) {
+                return;
+            }
+            win.MWI_WS_HOOKED = true;
+            Object.defineProperty(MessageEvent.prototype, "data", {
+                get: function () {
+                    const message = oriGet.call(this);
+                    // 防重入：实例自有属性。configurable 必须为 true，
+                    // 否则别的 MWI 脚本再定义会抛 TypeError（就是卡死的真凶）
+                    try {
+                        Object.defineProperty(this, "data", { value: message, configurable: true, writable: true });
+                    }
+                    catch (e) {
+                        // 已被别的脚本定义过，忽略
+                    }
+                    try {
+                        bus.forEach(listener => listener(message));
+                    }
+                    catch (e) {
+                        // 拦截失败不能影响游戏本身的收发
+                    }
+                    return message;
+                }
+            });
+        }
+        // 处理 WebSocket 消息
+        // 性能：先做廉价字符串预筛再 JSON.parse——脚本只消费两类载荷：
+        //   ① "init_character_data"（角色初始化）② 含 endCharacterItems 字段的物品变更消息；
+        // 其余消息（聊天、市场、战斗日志等大payload）不再付出完整解析成本。
+        // 用不带引号的裸子串匹配以兼容序列化空格差异；误命中只是多解析一条，无害。
+        static handleWebSocketMessage(message) {
+            if (typeof message !== 'string') return;
+            if (!message.includes('endCharacterItems') && !message.includes('init_character_data')) return;
+            try {
+                const obj = JSON.parse(message);
+                // 类型守卫：检查是否为对象
+                if (!obj || typeof obj !== 'object')
+                    return;
+                const msgObj = obj;
+                // 处理角色初始化消息（使用双重断言）
+                if (msgObj.type === "init_character_data" && Array.isArray(msgObj.characterItems)) {
+                    MWI_Calculator.handleInitCharacterData(obj);
+                }
+                // 处理物品变更消息（使用双重断言）
+                else if (Array.isArray(msgObj.endCharacterItems)) {
+                    MWI_Calculator.handleEndCharacterItems(obj);
+                }
+            }
+            catch {
+                // 忽略解析错误（非JSON消息或其他错误）
+            }
+        }
+        // 收到新角色时先使旧清单失效，再等待 React 实例切到对应角色。
+        static handleInitCharacterData(data) {
+            MWI_Calculator.hasCharacterSession = true;
+            MWI_Calculator.characterID = MWI_Calculator_Calculator.normalizeCharacterID(data?.character?.id);
+            MWI_Calculator.characterGameMode = String(data?.character?.gameMode || '').toLowerCase();
+            MWI_Calculator_Calculator.prepareCharacterSession(MWI_Calculator.characterID);
+            MWI_Calculator_ItemsMap.clear();
+            MWI_Calculator_ItemsMap.update(data.characterItems);
+            if (MWI_Calculator.initialized) MWI_Calculator.syncCharacterSession();
+        }
+        static syncCharacterSession(attempt = 0) {
+            clearTimeout(MWI_Calculator.characterSyncTimer);
+            const calculator = MWI_Calculator_Calculator;
+            if (calculator.pendingCharacterID == null || !MWI_Calculator.initialized) return;
+            const game = MWI_Calculator.getGameObject();
+            if (game) MWI_Calculator.gameObject = game;
+            if (calculator.pendingCharacterID === calculator.getLiveCharacterID()) {
+                calculator.initializeCalculatorUI();
+                calculator.tryLoadActiveCharacter();
+                calculator.scheduleRender();
+                return;
+            }
+            if (attempt < 100) {
+                const generation = calculator.characterGeneration;
+                MWI_Calculator.characterSyncTimer = setTimeout(() => {
+                    if (generation === calculator.characterGeneration) MWI_Calculator.syncCharacterSession(attempt + 1);
+                }, 100);
+            }
+        }
+        // 处理物品变更数据
+        static handleEndCharacterItems(data) {
+            // 更新物品映射表
+            MWI_Calculator_ItemsMap.update(data.endCharacterItems);
+        }
+        // 等待元素出现
+        static waitForElement(selector, callback) {
+            const el = document.querySelector(selector);
+            if (el) {
+                // 元素已存在，直接执行回调
+                callback();
+                return;
+            }
+            // 元素不存在，监听DOM变化
+            const observer = new MutationObserver(() => {
+                const el = document.querySelector(selector);
+                if (el) {
+                    observer.disconnect();
+                    callback();
+                }
+            });
+            observer.observe(document.body, { childList: true, subtree: true });
+        }
+        // 初始化
+        static initialize() {
+            MWI_Calculator.gameObject = MWI_Calculator.getGameObject();
+            MWI_Calculator.initClientData = MWI_Calculator.getInitClientData();
+            if (!MWI_Calculator.gameObject || !MWI_Calculator.initClientData) {
+                console.error("[MWI_Calculator] 初始化失败");
+                return;
+            }
+            MWI_Calculator_Calculator.prepareCharacterSession(MWI_Calculator_Calculator.getSessionCharacterID());
+            MWI_Calculator.initialized = true;
+            MWI_Calculator_ActionDetailPlus.initialize();
+            MWI_Calculator_Calculator.initialize();
+            MWI_Calculator.syncCharacterSession();
+            console.log("[MWI_Calculator] 已初始化");
+            console.log(MWI_Calculator.gameObject, MWI_Calculator.initClientData);
+        }
+        // 获取游戏主组件实例
+        static getGameObject() {
+            // (e => e?.[Object.keys(e).find(k => k.startsWith('__reactFiber$'))]?.return?.stateNode)(document.querySelector('[class^="GamePage"]'))
+            const gamePageElement = document.querySelector('[class^="GamePage"]');
+            if (!gamePageElement)
+                return null;
+            // 查找React Fiber的key（格式：__reactFiber$xxx）
+            const reactKey = Reflect.ownKeys(gamePageElement).find(k => typeof k === 'string' && k.startsWith('__reactFiber$'));
+            if (!reactKey)
+                return null;
+            // 通过Fiber节点获取组件实例
+            const fiber = gamePageElement[reactKey];
+            return fiber?.return?.stateNode || null;
+        }
+        // 获取初始化客户端数据
+        static getInitClientData() {
+            const compressedData = localStorage.getItem("initClientData");
+            if (compressedData) {
+                const decompressedData = LZString.decompressFromUTF16(compressedData);
+                return JSON.parse(decompressedData);
+            }
+            return null;
+        }
+    }
+    MWI_Calculator.gameObject = null;
+    MWI_Calculator.initClientData = null;
+    MWI_Calculator.characterGameMode = '';
+    MWI_Calculator.initialized = false;
+    //#region 配装页《创建消耗预设》按钮
+    // 仅战斗配装注入按钮，
+    // 点击读取当前配装的 foodItemHrids / drinkItemHrids，以数量 1 预填预设新建弹窗。
+    const LOADOUT_PRESET_SELECTORS = {
+        selectedLoadout: '[class*="LoadoutsPanel_selectedLoadout__"]',
+        loadoutDetails: '[class*="LoadoutsPanel_details__"], [class*="details"]',
+        buttonsContainer: '[class*="buttonsContainer"]'
+    };
+    // 从 React 组件 props 挖取 memoizedProps（游戏把配装状态挂在组件 props 上）
+    function getLoadoutReactData(el) {
+        try {
+            const key = Reflect.ownKeys(el || {}).find(k => String(k).startsWith('__reactProps'));
+            const props = key ? el[key] : null;
+            return props?.children?.[0]?._owner?.memoizedProps || props?._owner?.memoizedProps || props || {};
+        }
+        catch (_) { return {}; }
+    }
+    // 读取配装标题（metadata 中 svg 图标与更新按钮之间的文本节点）
+    function getLoadoutName(detailsEl) {
+        const titleEl = detailsEl?.querySelector('[class*="LoadoutsPanel_metadata__"], [class*="metadata"]');
+        const svgEl = titleEl?.querySelector('svg');
+        const updateBtn = titleEl?.querySelector('button');
+        let text = '';
+        let current = svgEl?.nextSibling;
+        while (current && current !== updateBtn) {
+            if (current.nodeType === Node.TEXT_NODE) text += current.textContent || '';
+            current = current.nextSibling;
+        }
+        return text.trim();
+    }
+    function createConsumablePresetFromLoadout() {
+        if (!MWI_Calculator.initialized) {
+            alert('请等待游戏加载完成后再创建消耗预设。');
+            return;
+        }
+        const panel = document.querySelector(LOADOUT_PRESET_SELECTORS.selectedLoadout);
+        const detailsEl = panel ? panel.querySelector(LOADOUT_PRESET_SELECTORS.loadoutDetails) : null;
+        const reactData = getLoadoutReactData(detailsEl);
+        const name = getLoadoutName(detailsEl);
+        const collectionValues = collection => Array.isArray(collection) ? collection
+            : collection instanceof Map ? [...collection.values()]
+            : (collection && typeof collection === 'object' ? Object.values(collection) : []);
+        const reactLoadouts = collectionValues(reactData?.characterLoadoutDict);
+        const rawLoadouts = collectionValues(MWI_Calculator.gameObject?.state?.characterLoadoutMap);
+        const loadouts = reactLoadouts.length ? reactLoadouts : rawLoadouts;
+        const loadout = loadouts.find(item => item?.name === name);
+        if (!loadout) {
+            alert('未找到当前配装，请确认已打开战斗配装页。');
+            return;
+        }
+        // 仅取食物与饮料，数量一律为 1
+        const hrids = new Set();
+        for (const itemHrid of [...(loadout.foodItemHrids || []), ...(loadout.drinkItemHrids || [])]) {
+            if (typeof itemHrid === 'string' && itemHrid.startsWith('/items/')) hrids.add(itemHrid);
+        }
+        if (hrids.size === 0) {
+            alert('当前配装没有可用的食物或饮料。');
+            return;
+        }
+        const items = [...hrids].map(itemHrid => ({ itemHrid, count: 1 }));
+        // 预设名称默认取当前配装名 + 「配装消耗」后缀
+        const presetName = name ? (MWI_Calculator_I18n.isChinese() ? `${name}配装消耗` : `${name} loadout`) : null;
+        MWI_Calculator_Calculator.showPresetEditorDialog(null, items, presetName);
+    }
+    // 战斗配装页注入按钮；非战斗配装或离开页面时移除
+    let loadoutPresetSyncFrame = null;
+    function syncLoadoutPresetButton() {
+        const panel = document.querySelector(LOADOUT_PRESET_SELECTORS.selectedLoadout);
+        const detailsEl = panel ? panel.querySelector(LOADOUT_PRESET_SELECTORS.loadoutDetails) : null;
+        const combatIcon = detailsEl?.querySelector('[class*="metadata"] svg use')?.getAttribute('href')?.split('#').pop();
+        let row = document.querySelector('.mwi-calculator-preset-row');
+        if (!panel || combatIcon !== 'combat') {
+            if (row) row.remove();
+            return;
+        }
+        if (panel.querySelector('.mwi-calculator-preset-btn')) return;
+        const container = panel.querySelector(LOADOUT_PRESET_SELECTORS.buttonsContainer) || panel;
+        const reference = container.querySelector('button:last-child');
+        const button = reference ? reference.cloneNode(true) : document.createElement('button');
+        if (!reference) {
+            button.style.cssText = 'margin:4px;padding:4px 8px;border:none;border-radius:4px;background:#1976D2;color:#fff;cursor:pointer';
+        }
+        button.type = 'button';
+        button.classList.add('mwi-calculator-preset-btn');
+        button.textContent = MWI_Calculator_I18n.isChinese() ? '创建消耗预设' : 'Create consumable preset';
+        button.addEventListener('click', createConsumablePresetFromLoadout);
+        row = document.createElement('div');
+        row.className = 'mwi-calculator-preset-row';
+        container.insertAdjacentElement('afterend', row);
+        row.appendChild(button);
+    }
+    const loadoutPresetObserver = new MutationObserver(() => {
+        if (loadoutPresetSyncFrame) return;
+        loadoutPresetSyncFrame = requestAnimationFrame(() => {
+            loadoutPresetSyncFrame = null;
+            try { syncLoadoutPresetButton(); }
+            catch (error) { console.error('[MWI_Calculator] 配装预设按钮同步失败', error); }
+        });
+    });
+    {
+        const root = document.body || document.documentElement;
+        if (root) {
+            loadoutPresetObserver.observe(root, { childList: true, subtree: true });
+            try { syncLoadoutPresetButton(); }
+            catch (_) { /* 初始化时配装页未打开属正常 */ }
+        }
+    }
+    //#endregion
+    // 防止重复加载
+    if (unsafeWindow.MWI_Calculator_Started) {
+        return;
+    }
+    unsafeWindow.MWI_Calculator_Started = true;
+    // 启动工具包
+    MWI_Calculator.start();
+})();
