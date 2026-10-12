@@ -13,12 +13,13 @@
 // @grant        GM.xmlHttpRequest
 // @downloadURL  https://raw.githubusercontent.com/Chen19970809/MWI_Trial_Calculator/refs/heads/main/KUNPO%E8%AF%95%E7%82%BC%E4%B8%93%E7%94%A8.user.js
 // @updateURL    https://raw.githubusercontent.com/Chen19970809/MWI_Trial_Calculator/refs/heads/main/KUNPO%E8%AF%95%E7%82%BC%E4%B8%93%E7%94%A8.user.js
+// @homepageURL https://github.com/Chen19970809/MWI_Trial_Calculator
+
 // @connect      api.jsonbin.io
 // @connect      1315858741-5moib0woaa.ap-shanghai.tencentscf.com
 // @connect      mwi-guild.43.167.210.211.sslip.io
 // @connect      raw.githubusercontent.com
 // @connect      cdn.jsdelivr.net
-
 // ==/UserScript==
 
 (function () {
@@ -32,7 +33,8 @@
     const CHANGELOG = {
         '1.1.2': '1. DIY插件新增极简版，不喜欢过多功能或者游戏卡顿的伙伴可以前往下载\n'
             + '2. fix bug 过期排刀仍然高亮\n'
-            + '3. TODO 职业\n',
+            + '3. 计算器预设\n'
+            + '4. TODO 职业\n',
         '1.1.1': '1. 新增DIY插件分享，可以方便的下载群友DIY升级的插件\n'
             + '2. 上传神龛，后续模拟试炼使用真实神龛数据\n'
             + '3. 地牢光环推荐支持固定无敌、复活，鼠标悬停可查看角色所有光环等级\n'
@@ -106,6 +108,17 @@
                 + '-支持输入多个关键词以空格隔开搜索（如超级 咖啡）\n'
                 + '-取消勾选物品颜色区分显示\n'
                 + '-支持整个大类添加物品',
+        },
+        {
+            name: '铁牛计算器-预设版',
+            url: 'https://raw.githubusercontent.com/Chen19970809/MWI_Trial_Calculator/refs/heads/main/mwi-calculator.user.js',
+            content: '-在上面版本中额外做了预设\n'
+                + '-可以手动在预设中添加一系列物品\n'
+                + '-开启or关闭预设将一次性添加移除预设中包含的所有物品\n'
+                + '-可以在配装页面点击按钮自动生成配装预设(吃喝)\n'
+                + '-根据暴饮自动计算每天的消耗最大值\n'
+                + '-设置《监测比例》可以在预设中物品数量低于比例时自动添加缺口\n'
+                + '-注意:将丢失旧计算器数据,需手动重新添加(但可以通过UID复制本地其他角色,所以只需要重新添加一个角色就可以了)',
         },
     ]);
 
