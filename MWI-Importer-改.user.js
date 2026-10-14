@@ -29,6 +29,7 @@
     if (document.URL.includes("milkywayidle.com") || document.URL.includes("milkywayidlecn.com")) {
         hookWS();
         startLoadoutCopyButtonSync();
+        hookWSSendCapture();
     } else if (document.URL.includes("mooneycalc")) {
         addImportButton1();
     } else if( document.URL.includes("MWICombatSimulatorTest") || document.URL.includes("localhost")){
@@ -67,6 +68,23 @@
 
             return handleMessage(message);
         }
+    }
+
+    // 捕获游戏 WebSocket 连接，供《导入模拟器数据》主动发送配装槽位更新使用
+    let gameSocket = null;
+    function hookWSSendCapture() {
+        const origSend = WebSocket.prototype.send;
+        WebSocket.prototype.send = function (data) {
+            try {
+                if (!gameSocket && this && this.url
+                    && (this.url.indexOf("api.milkywayidle.com/ws") > -1
+                        || this.url.indexOf("api.milkywayidlecn.com/ws") > -1
+                        || this.url.indexOf("api-test.milkywayidle.com/ws") > -1)) {
+                    gameSocket = this;
+                }
+            } catch (e) {}
+            return origSend.call(this, data);
+        };
     }
 
     let current_team_battle = "";
@@ -1544,6 +1562,208 @@
         document.body.appendChild(el);
         setTimeout(() => el.remove(), 2500);
     }
+    // ── 配装页《导入模拟器数据》：把剪贴板里的模拟器 JSON 逐槽位写进当前选中的配装 ──
+    function sendLoadoutSlotUpdate(loadoutId, slotType, slotKey, itemIdentifier, combatTriggers) {
+        if (!gameSocket) throw new Error("尚未捕获游戏 WebSocket，请刷新游戏页后重试");
+        const slotUpdate = {
+            id: loadoutId,
+            slotType: slotType,
+            slotKey: slotKey,
+            itemIdentifier: itemIdentifier,
+        };
+        if (combatTriggers) slotUpdate.combatTriggers = combatTriggers;
+        gameSocket.send(JSON.stringify({
+            type: "update_loadout_slot",
+            updateLoadoutSlotData: {
+                characterLoadoutSlotUpdate: slotUpdate,
+            },
+            ts: Date.now(),
+        }));
+    }
+    // 在角色所有配装的 wearableMap 里找「同 hrid 同强化」的现成 itemIdentifier（本身就是合法引用）
+    function findIdentifierFromLoadouts(allLoadouts, itemHrid, enhancementLevel) {
+        for (const lo of allLoadouts) {
+            for (const hash of Object.values(lo.wearableMap || {})) {
+                const parts = String(hash || "").split("::");
+                if (parts.length === 4 && parts[2] === itemHrid && (Number(parts[3]) || 0) === (enhancementLevel || 0)) {
+                    return hash;
+                }
+            }
+        }
+        return null;
+    }
+    // 从 init_character_data.characterItems 里找道具实例（同 hrid 优先同强化，其次最高强化）
+    function findIdentifierFromItems(snapshot, itemHrid, enhancementLevel) {
+        const items = (snapshot.characterItems || []).filter(it => it.itemHrid === itemHrid);
+        if (!items.length) return null;
+        const exact = items.find(it => (it.enhancementLevel || 0) === (enhancementLevel || 0));
+        const pick = exact || items.reduce((a, b) => ((b.enhancementLevel || 0) > (a.enhancementLevel || 0) ? b : a), items[0]);
+        const iid = pick.id != null ? pick.id : pick.itemId;
+        if (iid == null) return null;
+        return `${iid}::${pick.itemLocationHrid || "/item_locations/inventory"}::${itemHrid}::${pick.enhancementLevel || 0}`;
+    }
+    function sleep(ms) { return new Promise(resolve => setTimeout(resolve, ms)); }
+    let importSimInFlight = false;
+    async function importSimulatorDataToLoadout() {
+        if (importSimInFlight) { showLoadoutToast("正在导入中，请稍候", "error"); return; }
+        importSimInFlight = true;
+        try {
+            await importSimulatorDataToLoadoutInner();
+        } finally {
+            importSimInFlight = false;
+        }
+    }
+    async function importSimulatorDataToLoadoutInner() {
+        // 1) 定位当前选中的配装（与复制按钮同一套定位逻辑）
+        const panel = document.querySelector(LOADOUT_COPY_SELECTORS.selectedLoadout);
+        const detailsEl = panel ? panel.querySelector(LOADOUT_COPY_SELECTORS.loadoutDetails) : null;
+        const reactData = getLoadoutReactData(detailsEl);
+        const name = getLoadoutName(detailsEl);
+        const reactLoadouts = getCollectionValues(reactData?.characterLoadoutDict);
+        const loadouts = reactLoadouts.length ? reactLoadouts : getCollectionValues(getGameHost()?.state?.characterLoadoutMap);
+        const target = loadouts.find(item => item?.name === name);
+        if (!target || (target.id == null && target.characterLoadoutId == null)) {
+            showLoadoutToast("未找到当前选中的配装", "error");
+            return;
+        }
+        const targetId = target.id != null ? target.id : target.characterLoadoutId;
+        // 2) 读剪贴板
+        let payload;
+        try {
+            const text = await navigator.clipboard.readText();
+            payload = JSON.parse(text);
+        } catch (error) {
+            showLoadoutToast("读取剪贴板失败: " + (error?.message || error), "error");
+            return;
+        }
+        if (!payload || !Array.isArray(payload.player?.equipment)) {
+            showLoadoutToast("剪贴板内容不是模拟器导入数据", "error");
+            return;
+        }
+        // 3) 组装槽位更新
+        let snapshot = {};
+        let allLoadouts = loadouts;
+        try {
+            snapshot = JSON.parse(GM_getValue("init_character_data", "null")) || {};
+            if (!allLoadouts.length) allLoadouts = getCollectionValues(snapshot.characterLoadoutMap || {});
+        } catch (_) { snapshot = {}; }
+        const updates = [];
+        const warnings = [];
+        // 3a. 装备：先清空剪贴板里没有的槽位，再写入
+        const payloadSlots = {};
+        for (const eq of payload.player.equipment) {
+            if (eq?.itemLocationHrid && eq.itemHrid) payloadSlots[eq.itemLocationHrid] = eq;
+        }
+        for (const loc of Object.keys(target.wearableMap || {})) {
+            if (!payloadSlots[loc] && target.wearableMap[loc]) {
+                updates.push({ slotType: "equipment", slotKey: loc, itemIdentifier: "" });
+            }
+        }
+        for (const [loc, eq] of Object.entries(payloadSlots)) {
+            const curItem = getItemByHash(target.wearableMap?.[loc] || "");
+            if (curItem && curItem.itemHrid === eq.itemHrid && (curItem.enhancementLevel || 0) === (eq.enhancementLevel || 0)) {
+                continue; // 与当前配装一致，可忽略
+            }
+            const identifier = findIdentifierFromLoadouts(allLoadouts, eq.itemHrid, eq.enhancementLevel)
+                || findIdentifierFromItems(snapshot, eq.itemHrid, eq.enhancementLevel);
+            if (identifier) updates.push({ slotType: "equipment", slotKey: loc, itemIdentifier: identifier });
+            else warnings.push(loc + " 缺少 " + eq.itemHrid);
+        }
+        // 3b. 技能书：payload 第 0 位=特殊技能，其余普通；写入当前配装对应键位
+        const abilityDetailMap = GM_getValue("initData_abilityDetailMap") || {};
+        const abilityKeys = Object.keys(target.abilityMap || {}).sort((a, b) => Number(a) - Number(b));
+        let specialKey = null;
+        for (const k of abilityKeys) {
+            const cur = target.abilityMap[k];
+            if (cur && abilityDetailMap[cur]?.isSpecialAbility) { specialKey = k; break; }
+        }
+        if (specialKey == null && abilityKeys.length) specialKey = abilityKeys[0];
+        const normalKeys = abilityKeys.filter(k => k !== specialKey);
+        const payloadAbilities = payload.abilities || [];
+        const abilityUpdates = [];
+        if (specialKey != null) {
+            abilityUpdates.push({ key: specialKey, identifier: payloadAbilities[0]?.abilityHrid || "" });
+        }
+        normalKeys.forEach((k, idx) => {
+            abilityUpdates.push({ key: k, identifier: payloadAbilities[idx + 1]?.abilityHrid || "" });
+        });
+        for (const au of abilityUpdates) {
+            if ((target.abilityMap?.[au.key] || "") === au.identifier) continue; // 与当前配装一致，可忽略
+            updates.push({ slotType: "ability", slotKey: au.key, itemIdentifier: au.identifier });
+        }
+        // 3c. 食物/饮料：按目标配装的槽位数写入，多出的槽清空
+        const payloadFood = payload.food?.["/action_types/combat"] || [];
+        const foodSlots = Math.max((target.foodItemHrids || []).length, payloadFood.length);
+        for (let i = 0; i < foodSlots; i++) {
+            const desired = payloadFood[i]?.itemHrid || "";
+            if (((target.foodItemHrids || [])[i] || "") === desired) continue; // 与当前配装一致，可忽略
+            updates.push({ slotType: "food", slotKey: String(i), itemIdentifier: desired });
+        }
+        const payloadDrinks = payload.drinks?.["/action_types/combat"] || [];
+        const drinkSlots = Math.max((target.drinkItemHrids || []).length, payloadDrinks.length);
+        for (let i = 0; i < drinkSlots; i++) {
+            const desired = payloadDrinks[i]?.itemHrid || "";
+            if (((target.drinkItemHrids || [])[i] || "") === desired) continue; // 与当前配装一致，可忽略
+            updates.push({ slotType: "drink", slotKey: String(i), itemIdentifier: desired });
+        }
+        // 3d. 触发器：技能触发器 + 消耗品(食物/饮料)触发器，逐键比对内容
+        const currentTriggers = Object.assign({}, target.abilityCombatTriggersMap || {}, target.consumableCombatTriggersMap || {});
+        const desiredTriggers = payload.triggerMap || {};
+        const payloadFoodHrids = new Set(payloadFood.map(f => f?.itemHrid).filter(Boolean));
+        const targetFoodHrids = new Set((target.foodItemHrids || []).filter(Boolean));
+        const payloadDrinkHrids = new Set(payloadDrinks.map(f => f?.itemHrid).filter(Boolean));
+        const targetDrinkHrids = new Set((target.drinkItemHrids || []).filter(Boolean));
+        const classifyTriggerKey = (key) => {
+            if (String(key).startsWith("/abilities/")) return "ability_trigger";
+            if (payloadFoodHrids.has(key) || targetFoodHrids.has(key)) return "food_trigger";
+            if (payloadDrinkHrids.has(key) || targetDrinkHrids.has(key) || key.includes("coffee")) return "drink_trigger";
+            return "food_trigger";
+        };
+        // 兼容两种取值形态：直接是数组，或 { combatTriggers: [...] }
+        const normalizeTriggers = (value) => {
+            const arr = Array.isArray(value) ? value : (value && Array.isArray(value.combatTriggers) ? value.combatTriggers : null);
+            if (!arr) return [];
+            return arr.filter(t => t && (t.conditionHrid || t.dependencyHrid)).map(t => ({
+                dependencyHrid: t.dependencyHrid || "",
+                conditionHrid: t.conditionHrid || "",
+                comparatorHrid: t.comparatorHrid || "",
+                value: t.value,
+            }));
+        };
+        const triggerSignature = (list) => list
+            .map(t => [t.dependencyHrid, t.conditionHrid, t.comparatorHrid, String(t.value)].join("|"))
+            .sort().join(";");
+        const allTriggerKeys = new Set([...Object.keys(currentTriggers), ...Object.keys(desiredTriggers)]);
+        for (const key of allTriggerKeys) {
+            const desired = normalizeTriggers(desiredTriggers[key]);
+            const current = normalizeTriggers(currentTriggers[key]);
+            if (triggerSignature(desired) === triggerSignature(current)) continue; // 与当前配装一致，可忽略
+            updates.push({
+                slotType: classifyTriggerKey(key),
+                slotKey: key,
+                itemIdentifier: "",
+                combatTriggers: desired,
+            });
+        }
+        // 4) 无实际改动则不发送
+        if (!updates.length) {
+            showLoadoutToast("配装与剪贴板一致，无需改动");
+            return;
+        }
+        // 5) 依次发送，每次改动间隔 0.5~1.5 秒随机
+        try {
+            for (let i = 0; i < updates.length; i++) {
+                const u = updates[i];
+                if (i > 0) await sleep(500 + Math.floor(Math.random() * 1000));
+                sendLoadoutSlotUpdate(targetId, u.slotType, u.slotKey, u.itemIdentifier, u.combatTriggers);
+            }
+        } catch (error) {
+            showLoadoutToast("发送失败: " + (error?.message || error), "error");
+            return;
+        }
+        showLoadoutToast("已写入 " + updates.length + " 个槽位到配装「" + (target.name || name) + "」"
+            + (warnings.length ? "（缺失: " + warnings.join("、") + "）" : ""));
+    }
     async function copyCombatSimulatorData() {
         const panel = document.querySelector(LOADOUT_COPY_SELECTORS.selectedLoadout);
         const detailsEl = panel ? panel.querySelector(LOADOUT_COPY_SELECTORS.loadoutDetails) : null;
@@ -1588,10 +1808,24 @@
         button.classList.add('mwi-copy-combat-btn');
         button.textContent = isZH ? '复制战斗模拟器数据' : 'Copy combat sim data';
         button.addEventListener('click', () => copyCombatSimulatorData());
+        const importBtn = reference ? reference.cloneNode(true) : document.createElement('button');
+        if (!reference) {
+            importBtn.style.cssText = 'margin:4px;padding:4px 8px;border:none;border-radius:4px;background:#1976D2;color:#fff;cursor:pointer';
+        }
+        importBtn.type = 'button';
+        importBtn.classList.add('mwi-import-sim-btn');
+        importBtn.textContent = isZH ? '导入模拟器数据' : 'Import sim data';
+        importBtn.addEventListener('click', () => importSimulatorDataToLoadout());
         row = document.createElement('div');
         row.className = 'mwi-copy-combat-row';
+        row.style.cssText = 'display:flex;gap:8px;align-items:stretch;margin:4px 0;';
+        button.style.flex = '1 1 0';
+        button.style.minWidth = '0';
+        importBtn.style.flex = '1 1 0';
+        importBtn.style.minWidth = '0';
         container.insertAdjacentElement('afterend', row);
         row.appendChild(button);
+        row.appendChild(importBtn);
     }
     function startLoadoutCopyButtonSync() {
         setInterval(() => {
