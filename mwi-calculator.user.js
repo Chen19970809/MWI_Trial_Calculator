@@ -966,6 +966,7 @@
         }
         static refreshPanelVisibility() {
             if (!this.isPanelVisible()) { this.suspendPanelWork(); return; }
+            MWI_Calculator.resyncItemsFromGameState();
             if (this.renderDirty && this.canUseCharacterData()) this.renderItemsDisplay();
             if (this.marketAutoFillEnabled && !this.marketAutoFillObserver) this.ensureMarketAutoFillObserver();
         }
@@ -1840,7 +1841,7 @@
             this.applyPresetItems(name, source.items.map(entry => ({ ...entry })));
         }
         // 以给定物品列表建立应用视图（正常应用与刷新后恢复共用）
-        static applyPresetItems(name, items) {
+        static applyPresetItems(name, items, manualFull = false) {
             if (this.presetAppliedMap.has(name)) return;
             if (!items || items.length === 0) return;
             const host = this.presetDetailsHost;
@@ -1880,10 +1881,14 @@
             Object.assign(fillButton.style, MWI_Calculator_UIStyles.cornerAction);
             summary.appendChild(fillButton);
             // 物品行与原大类目标行同布局，需求数量自动填入预设值，可修改
-            const applied = { details, checkedItems, rows: [], saveButton, dirty: false, alertRatio, manualFull: false, statusSpan, fillButton };
+            const applied = { details, checkedItems, rows: [], saveButton, dirty: false, alertRatio, manualFull: manualFull === true, statusSpan, fillButton };
             for (const item of items) {
-                const row = this.createPresetItemDisplayElement(item, applied);
-                applied.rows.push({ item, container: row.container, ownedSpan: row.ownedSpan, checkbox: row.checkbox, checked: true });
+                const entry = { item, container: null, ownedSpan: null, checkbox: null, checked: item.checked !== false };
+                const row = this.createPresetItemDisplayElement(item, applied, entry);
+                entry.container = row.container;
+                entry.ownedSpan = row.ownedSpan;
+                entry.checkbox = row.checkbox;
+                applied.rows.push(entry);
                 details.appendChild(row.container);
             }
             fillButton.addEventListener('click', event => {
@@ -1942,7 +1947,12 @@
             try {
                 const data = [...this.presetAppliedMap.entries()].map(([appliedName, applied]) => ({
                     name: appliedName,
-                    items: (applied.rows || []).map(row => ({ itemHrid: row.item.itemHrid, count: row.item.count })),
+                    manualFull: applied.manualFull === true,
+                    items: (applied.rows || []).map(row => ({
+                        itemHrid: row.item.itemHrid,
+                        count: row.item.count,
+                        checked: row.checked !== false,
+                    })),
                 }));
                 GM_setValue(key, JSON.stringify(data));
                 return true;
@@ -1968,9 +1978,9 @@
                     const items = [];
                     for (const item of entry.items) {
                         if (!item || typeof item.itemHrid !== 'string' || !Number.isFinite(item.count)) continue;
-                        items.push({ itemHrid: item.itemHrid, count: item.count });
+                        items.push({ itemHrid: item.itemHrid, count: item.count, checked: item.checked !== false });
                     }
-                    if (items.length > 0) this.applyPresetItems(entry.name, items);
+                    if (items.length > 0) this.applyPresetItems(entry.name, items, entry.manualFull === true);
                 }
                 return true;
             }
@@ -1981,7 +1991,7 @@
         }
         // 预设类内物品行：布局与原大类目标行一致（勾选框/拥有/需求），
         // 需求数量自动填入预设值且可修改；修改后在预设名字框显示保存按钮；无删除按钮。
-        static createPresetItemDisplayElement(presetItem, applied) {
+        static createPresetItemDisplayElement(presetItem, applied, rowEntry = null) {
             const displayItem = {
                 itemHrid: presetItem.itemHrid,
                 count: presetItem.count,
@@ -1992,8 +2002,13 @@
             const needCalcCheckbox = document.createElement('input');
             needCalcCheckbox.type = 'checkbox';
             needCalcCheckbox.checked = true;
-            needCalcCheckbox.disabled = true;
-            needCalcCheckbox.title = MWI_Calculator_I18n.isChinese() ? '是否计入缺口：由预警比例自动控制，可用「补满」全部勾选' : 'Counted in shortage: controlled by alert ratio; use Fill to check all';
+            needCalcCheckbox.disabled = true; // 仅补满（manualFull）状态下启用，可手动取消勾选
+            needCalcCheckbox.title = MWI_Calculator_I18n.isChinese() ? '是否计入缺口计算：由预警比例自动控制；补满状态下可手动调整' : 'Counted in shortage: auto-controlled by alert ratio; editable in Fill mode';
+            needCalcCheckbox.addEventListener('change', () => {
+                if (rowEntry) rowEntry.checked = needCalcCheckbox.checked;
+                MWI_Calculator_Calculator.saveAndScheduleRender();
+                MWI_Calculator_Calculator.saveAppliedPresets();
+            });
             container.prepend(needCalcCheckbox);
             // 拥有数量
             const ownedSpan = document.createElement('span');
@@ -2056,7 +2071,10 @@
         //   0 < 预警比例 < 1 时：任一 item 现有/需求 < 预警比例 → 全部勾选（进入预警）；
         //     否则「现有 < 需求 且 现有/需求 > 预警比例」的 item 取消勾选（暂不计入缺口）。
         //   预警比例不在 (0,1) 区间时全部勾选（不做预警筛选）。
-        //   「补满」后进入手动状态保持全部勾选；任一 item 跌破预警线后恢复自动评估。
+        //   「补满」后进入手动状态：监测逻辑整体挂起——不因预警触发而退出、
+        //     不显示预警比例、不自动折叠/展开、现有数量标红暂停；
+        //     勾选框可手动取消勾选（不计入缺口计算），仅点击「监测」恢复自动评估。
+        //   非补满状态下，预警触发期间低于预警线的 item「现有数量」标红提示。
         static updateAppliedPresetRows() {
             this.presetAppliedMap?.forEach(applied => {
                 const rows = applied.rows || [];
@@ -2072,24 +2090,34 @@
                         if (alertActive && ratio < applied.alertRatio) hasCritical = true;
                     }
                 }
-                // 手动补满状态保持全部勾选；出现跌破预警线的物品后恢复自动评估
-                if (applied.manualFull && hasCritical) applied.manualFull = false;
+                // 手动补满状态完全接管：不因预警触发而退出，勾选与折叠均由用户控制，
+                // 仅点击「监测」才恢复自动评估
                 const manualFull = applied.manualFull === true;
                 for (const row of rows) {
                     const owned = MWI_Calculator_ItemsMap.getCount(row.item.itemHrid);
-                    let checked = true;
-                    if (alertActive && !manualFull && !hasCritical) {
-                        checked = !(row.item.count > 0 && owned < row.item.count && owned / row.item.count > applied.alertRatio);
+                    // 补满（手动）状态：尊重用户手动勾选/取消勾选，不做自动覆盖；
+                    // 非补满状态：按预警规则自动评估
+                    if (!manualFull) {
+                        let checked = true;
+                        if (alertActive && !hasCritical) {
+                            checked = !(row.item.count > 0 && owned < row.item.count && owned / row.item.count > applied.alertRatio);
+                        }
+                        row.checked = checked;
                     }
-                    row.checked = checked;
-                    if (row.checkbox) row.checkbox.checked = checked;
+                    if (row.checkbox) {
+                        row.checkbox.disabled = !manualFull;
+                        if (row.checkbox.checked !== row.checked) row.checkbox.checked = row.checked;
+                    }
                     const state = owned >= row.item.count ? 'completed' : 'pending';
                     MWI_Calculator_UI.renderTargetState(row.container, state);
+                    // 预警触发期间（非补满）：现有/需求 低于预警比例的 item，现有数量标红
+                    const belowAlert = alertActive && row.item.count > 0 && owned / row.item.count < applied.alertRatio;
+                    if (row.ownedSpan) row.ownedSpan.style.color = (!manualFull && hasCritical && belowAlert) ? '#e0533d' : '';
                 }
                 // 标题状态：最低 现有/需求 与预警比例比较；绿色自动折叠，红色自动展开
-                // （手动补满状态下不干预展开/折叠，仅刷新比较值）
+                // （手动补满状态下监测逻辑整体挂起：隐藏预警比例显示、不干预展开/折叠）
                 if (applied.statusSpan) {
-                    if (!alertActive) {
+                    if (!alertActive || manualFull) {
                         applied.statusSpan.style.display = 'none';
                     }
                     else {
@@ -2124,6 +2152,7 @@
             if (applied.manualFull) {
                 applied.manualFull = false;
                 this.updateAppliedPresetRows();
+                this.saveAppliedPresets();
                 this.saveAndScheduleRender();
                 return;
             }
@@ -2137,10 +2166,13 @@
             for (const row of applied.rows || []) {
                 if (row.checked !== true) changed = true;
                 row.checked = true;
-                if (row.checkbox) row.checkbox.checked = true;
+                if (row.checkbox) { row.checkbox.checked = true; row.checkbox.disabled = false; }
             }
             if (applied.details) applied.details.open = true;
+            // 补满状态挂起监测：立即隐藏预警比例状态显示
+            if (applied.statusSpan) applied.statusSpan.style.display = 'none';
             if (applied.fillButton) applied.fillButton.textContent = MWI_Calculator_I18n.isChinese() ? '监测' : 'Monitor';
+            this.saveAppliedPresets();
             if (changed) this.saveAndScheduleRender();
         }
         // 预设编辑弹窗：第一条为预设名称输入，第二条为物品搜索框（搜索选中后
@@ -3291,6 +3323,7 @@
         // 渲染物品列表
         static renderItemsDisplay() {
             if (!this.isPanelVisible()) { this.renderDirty = true; return; }
+            MWI_Calculator.resyncItemsFromGameState();
             const previous = MWI_Calculator_ActionDetailPlus.renderRecipeCache;
             MWI_Calculator_ActionDetailPlus.renderRecipeCache = new Map();
             this.renderingVisible = true;
@@ -3585,16 +3618,133 @@
                 }
             });
             const shortageSpan = document.createElement('span');
-            shortageSpan.style.background = MWI_Calculator_UITheme.heading;
-            shortageSpan.style.borderRadius = '4px';
-            shortageSpan.style.padding = '2px 6px';
+            // 缺口数量显示为纯数字（不再使用背景色块）
             shortageSpan.style.marginLeft = '4px';
             // 数量区域保持自身宽度，跳转按钮仅占据其左侧剩余空间
             rightDiv.style.flex = '0 0 auto';
             rightDiv.appendChild(shortageSpan);
+            // 糖的缺口专属按钮《熊》：点击事件暂留空
+            const isSugar = requiredItem.itemHrid === '/items/sugar'
+                || MWI_Calculator_I18n.getItemName(requiredItem.itemHrid) === '糖';
+            if (isSugar) {
+                // 两种卷轴状态的每只软糖熊产糖量：无卷轴 77.7，战斗卷轴 86.7
+                const bearOptions = [
+                    { title: '无卷轴，77.7糖/软糖熊', perBear: 77.7, background: '#4CAF50' },
+                    { title: '战斗卷轴，86.7糖/软糖熊', perBear: 86.7, background: '#8d6e63' },
+                ];
+                for (const option of bearOptions) {
+                    const bearButton = document.createElement('button');
+                    bearButton.type = 'button';
+                    bearButton.textContent = '熊';
+                    bearButton.title = option.title;
+                    bearButton.style.cssText = `color:#fff;border:none;border-radius:4px;padding:2px 6px;margin-left:4px;cursor:pointer;background:${option.background}`;
+                    bearButton.addEventListener('click', event => {
+                        event.preventDefault();
+                        event.stopPropagation();
+                        // 战斗次数 = 糖缺口 / 每只软糖熊产糖量（向上取整）
+                        const count = Math.ceil((requiredItem.shortageCount || 0) / option.perBear);
+                        MWI_Calculator_Calculator.gotoGummyBearCombat(count > 0 ? count : null);
+                    });
+                    rightDiv.insertBefore(bearButton, shortageSpan);
+                }
+            }
             requiredItem.shortageDisplayElement = container;
             requiredItem.shortageSpan = shortageSpan;
             requiredItem.itemJumpButton = itemJumpButton;
+        }
+        // 熊按钮：跳转到 战斗-熊熊星球-软糖熊
+        // 定位策略：本地化名称反查战斗动作（/actions/combat/...），尽力校验所属区域名；
+        // 名称直查失败时扫描 actionDetailMap 兜底。
+        static gotoGummyBearCombat(count = null) {
+            const game = MWI_Calculator.gameObject;
+            if (!game || typeof game.handleGoToAction !== 'function') return;
+            const zh = MWI_Calculator_I18n.isChinese();
+            const monsterName = zh ? '软糖熊' : 'Gummy Bear';
+            const zoneName = zh ? '熊熊星球' : 'Bear Planet';
+            let target = null;
+            // 主路径：按怪物名称反查动作 hrid，并校验其为战斗动作
+            const hridFromName = MWI_Calculator_I18n.getHridByName(monsterName, 'actionNames');
+            if (typeof hridFromName === 'string' && hridFromName.startsWith('/actions/combat/')) {
+                const detail = MWI_Calculator.initClientData?.actionDetailMap?.[hridFromName];
+                const zoneHrid = detail?.zoneHrid || detail?.combatZoneHrid || '';
+                const zoneNameText = zoneHrid ? MWI_Calculator_I18n.getName(zoneHrid, 'combatZoneNames') : '';
+                if (!zoneNameText || zoneNameText === zoneName || String(zoneHrid).includes('bear')) {
+                    target = hridFromName;
+                }
+            }
+            // 兜底：扫描战斗动作找同名怪物
+            if (!target) {
+                const actionDetailMap = MWI_Calculator.initClientData?.actionDetailMap;
+                for (const actionHrid of Object.keys(actionDetailMap || {})) {
+                    if (!actionHrid.startsWith('/actions/combat/')) continue;
+                    if (MWI_Calculator_I18n.getName(actionHrid, 'actionNames') !== monsterName) continue;
+                    target = actionHrid;
+                    break;
+                }
+            }
+            if (!target) {
+                console.warn('[MWI_Calculator] 未找到 软糖熊 对应的战斗动作');
+                return;
+            }
+            game.handleGoToAction(target, 1);
+            // handleGoToAction 只切换到战斗区域界面，打开怪物动作窗口还需要：
+            // 尝试 1：运行时自探测游戏内部「前往怪物」调用（实例/原型链）
+            const monsterHrid = target.replace('/actions/combat/', '/monsters/');
+            let internalCalled = false;
+            try {
+                for (const obj of [game, Object.getPrototypeOf(game)].filter(Boolean)) {
+                    for (const key of Object.getOwnPropertyNames(obj)) {
+                        if (!/monster/i.test(key) || !/go|select|set|open|show/i.test(key)) continue;
+                        const fn = obj[key];
+                        if (typeof fn !== 'function') continue;
+                        for (const arg of [monsterHrid, target]) {
+                            try { fn.call(game, arg); internalCalled = true; break; }
+                            catch (_) { /* 尝试下一个 */ }
+                        }
+                        if (internalCalled) break;
+                    }
+                    if (internalCalled) break;
+                }
+            }
+            catch (_) { /* 自探测失败，走 DOM 点击 */ }
+            if (internalCalled) { this.scheduleFillActionCount(count); return; }
+            // 尝试 2：轮询点击战斗面板里的怪物条目（React 渲染需要时间，重试约 2 秒）
+            let attempts = 0;
+            const clickMonster = () => {
+                attempts++;
+                try {
+                    const nodes = [...document.querySelectorAll('button, [role="button"]')]
+                        .filter(el => el.textContent?.includes(monsterName) && el.getClientRects().length > 0);
+                    // 取文本最短（最内层/最精确）的匹配元素点击
+                    nodes.sort((a, b) => a.textContent.length - b.textContent.length);
+                    if (nodes[0]) {
+                        nodes[0].click();
+                        this.scheduleFillActionCount(count);
+                        return;
+                    }
+                }
+                catch (_) { /* 忽略 */ }
+                if (attempts < 6) setTimeout(clickMonster, 350);
+            };
+            setTimeout(clickMonster, 300);
+        }
+        // 轮询等待动作窗口出现并自动填入战斗次数（React 受控输入需原生 setter + 事件）
+        static scheduleFillActionCount(count) {
+            if (count == null || count <= 0) return;
+            let attempts = 0;
+            const fill = () => {
+                attempts++;
+                const input = document.querySelector('[class^="SkillActionDetail_maxActionCountInput"] input');
+                if (input) {
+                    const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+                    nativeSetter.call(input, String(count));
+                    input.dispatchEvent(new Event('input', { bubbles: true }));
+                    input.dispatchEvent(new Event('change', { bubbles: true }));
+                    return;
+                }
+                if (attempts < 15) setTimeout(fill, 200);
+            };
+            setTimeout(fill, 300);
         }
         // 创建需求物品元素
         static createRequiredItemDisplayElement(requiredItem) {
@@ -4901,13 +5051,37 @@
             });
         }
         // 处理 WebSocket 消息
-        // 性能：先做廉价字符串预筛再 JSON.parse——脚本只消费两类载荷：
-        //   ① "init_character_data"（角色初始化）② 含 endCharacterItems 字段的物品变更消息；
-        // 其余消息（聊天、市场、战斗日志等大payload）不再付出完整解析成本。
-        // 用不带引号的裸子串匹配以兼容序列化空格差异；误命中只是多解析一条，无害。
+        // 性能分层：
+        //   ① 计算器页签未激活（或浏览器页签隐藏）时：物品增量完全跳过——不做任何
+        //      子串扫描与解析，激活时由 resyncItemsFromGameState 从游戏实时背包
+        //      （characterItemMap）全量重建，数据精确无积压；
+        //      仅保留 init_character_data 检测（切角色可能发生在不可见期，会话必须跟上）；
+        //   ② 页签激活时：裸子串预筛（兼容空格差异，误命中无害）→ 只解析两类载荷；
+        //   ③ 重建数据源不可用（游戏state未就绪/结构变化）时退回常规预筛+解析，
+        //      避免数据永久陈旧。
+        // 挂起判断用 calculatorActive/document.hidden 标志位，避免每条消息触发
+        // isPanelVisible 的 getClientRects/getComputedStyle 强制布局计算。
         static handleWebSocketMessage(message) {
             if (typeof message !== 'string') return;
-            if (!message.includes('endCharacterItems') && !message.includes('init_character_data')) return;
+            const isInit = message.includes('init_character_data');
+            const suspended = !MWI_Calculator_Calculator.calculatorActive || document.hidden;
+            const canResync = MWI_Calculator.gameObject?.state?.characterItemMap instanceof Map;
+            if (suspended && canResync) {
+                if (isInit) {
+                    try {
+                        const obj = JSON.parse(message);
+                        if (obj?.type === 'init_character_data' && Array.isArray(obj.characterItems)) {
+                            MWI_Calculator.handleInitCharacterData(obj);
+                        }
+                    }
+                    catch { /* 忽略解析错误 */ }
+                }
+                else {
+                    MWI_Calculator.itemDataDirty = true;
+                }
+                return;
+            }
+            if (!isInit && !message.includes('endCharacterItems')) return;
             try {
                 const obj = JSON.parse(message);
                 // 类型守卫：检查是否为对象
@@ -4928,6 +5102,32 @@
             }
         }
         // 收到新角色时先使旧清单失效，再等待 React 实例切到对应角色。
+        // 面板不可见期间挂起的物品增量，在此从游戏 state 的实时背包全量重建：
+        //   characterItemMap: Map<"角色ID::位置::物品hrid::强化等级", {count, ...}>
+        // 转换为 ItemsMap.update 需要的条目数组；数据源缺失时保留挂起标记稍后重试。
+        static resyncItemsFromGameState() {
+            if (!MWI_Calculator.itemDataDirty) return false;
+            const itemMap = MWI_Calculator.gameObject?.state?.characterItemMap;
+            if (!(itemMap instanceof Map)) return false;
+            const items = [];
+            itemMap.forEach((value, hash) => {
+                const parts = String(hash).split('::');
+                if (parts.length !== 4) return;
+                const itemHrid = parts[2];
+                const itemLocationHrid = parts[1];
+                const enhancementLevel = Number(parts[3]);
+                const count = Number(value?.count);
+                if (!itemHrid.startsWith('/items/')) return;
+                if (!Number.isInteger(enhancementLevel) || enhancementLevel < 0) return;
+                if (!Number.isFinite(count) || count <= 0) return;
+                items.push({ itemHrid, itemLocationHrid, enhancementLevel, count });
+            });
+            if (items.length === 0) return false;
+            MWI_Calculator_ItemsMap.clear();
+            MWI_Calculator_ItemsMap.update(items);
+            MWI_Calculator.itemDataDirty = false;
+            return true;
+        }
         static handleInitCharacterData(data) {
             MWI_Calculator.hasCharacterSession = true;
             MWI_Calculator.characterID = MWI_Calculator_Calculator.normalizeCharacterID(data?.character?.id);
@@ -4935,6 +5135,8 @@
             MWI_Calculator_Calculator.prepareCharacterSession(MWI_Calculator.characterID);
             MWI_Calculator_ItemsMap.clear();
             MWI_Calculator_ItemsMap.update(data.characterItems);
+            // init 全量快照已覆盖挂起期间的增量，清除待重建标记
+            MWI_Calculator.itemDataDirty = false;
             if (MWI_Calculator.initialized) MWI_Calculator.syncCharacterSession();
         }
         static syncCharacterSession(attempt = 0) {
@@ -5023,6 +5225,7 @@
     MWI_Calculator.initClientData = null;
     MWI_Calculator.characterGameMode = '';
     MWI_Calculator.initialized = false;
+    MWI_Calculator.itemDataDirty = false;
     //#region 配装页《创建消耗预设》按钮
     // 仅战斗配装注入按钮，
     // 点击读取当前配装的 foodItemHrids / drinkItemHrids，以数量 1 预填预设新建弹窗。
