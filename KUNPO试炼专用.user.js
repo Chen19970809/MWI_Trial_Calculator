@@ -122,7 +122,7 @@
         },
         {
             name: 'shykai战斗模拟器导入_改',
-            url: 'https://raw.githubusercontent.com/Chen19970809/MWI_Trial_Calculator/refs/heads/main/MWI-Importer-%E6%94%B9.txt',
+            url: 'https://raw.githubusercontent.com/Chen19970809/MWI_Trial_Calculator/refs/heads/main/MWI-Importer-%E6%94%B9.user.js',
             content: '-原插件功能：支持导入神龛、迷宫升级\n'
                 + '-魔改功能：配装页支持导出模拟数据',
         },
