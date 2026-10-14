@@ -17,13 +17,10 @@
 // @grant        GM_listValues
 // @grant        GM_deleteValue
 // @require      https://cdnjs.cloudflare.com/ajax/libs/lz-string/1.5.0/lz-string.min.js
-// @downloadURL https://update.greasyfork.org/scripts/507255/MWI-Importer.user.js
-// @updateURL https://update.greasyfork.org/scripts/507255/MWI-Importer.meta.js
+// @downloadURL https://raw.githubusercontent.com/Chen19970809/MWI_Trial_Calculator/refs/heads/main/MWI-Importer-%E6%94%B9.txt
+// @updateURL https://raw.githubusercontent.com/Chen19970809/MWI_Trial_Calculator/refs/heads/main/MWI-Importer-%E6%94%B9.txt
+// @homepageURL https://github.com/Chen19970809/MWI_Trial_Calculator
 // ==/UserScript==
-
-//TODO
-// 1. 目前只支持当然页面刷新之后的角色 模拟多久升级
-// 2. 检验trigger是否工作 找到了trigger数据
 
 
 (function () {

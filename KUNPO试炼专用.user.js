@@ -120,6 +120,12 @@
                 + '-设置《监测比例》可以在预设中物品数量低于比例时自动添加缺口\n'
                 + '-注意:将丢失旧计算器数据,需手动重新添加(但可以通过UID复制本地其他角色,所以只需要重新添加一个角色就可以了)',
         },
+        {
+            name: 'shykai战斗模拟器导入_改',
+            url: 'https://raw.githubusercontent.com/Chen19970809/MWI_Trial_Calculator/refs/heads/main/MWI-Importer-%E6%94%B9.txt',
+            content: '-原插件功能：支持导入神龛、迷宫升级\n'
+                + '-魔改功能：配装页支持导出模拟数据',
+        },
     ]);
 
     // ── 公会校验默认值 ──
