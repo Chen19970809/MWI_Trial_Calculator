@@ -4,13 +4,8 @@
 // @version      2.4.0
 // @description  脚本基于Mooneycalc-Importer v5.3，增加了组队模拟功能，使用时请手动查看队友装备以获取数据。https://amvoidguy.github.io/MWICombatSimulatorTest/dist/index.html.
 // @match        https://www.milkywayidle.com/*
-// @match        https://test.milkywayidle.com/*
 // @match        https://www.milkywayidlecn.com/*
-// @match        https://mooneycalc.vercel.app/*
-// @match        https://mooneycalc.netlify.app/*
-// @match        https://amvoidguy.github.io/MWICombatSimulatorTest/dist/index.html
 // @match        https://shykai.github.io/MWICombatSimulatorTest/*
-// @match        http://localhost:9000/
 // @run-at       document-start
 // @grant        GM_getValue
 // @grant        GM_setValue
@@ -96,6 +91,26 @@
             GM_setValue("profile_arr", profile_arr);
             GM_setValue("profile_" + obj.character.name, message);
             GM_setValue("init_character_data",message);
+
+            // 不进战斗也预写一份 team_battle_ 最小快照：
+            // constructImportJsonObj_team 只读 players 名单，装备/等级等实际数据仍取自 profile_xxx；
+            // 真实进入战斗后会被 new_battle 的完整消息覆盖
+            let tb_players = [];
+            if (obj.partyInfo && obj.partyInfo.partySlotMap) {
+                Object.values(obj.partyInfo.partySlotMap).forEach((slot) => {
+                    if (slot && slot.characterID && obj.partyInfo.sharableCharacterMap && obj.partyInfo.sharableCharacterMap[slot.characterID]) {
+                        tb_players.push({ character: { name: obj.partyInfo.sharableCharacterMap[slot.characterID].name } });
+                    }
+                });
+            }
+            if (tb_players.length === 0) {
+                tb_players = [{ character: { name: obj.character.name } }];
+            }
+            let tb_snapshot = JSON.stringify({ type: "new_battle", combatStartTime: Date.now(), players: tb_players });
+            GM_setValue("team_battle_" + obj.character.name, tb_snapshot);
+            if (tb_players[0].character.name !== obj.character.name) {
+                GM_setValue("team_battle_" + tb_players[0].character.name, tb_snapshot);
+            }
             const init_client_data = JSON.parse(LZString.decompressFromUTF16(localStorage.getItem('initClientData')));
             if(init_client_data) {
                 GM_setValue("initData_levelExperienceTable", init_client_data.levelExperienceTable);
@@ -115,11 +130,68 @@
 
             GM_setValue("team_battle_" + newBattleHandler[0], message);
         }else if (obj && obj.type === "profile_shared"){
-            console.log("profile_shared",obj);
             GM_setValue(obj.profile.sharableCharacter.name, message);
+            // 若之前点开过配装，把缓存的 loadout 战斗字段合并回存档
+            let cachedLo = GM_getValue("loadout_cache_" + obj.profile.sharableCharacter.name);
+            if (cachedLo) {
+                mergeLoadoutIntoProfile(obj.profile.sharableCharacter.name, JSON.parse(cachedLo));
+            }
             get_sim_json(obj);
+        }else if (obj && obj.type === "loadout_shared"){
+            // 点开队友配装面板时收到：只处理战斗配装（避免其它动作类型的空配装覆盖战斗数据），
+            // 缓存原始 loadout，并把战斗字段覆盖进队友存档
+            let lo = obj.loadout;
+            if (lo && lo.actionTypeHrid === "/action_types/combat" && lo.sharableCharacter && lo.sharableCharacter.name) {
+                GM_setValue("loadout_cache_" + lo.sharableCharacter.name, JSON.stringify(lo));
+                mergeLoadoutIntoProfile(lo.sharableCharacter.name, lo);
+            }
         }
         return message;
+    }
+
+    // 把 loadout_shared 的战斗相关字段（装备/技能书/食物咖啡/trigger）覆盖进队友存档
+    // 存档底子是 profile_shared（含技能等级/房屋/成就等）；还没收到 profile_shared 时补默认骨架
+    function mergeLoadoutIntoProfile(name, lo) {
+        let baseProfile = null;
+        let existing = GM_getValue(name);
+        if (existing) {
+            try { baseProfile = JSON.parse(existing).profile || null; } catch (e) { baseProfile = null; }
+        }
+        if (!baseProfile) {
+            baseProfile = {};
+        }
+        // 装备槽：loadout_shared 可能用对象或序列化字符串两种格式，统一转成导入函数需要的对象格式
+        let normalizedWearable = {};
+        if (lo.wearableItemMap && Object.keys(lo.wearableItemMap).length > 0) {
+            for (const k of Object.keys(lo.wearableItemMap)) {
+                let v = lo.wearableItemMap[k];
+                if (typeof v === "string") {
+                    // "id::/item_locations/xxx::/items/yyy::强化等级"
+                    let parts = v.split("::");
+                    normalizedWearable[k] = { itemLocationHrid: k, itemHrid: parts[2], enhancementLevel: Number(parts[3]) || 0 };
+                } else if (v && v.itemHrid) {
+                    normalizedWearable[k] = v;
+                }
+            }
+        }
+        // 技能书槽：loadout_shared 字段名为 equipmentAbilities，导入函数读 equippedAbilities；
+        // 过滤空槽位（abilityHrid 为空会让导入时 initData_abilityDetailMap 查表抛错）
+        let loAbilities = (lo.equippedAbilities ?? lo.equipmentAbilities) || [];
+        loAbilities = loAbilities.filter(a => a && a.abilityHrid);
+        let merged = Object.assign({}, baseProfile, {
+            // loadout_shared 优先覆盖的战斗字段（字段为空/空对象时不回退覆盖底档）
+            wearableItemMap: Object.keys(normalizedWearable).length > 0 ? normalizedWearable : (baseProfile.wearableItemMap ?? {}),
+            combatConsumables: Array.isArray(lo.combatConsumables) ? lo.combatConsumables : (baseProfile.combatConsumables ?? []),
+            equippedAbilities: loAbilities.length > 0 ? loAbilities : (baseProfile.equippedAbilities ?? []),
+            abilityCombatTriggersMap: (lo.abilityCombatTriggersMap && Object.keys(lo.abilityCombatTriggersMap).length > 0) ? lo.abilityCombatTriggersMap : (baseProfile.abilityCombatTriggersMap ?? {}),
+            consumableCombatTriggersMap: (lo.consumableCombatTriggersMap && Object.keys(lo.consumableCombatTriggersMap).length > 0) ? lo.consumableCombatTriggersMap : (baseProfile.consumableCombatTriggersMap ?? {}),
+            // loadout_shared 不含这些字段，缺失时补空，避免 constructPlayerExportObjFromProfile 抛错
+            characterSkills: baseProfile.characterSkills ?? [],
+            characterHouseRoomMap: baseProfile.characterHouseRoomMap ?? {},
+            characterAchievements: baseProfile.characterAchievements ?? [],
+            guildBuffLevelMap: baseProfile.guildBuffLevelMap ?? {},
+        });
+        GM_setValue(name, JSON.stringify({ type: "profile_shared", profile: merged }));
     }
 
 
@@ -329,9 +401,8 @@
         localStorage.setItem("equipmentSets", JSON.stringify(equipmentSets));
     }
 
-    function constructSelfPlayerExportObjFromInitCharacterData() {
-        let data = GM_getValue("init_character_data");
-        let obj = JSON.parse(data);
+    function constructSelfPlayerExportObjFromInitCharacterData(initObj) {
+        let obj = initObj || JSON.parse(GM_getValue("init_character_data"));
 
         let initData_abilityDetailMap = GM_getValue("initData_abilityDetailMap");
 
@@ -750,7 +821,10 @@
 
     async function importData1(button) {
         let data = GM_getValue("init_character_data");
-        let obj = JSON.parse(data);
+        let obj = null;
+        try { obj = JSON.parse(data); } catch (e) {
+            // 数据缺失或损坏时按无数据处理，走下方按钮错误提示
+        }
 
         if (!obj || !obj.characterSkills || !obj.currentTimestamp) {
             button.textContent = isZH ? "错误：没有人物数据" : "Error: no character settings found";
@@ -879,7 +953,16 @@
     }
 
     async function importCombatSimData(button,checkedProfile) {
-        let playerInfo = JSON.parse(GM_getValue("profile_"+ checkedProfile));
+        let profileRaw = GM_getValue("profile_"+ checkedProfile);
+        let playerInfo = null;
+        try { playerInfo = JSON.parse(profileRaw); } catch (e) {
+            // 存档缺失或损坏时按无数据处理，走下方按钮错误提示
+        }
+        if (!playerInfo) {
+            button.textContent = isZH ? "错误：没有人物数据" : "Error: no character settings found";
+            button.textContent += " profile_" + checkedProfile;
+            return;
+        }
 
         let playerArr = [];
         if ( playerInfo.partyInfo ) {
@@ -965,6 +1048,12 @@
 
     function constructImportJsonObj_team(obj,checkedProfile) {
         let init_character_obj = JSON.parse(GM_getValue("profile_"+ checkedProfile));
+        // 当前登录角色的名字（无合并存档时回退登录快照用）
+        let loggedInName = "";
+        try {
+            let initRaw = GM_getValue("init_character_data");
+            if (initRaw) loggedInName = JSON.parse(initRaw).character.name;
+        } catch (e) {}
         let exportObj = {};
 
         exportObj.player_number=obj.players.length;
@@ -979,19 +1068,42 @@
             // HouseRooms
             exportObj.players[player_num].player.equipment = [];
             exportObj.players[player_num].houseRooms = {};
-            if(obj.players[player_num].character.name==init_character_obj.character.name){
-                exportObj.players[player_num] = constructSelfPlayerExportObjFromInitCharacterData(init_character_obj);
-            }else{
-                //手动取装备数据
-                let team_mate_str=GM_getValue(obj.players[player_num].character.name, "")
-                console.log("team_mate_str",team_mate_str);
-                if (!team_mate_str) {
-                    alert("请手动查看一下队友装备信息，当前缺失装备信息队友："+obj.players[player_num].character.name);
-                    //    console.log( "不敢模拟点击，请手动查看一下队友装备信息，当前缺失装备信息队友："+obj.players[player_num].character.name);
-                    return;
+            let mateName = obj.players[player_num].character.name;
+            let team_mate_str = GM_getValue(mateName, "")
+            let team_mate_obj = null;
+            if (team_mate_str) {
+                try { team_mate_obj = JSON.parse(team_mate_str); } catch (e) { team_mate_obj = null; }
+            }
+            let mateWearable = team_mate_obj?.profile?.wearableItemMap;
+            let hasEquip = mateWearable && Object.keys(mateWearable).length > 0;
+            if (team_mate_obj && hasEquip) {
+                // 统一数据源：点开配装合并出的存档
+                // 存档缺技能/房屋等底档字段且该角色有登录快照时，用快照补齐
+                if (!(team_mate_obj.profile.characterSkills || []).length) {
+                    let snap = null;
+                    if (mateName == loggedInName) {
+                        try { snap = JSON.parse(GM_getValue("init_character_data")); } catch (e) {}
+                    } else if (mateName == init_character_obj.character.name) {
+                        snap = init_character_obj;
+                    }
+                    if (snap) {
+                        team_mate_obj.profile.characterSkills = snap.characterSkills || [];
+                        if (!Object.keys(team_mate_obj.profile.characterHouseRoomMap || {}).length) team_mate_obj.profile.characterHouseRoomMap = snap.characterHouseRoomMap || {};
+                        if (!(team_mate_obj.profile.characterAchievements || []).length) team_mate_obj.profile.characterAchievements = snap.characterAchievements || [];
+                        if (!Object.keys(team_mate_obj.profile.guildBuffLevelMap || {}).length) team_mate_obj.profile.guildBuffLevelMap = snap.guildBuffLevelMap || {};
+                    }
                 }
-                let team_mate_obj = JSON.parse(GM_getValue(obj.players[player_num].character.name, ""));
-                console.log("team_mate_obj",team_mate_obj);
+                exportObj.players[player_num] = constructPlayerExportObjFromProfile(team_mate_obj);
+            } else if (mateName == loggedInName) {
+                // 还没点开过自己的配装 → 回退登录快照
+                exportObj.players[player_num] = constructSelfPlayerExportObjFromInitCharacterData();
+            } else if (mateName == init_character_obj.character.name) {
+                // 下拉选中的角色（自己的小号）无存档 → 回退它的登录快照
+                exportObj.players[player_num] = constructSelfPlayerExportObjFromInitCharacterData(init_character_obj);
+            } else if (!team_mate_obj) {
+                alert("请手动查看一下队友装备信息，当前缺失装备信息队友：" + mateName);
+                return;
+            } else {
                 exportObj.players[player_num] = constructPlayerExportObjFromProfile(team_mate_obj);
             }
         }
