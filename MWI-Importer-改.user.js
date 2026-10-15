@@ -11,6 +11,8 @@
 // @grant        GM_setValue
 // @grant        GM_listValues
 // @grant        GM_deleteValue
+// @grant        GM_xmlhttpRequest
+// @connect      api.textdb.online
 // @require      https://cdnjs.cloudflare.com/ajax/libs/lz-string/1.5.0/lz-string.min.js
 // @downloadURL https://raw.githubusercontent.com/Chen19970809/MWI_Trial_Calculator/refs/heads/main/MWI-Importer-%E6%94%B9.user.js
 // @updateURL https://raw.githubusercontent.com/Chen19970809/MWI_Trial_Calculator/refs/heads/main/MWI-Importer-%E6%94%B9.user.js
@@ -959,6 +961,16 @@
                     importLoadoutsData(button2,checkedProfile);
                     return false;
                 };
+
+                let button3 = document.createElement("button");
+                button3.textContent = isZH ? "导出队伍中单人数据" : "Export a member's data";
+                button3.style.backgroundColor = "green";
+                button3.style.padding = "5px";
+                button3.onclick = function () {
+                    exportSingleTeamMemberData();
+                    return false;
+                };
+                button.after(button3);
             }
         };
         let timer = setInterval(checkElem, 200);
@@ -1143,6 +1155,261 @@
         // SimulationTime
         exportObj.simulationTime = SCRIPT_SIMULATE_TIME;
         return exportObj;
+    }
+
+    // ── 模拟器页《导出队伍中单人数据》：弹窗选人 → 该角色的模拟器导入 JSON 复制到剪贴板 ──
+    let exportMemberDialog = null;
+    // 判空：七项战斗等级都存在且都不大于 1 视为空角色；等级字段完全缺失时不算空（避免格式差异误杀）
+    function isBlankSimPlayer(p) {
+        if (!p) return true;
+        const fields = ["staminaLevel", "intelligenceLevel", "attackLevel", "meleeLevel", "defenseLevel", "rangedLevel", "magicLevel"];
+        let hasAny = false, maxLevel = 0;
+        for (const f of fields) {
+            if (p[f] !== undefined) hasAny = true;
+            const v = Number(p[f]) || 0;
+            if (v > maxLevel) maxLevel = v;
+        }
+        if (!hasAny) return false;
+        return maxLevel <= 1;
+    }
+    // textdb 模式支持：《战斗模拟器导入》插件生成 ?textdb=<key> 分享链接，数据存于 api.textdb.online
+    function getTextdbKey() {
+        try { return new URLSearchParams(window.location.search).get("textdb") || ""; } catch (e) { return ""; }
+    }
+    function fetchTextdbGroup(key) {
+        return new Promise((resolve, reject) => {
+            const finish = (text) => {
+                try { resolve(JSON.parse(text)); } catch (e) { reject(new Error("textdb 数据不是合法 JSON")); }
+            };
+            if (typeof GM_xmlhttpRequest === "function") {
+                GM_xmlhttpRequest({
+                    method: "GET",
+                    url: "https://api.textdb.online/" + encodeURIComponent(key),
+                    onload: (r) => (r.status === 200 && r.responseText) ? finish(r.responseText) : reject(new Error("textdb 加载失败 HTTP " + r.status)),
+                    onerror: () => reject(new Error("textdb 请求失败")),
+                });
+            } else {
+                fetch("https://api.textdb.online/" + encodeURIComponent(key))
+                    .then(r => { if (!r.ok) throw new Error("HTTP " + r.status); return r.text(); })
+                    .then(finish)
+                    .catch(reject);
+            }
+        });
+    }
+    // 解析整队 JSON，兼容多种结构（players 映射 / playerDataMap / 顶层数字键映射 / 数组），返回 [{label, data}]
+    function collectGroupEntries(group) {
+        const list = [];
+        if (!group || typeof group !== "object") return list;
+        const pushEntry = (v) => {
+            if (typeof v === "string") { try { v = JSON.parse(v); } catch (e) { return; } }
+            if (v && typeof v === "object") list.push(v);
+        };
+        const pushAll = (map) => {
+            Object.keys(map)
+                .sort((a, b) => (Number(a) || 0) - (Number(b) || 0))
+                .forEach(k => pushEntry(map[k]));
+        };
+        if (Array.isArray(group)) {
+            group.forEach(pushEntry);
+        } else if (group.players) {
+            pushAll(group.players);
+        } else if (group.playerDataMap) {
+            pushAll(group.playerDataMap);
+        } else {
+            const numericKeys = Object.keys(group).filter(k => /^\d+$/.test(k));
+            if (numericKeys.length > 0) pushAll(group);
+        }
+        // 判空过滤；若全部被判空但确实有数据，则原样保留（避免结构差异误杀）
+        const nonBlank = list.filter(data => !isBlankSimPlayer(data.player || data));
+        const picked = nonBlank.length ? nonBlank : list;
+        return picked.map((data, idx) => ({ label: "player" + (idx + 1), data: data }));
+    }
+    async function exportSingleTeamMemberData() {
+        // 1) 首选：模拟器自带导出（buttonExportSet）——拿到的是当前 UI 的实时状态（包含修改后的 trigger 等编辑）
+        const groupTab = document.querySelector(`a#group-combat-tab`);
+        const exportBtn = document.getElementById('buttonExportSet');
+        if (groupTab && exportBtn) {
+            let text = "";
+            try {
+                groupTab.click();
+                exportBtn.click();
+                await sleep(150);
+                text = await navigator.clipboard.readText();
+            } catch (e) {
+                showLoadoutToast("读取剪贴板失败（需允许剪贴板权限）: " + (e?.message || e), "error");
+                return;
+            }
+            if (text) {
+                let entries = [];
+                try { entries = collectGroupEntries(JSON.parse(text)); } catch (e) { entries = []; }
+                // 用模拟器页签上的名字作为标签（有真实名字时更友好）
+                entries.forEach((entry, idx) => {
+                    const tabName = document.querySelector(`a#player` + (idx + 1) + `-tab`)?.textContent?.trim() || "";
+                    if (tabName) entry.label = tabName;
+                });
+                if (entries.length) {
+                    showExportMemberDialog(entries);
+                    return;
+                }
+            }
+        }
+        // 2) 次选：player1~player5 输入框（导入时的快照，不含导入后的 UI 编辑）
+        const entries = [];
+        for (let i = 1; i <= 5; i++) {
+            const input = document.querySelector(`input#inputSetGroupCombatplayer` + i);
+            if (!input || !input.value) continue;
+            let data = null;
+            try { data = JSON.parse(input.value); } catch (e) { data = null; }
+            if (!data || !data.player || isBlankSimPlayer(data.player)) continue;
+            const tabName = document.querySelector(`a#player` + i + `-tab`)?.textContent?.trim() || "";
+            entries.push({ label: tabName || ("player" + i), data: data });
+        }
+        if (entries.length) {
+            showExportMemberDialog(entries);
+            return;
+        }
+        // 2) textdb 模式：?textdb=<key> 分享链接时，直接拉取整队 JSON 并按玩家拆分
+        const textdbKey = getTextdbKey();
+        if (textdbKey) {
+            try {
+                const group = await fetchTextdbGroup(textdbKey);
+                const textdbEntries = collectGroupEntries(group);
+                if (textdbEntries.length) {
+                    showExportMemberDialog(textdbEntries);
+                    return;
+                }
+                showLoadoutToast("textdb 队伍数据里没有可导出的角色", "error");
+                return;
+            } catch (e) {
+                showLoadoutToast("textdb 加载失败: " + (e?.message || e), "error");
+                return;
+            }
+        }
+        // 回退：模拟器还没加载数据时，按 GM 存档构建
+        let checkedProfile, playerInfo;
+        try {
+            checkedProfile = getSelectedValue();
+            playerInfo = JSON.parse(GM_getValue("profile_" + checkedProfile));
+        } catch (e) {
+            showLoadoutToast("没有可导出的队伍数据", "error");
+            return;
+        }
+        let playerArr = [];
+        if (playerInfo?.partyInfo?.partySlotMap) {
+            Object.values(playerInfo.partyInfo.partySlotMap).forEach((value) => {
+                if (value.characterID) playerArr.push(playerInfo.partyInfo.sharableCharacterMap[value.characterID].name);
+            });
+        } else if (playerInfo?.character?.name) {
+            playerArr.push(playerInfo.character.name);
+        }
+        let battleObj = null;
+        const teamData = GM_getValue("team_battle_" + playerArr[0], "");
+        if (teamData) {
+            try { battleObj = JSON.parse(teamData); } catch (e) { battleObj = null; }
+        }
+        const roster = (battleObj?.players || []).map(p => p?.character?.name).filter(Boolean);
+        const gmEntries = [];
+        for (const n of (roster.length ? roster : playerArr)) {
+            try { gmEntries.push({ label: n, data: buildSingleMemberExport(battleObj, checkedProfile, n) }); }
+            catch (e) { /* 缺存档的角色跳过 */ }
+        }
+        if (!gmEntries.length) { showLoadoutToast("没有可导出的队伍数据", "error"); return; }
+        showExportMemberDialog(gmEntries);
+    }
+    function showExportMemberDialog(entries) {
+        if (exportMemberDialog) exportMemberDialog.remove();
+        const overlay = document.createElement('div');
+        overlay.style.cssText = 'position:fixed;inset:0;z-index:2147483646;background:rgba(0,0,0,.45);display:flex;align-items:center;justify-content:center;';
+        const box = document.createElement('div');
+        box.style.cssText = 'background:#fff;border-radius:10px;padding:16px 18px;min-width:280px;box-shadow:0 8px 30px rgba(0,0,0,.3);font-size:14px;color:#333;';
+        const title = document.createElement('div');
+        title.textContent = isZH ? '导出队伍中单人数据' : 'Export a member\'s data';
+        title.style.cssText = 'font-weight:bold;margin-bottom:10px;';
+        const select = document.createElement('select');
+        select.style.cssText = 'width:100%;padding:6px;margin-bottom:12px;';
+        entries.forEach((entry, idx) => {
+            const opt = document.createElement('option');
+            opt.value = String(idx);
+            opt.textContent = entry.label;
+            select.appendChild(opt);
+        });
+        const btnRow = document.createElement('div');
+        btnRow.style.cssText = 'display:flex;gap:8px;';
+        const okBtn = document.createElement('button');
+        okBtn.textContent = isZH ? '导出' : 'Export';
+        okBtn.style.cssText = 'flex:1;padding:6px;border:none;border-radius:6px;background:#4357AF;color:#fff;cursor:pointer;';
+        const cancelBtn = document.createElement('button');
+        cancelBtn.textContent = isZH ? '取消' : 'Cancel';
+        cancelBtn.style.cssText = 'flex:1;padding:6px;border:none;border-radius:6px;background:#9e9e9e;color:#fff;cursor:pointer;';
+        okBtn.addEventListener('click', async () => {
+            const entry = entries[Number(select.value)] || entries[0];
+            try {
+                await writeClipboard(JSON.stringify(entry.data));
+                showLoadoutToast('已复制「' + entry.label + '」的数据到剪贴板');
+                overlay.remove();
+                exportMemberDialog = null;
+            } catch (e) {
+                showLoadoutToast('导出失败: ' + (e?.message || e), 'error');
+            }
+        });
+        cancelBtn.addEventListener('click', () => { overlay.remove(); exportMemberDialog = null; });
+        btnRow.appendChild(okBtn);
+        btnRow.appendChild(cancelBtn);
+        box.appendChild(title);
+        box.appendChild(select);
+        box.appendChild(btnRow);
+        overlay.appendChild(box);
+        document.body.appendChild(overlay);
+        exportMemberDialog = overlay;
+    }
+    // 组装单个角色的模拟器导入 JSON（数据来源优先级与《导入人物数据》完全一致）
+    function buildSingleMemberExport(battleObj, checkedProfile, memberName) {
+        let init_character_obj = JSON.parse(GM_getValue("profile_" + checkedProfile));
+        let loggedInName = "";
+        try {
+            let initRaw = GM_getValue("init_character_data");
+            if (initRaw) loggedInName = JSON.parse(initRaw).character.name;
+        } catch (e) {}
+        const member = (battleObj?.players || []).find(p => p?.character?.name === memberName);
+        if (!member) throw new Error("队伍数据里没有该角色: " + memberName);
+        let playerObj = null;
+        let team_mate_str = GM_getValue(memberName, "");
+        let team_mate_obj = null;
+        if (team_mate_str) {
+            try { team_mate_obj = JSON.parse(team_mate_str); } catch (e) { team_mate_obj = null; }
+        }
+        const mateWearable = team_mate_obj?.profile?.wearableItemMap;
+        const hasEquip = mateWearable && Object.keys(mateWearable).length > 0;
+        if (team_mate_obj && hasEquip) {
+            // 存档缺技能/房屋等底档字段且有登录快照时补齐（与导入逻辑一致）
+            if (!(team_mate_obj.profile.characterSkills || []).length) {
+                let snap = null;
+                if (memberName == loggedInName) {
+                    try { snap = JSON.parse(GM_getValue("init_character_data")); } catch (e) {}
+                } else if (memberName == init_character_obj.character.name) {
+                    snap = init_character_obj;
+                }
+                if (snap) {
+                    team_mate_obj.profile.characterSkills = snap.characterSkills || [];
+                    if (!Object.keys(team_mate_obj.profile.characterHouseRoomMap || {}).length) team_mate_obj.profile.characterHouseRoomMap = snap.characterHouseRoomMap || {};
+                    if (!(team_mate_obj.profile.characterAchievements || []).length) team_mate_obj.profile.characterAchievements = snap.characterAchievements || [];
+                    if (!Object.keys(team_mate_obj.profile.guildBuffLevelMap || {}).length) team_mate_obj.profile.guildBuffLevelMap = snap.guildBuffLevelMap || {};
+                }
+            }
+            playerObj = constructPlayerExportObjFromProfile(team_mate_obj);
+        } else if (memberName == loggedInName) {
+            playerObj = constructSelfPlayerExportObjFromInitCharacterData();
+        } else if (memberName == init_character_obj.character.name) {
+            playerObj = constructSelfPlayerExportObjFromInitCharacterData(init_character_obj);
+        } else {
+            throw new Error("缺少「" + memberName + "」的存档，请先在游戏里点开该角色的配装");
+        }
+        // 兜底字段，保证游戏侧《导入模拟器数据》可直接消费
+        playerObj.triggerMap = playerObj.triggerMap || {};
+        playerObj.houseRooms = playerObj.houseRooms || {};
+        playerObj.achievements = playerObj.achievements || {};
+        playerObj.guildBuffs = playerObj.guildBuffs || {};
+        return playerObj;
     }
 
     async function observeResults() {
@@ -1604,6 +1871,12 @@
     }
     function sleep(ms) { return new Promise(resolve => setTimeout(resolve, ms)); }
     let importSimInFlight = false;
+    // 《导入模拟器数据》忽略的饰品槽位（仅指 Trinket；保持游戏配装现状，不导入也不清空）
+    const IGNORED_EQUIPMENT_KEYWORDS = ["trinket"];
+    function isIgnoredEquipmentSlot(slotKey) {
+        const k = String(slotKey || "").toLowerCase();
+        return IGNORED_EQUIPMENT_KEYWORDS.some(w => k.includes(w));
+    }
     async function importSimulatorDataToLoadout() {
         if (importSimInFlight) { showLoadoutToast("正在导入中，请稍候", "error"); return; }
         importSimInFlight = true;
@@ -1655,11 +1928,12 @@
             if (eq?.itemLocationHrid && eq.itemHrid) payloadSlots[eq.itemLocationHrid] = eq;
         }
         for (const loc of Object.keys(target.wearableMap || {})) {
-            if (!payloadSlots[loc] && target.wearableMap[loc]) {
+            if (!payloadSlots[loc] && target.wearableMap[loc] && !isIgnoredEquipmentSlot(loc)) {
                 updates.push({ slotType: "equipment", slotKey: loc, itemIdentifier: "" });
             }
         }
         for (const [loc, eq] of Object.entries(payloadSlots)) {
+            if (isIgnoredEquipmentSlot(loc)) continue; // 饰品槽位忽略改动
             const curItem = getItemByHash(target.wearableMap?.[loc] || "");
             if (curItem && curItem.itemHrid === eq.itemHrid && (curItem.enhancementLevel || 0) === (eq.enhancementLevel || 0)) {
                 continue; // 与当前配装一致，可忽略
