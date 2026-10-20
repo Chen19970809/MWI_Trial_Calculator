@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MWI-Importer-改配装导出
 // @namespace    http://tampermonkey.net/
-// @version      2.4.0
+// @version      2.4.1
 // @description  脚本基于Mooneycalc-Importer v5.3，增加了组队模拟功能，使用时请手动查看队友装备以获取数据。https://amvoidguy.github.io/MWICombatSimulatorTest/dist/index.html.
 // @match        https://www.milkywayidle.com/*
 // @match        https://www.milkywayidlecn.com/*
@@ -12,6 +12,7 @@
 // @grant        GM_listValues
 // @grant        GM_deleteValue
 // @grant        GM_xmlhttpRequest
+// @grant        GM_registerMenuCommand
 // @connect      api.textdb.online
 // @require      https://cdnjs.cloudflare.com/ajax/libs/lz-string/1.5.0/lz-string.min.js
 // @downloadURL https://raw.githubusercontent.com/Chen19970809/MWI_Trial_Calculator/refs/heads/main/MWI-Importer-%E6%94%B9.user.js
@@ -37,6 +38,38 @@
     } else if( document.URL.includes("MWICombatSimulatorTest") || document.URL.includes("localhost")){
         addImportButton4();
         waitSimulationResultsLoading();
+    }
+    registerClearCacheMenu();
+
+    // ── 油猴菜单：删除本脚本全部缓存数据（GM 存储，不影响游戏本体与其它脚本的存储）──
+    function registerClearCacheMenu() {
+        if (typeof GM_registerMenuCommand !== "function") return;
+        GM_registerMenuCommand(isZH ? "删除所有缓存数据" : "Clear all cached data", function () {
+            let keys = [];
+            try { keys = GM_listValues() || []; } catch (e) {}
+            if (!keys.length) {
+                alert(isZH ? "缓存已经是空的" : "Cache is already empty");
+                return;
+            }
+            const ok = confirm(isZH
+                ? "确定删除本脚本缓存的全部 " + keys.length + " 条数据吗？\n"
+                  + "（各角色登录快照、队友个人资料/配装数据、队伍战斗快照等）\n"
+                  + "删除后：刷新游戏网页可自动重建当前角色的数据，\n队友数据需重新点《个人资料》/《查看配装》获取。"
+                : "Delete all " + keys.length + " cached entries of this script?\n"
+                  + "Refresh the game page afterwards to rebuild your own data;\n"
+                  + "teammates' data must be re-captured via profile/loadout views.");
+            if (!ok) return;
+            let n = 0;
+            keys.forEach((k) => {
+                try { GM_deleteValue(k); n++; } catch (e) {}
+            });
+            // 必须重置内存中的角色列表：游戏页下次登录时若内存里还留着旧名单会连同新号一起写回
+            profile_arr = new Array();
+            try { GM_setValue("profile_arr", profile_arr); } catch (e) {}
+            alert(isZH
+                ? "已删除 " + n + " 条缓存。\n请刷新游戏网页（自动重建当前角色登录快照），\n再刷新模拟器网页后重新选择角色。"
+                : "Deleted " + n + " entries.\nRefresh the game page to rebuild your login snapshot,\nthen refresh the simulator page.");
+        });
     }
     function waitSimulationResultsLoading(){
         const waitForNavi = () => {
@@ -90,12 +123,15 @@
     }
 
     let current_team_battle = "";
+    // 当前标签页自己的角色名（收到 init_character_data 时记录；多开时各 tab 的名册归属各自角色）
+    let currentTabCharacter = "";
     function handleMessage(message) {
         let obj = JSON.parse(message);
         //const keys = GM_listValues();
         //console.log('keys',keys);
         // keys.forEach(key => { GM_deleteValue(key); });
         if (obj && obj.type === "init_character_data") {
+            currentTabCharacter = obj.character.name || currentTabCharacter;
 
             if(GM_getValue("profile_arr"))
             {
@@ -165,6 +201,25 @@
                 GM_setValue("loadout_cache_" + lo.sharableCharacter.name, JSON.stringify(lo));
                 mergeLoadoutIntoProfile(lo.sharableCharacter.name, lo);
             }
+        }
+        // 任何携带队伍信息的消息（登录、组队/换人/离队等）都实时更新名册缓存：
+        // 不进战斗也能拿到最新全队名单（单人时同样写入，扫描端会把单人快照降权）
+        if (obj && obj.partyInfo && obj.partyInfo.partySlotMap) {
+            try {
+                const roster = [];
+                Object.values(obj.partyInfo.partySlotMap).forEach((slot) => {
+                    if (slot && slot.characterID && obj.partyInfo.sharableCharacterMap && obj.partyInfo.sharableCharacterMap[slot.characterID]) roster.push(obj.partyInfo.sharableCharacterMap[slot.characterID].name);
+                });
+                if (roster.length) {
+                    // 归属当前 tab 自己的角色（多开时各 tab 名册互不干扰）
+                    const owner = currentTabCharacter;
+                    GM_setValue("party_roster_" + (owner || "_unknown"), JSON.stringify({
+                        type: "party_roster",
+                        combatStartTime: Date.now(),
+                        players: roster.map((n) => ({ character: { name: n } })),
+                    }));
+                }
+            } catch (e) {}
         }
         return message;
     }
@@ -1040,15 +1095,17 @@
         } catch (e) {}
         return { found: found, maxLevel: maxLevel, hasLoadout: hasLoadout };
     }
-    // 提取快照里的角色名（导入逻辑依赖 players[].character.name，此处保持一致）
+    // 提取快照里的角色名：兼容两种玩家结构 —— 登录最小快照是 {character:{name}}，
+    // 真实 new_battle 消息的玩家只有 {name}（存储键即取自它），两者都要能识别
     function listSnapshotPlayerNames(tb) {
         return ((tb && tb.players) || [])
-            .map((p) => (p && p.character && p.character.name) || null)
+            .map((p) => (p && p.character && p.character.name) || (p && p.name) || null)
             .filter(Boolean);
     }
-    // 扫描所有 team_battle_ 快照挑最佳：solo 状态登录时写入的最小快照只有自己，
-    // 全队名单在真实进战斗后的 new_battle 快照里，且其存储键是战斗 players[0]，未必是自己，
-    // 固定键读取可能拿到过期快照。优先级：包含下拉角色 > 包含当前登录角色；人数多 > 时间新。
+    // 挑选最佳队伍名单：候选 = 所有 team_battle_ 快照 + 登录名册（profile_<选中角色> 的队伍槽位）。
+    // 优先级：包含下拉角色 > 包含当前登录角色；多人快照 > 单人快照（登录时队伍信息缺失会兜底成
+    // 只有自己，单人快照不可靠）；同为多人按时间新者优先，同时间人数多者优先。
+    // 登录名册以模拟 obj 形式参与（constructImportJsonObj_team 只读玩家名单，可无缝使用）。
     function findBestTeamSnapshot(checkedProfile, currentLoginName) {
         let best = null;
         const consider = (tb, ts) => {
@@ -1056,15 +1113,17 @@
             if (!names.length) return;
             const match = names.includes(checkedProfile) ? 2 : (currentLoginName && names.includes(currentLoginName) ? 1 : 0);
             if (!match) return;
+            const full = names.length >= 2 ? 1 : 0;
             if (!best || match > best.match
-                || (match === best.match && names.length > best.names.length)
-                || (match === best.match && names.length === best.names.length && ts > best.ts)) {
-                best = { obj: tb, names: names, ts: ts, match: match };
+                || (match === best.match && full > best.full)
+                || (match === best.match && full === best.full && ts > best.ts)
+                || (match === best.match && full === best.full && ts === best.ts && names.length > best.names.length)) {
+                best = { obj: tb, names: names, ts: ts, match: match, full: full };
             }
         };
         try {
             (GM_listValues() || []).forEach((key) => {
-                if (typeof key !== "string" || key.indexOf("team_battle_") !== 0) return;
+                if (typeof key !== "string" || (key.indexOf("team_battle_") !== 0 && key.indexOf("party_roster_") !== 0)) return;
                 let tb = null;
                 try { tb = JSON.parse(GM_getValue(key)); } catch (e) { return; }
                 if (!tb || !tb.players) return;
@@ -1072,6 +1131,21 @@
                 try { ts = new Date(tb.combatStartTime).getTime() || 0; } catch (e) {}
                 consider(tb, ts);
             });
+        } catch (e) {}
+        // 登录名册候选：选中角色最后一次登录时的队伍槽位，是最新的全队名单来源
+        try {
+            const pi = JSON.parse(GM_getValue("profile_" + checkedProfile));
+            if (pi?.partyInfo?.partySlotMap) {
+                const roster = [];
+                Object.values(pi.partyInfo.partySlotMap).forEach((slot) => {
+                    if (slot?.characterID && pi.partyInfo.sharableCharacterMap?.[slot.characterID]) roster.push(pi.partyInfo.sharableCharacterMap[slot.characterID].name);
+                });
+                if (roster.length) {
+                    let ts = 0;
+                    try { ts = Number(pi.currentTimestamp) || 0; } catch (e) {}
+                    consider({ type: "login_roster", combatStartTime: ts, players: roster.map((n) => ({ character: { name: n } })) }, ts);
+                }
+            }
         } catch (e) {}
         return best;
     }
@@ -1158,15 +1232,14 @@
         try { obj = JSON.parse(GM_getValue("team_battle_" + playerArr[0], "")); } catch (e) { obj = null; }
 
         // 固定键快照可能过期（solo 登录只含自己，或还是旧队伍）→ 与扫描出的最佳快照竞争
-        let directTs = 0;
-        try { directTs = new Date(obj.combatStartTime).getTime() || 0; } catch (e) {}
+        // 只在扫描结果人数更多、或当前快照缺失/不含选中角色时才替换；
+        // 不按时间替换——刷新页面会写入只有自己（或当时队伍）的最小快照，它更新但人数可能更少
         const directNames = listSnapshotPlayerNames(obj);
         const bestSnap = findBestTeamSnapshot(checkedProfile, currentLoginName);
         if (bestSnap
             && (!directNames.length
                 || directNames.length < bestSnap.names.length
-                || !directNames.includes(checkedProfile)
-                || bestSnap.ts > directTs)) {
+                || !directNames.includes(checkedProfile))) {
             obj = bestSnap.obj;
         }
 
@@ -1219,23 +1292,39 @@
         if (!container) return;
 
         if (profileArr.length <= 0) return;
+        // 同一队伍只显示一个入口：按队伍成员集合去重；
+        // 代表者取该队伍里登录时间最新的角色（其登录快照最新，导入时底档补齐/区域识别也最准）
+        const groups = {};
         profileArr.forEach(item => {
-
-            let option = document.createElement("option");
-            option.value = item;
-            let labelText = item;
             let profile = GM_getValue("profile_"+ item);
             if (!profile) return;
-            let playerInfo = JSON.parse(profile);
+            let playerInfo = null;
+            try { playerInfo = JSON.parse(profile); } catch (e) { return; }
             let partyMember = [];
-
+            let labelText = item;
+            let groupKey;
             if ( playerInfo?.partyInfo?.partySlotMap ){
                 labelText += " Party:";
-                Object.values(playerInfo.partyInfo.partySlotMap).forEach((value,key) => { if (value.characterID) partyMember.push(playerInfo.partyInfo.sharableCharacterMap[value.characterID].name); });
+                Object.values(playerInfo.partyInfo.partySlotMap).forEach((value,key) => {
+                    const mate = playerInfo.partyInfo.sharableCharacterMap?.[value.characterID];
+                    if (value.characterID && mate) partyMember.push(mate.name);
+                });
                 labelText += partyMember.join(", ");
+                groupKey = "party|" + partyMember.slice().sort().join("|");
+            } else {
+                // 无队伍信息时按单人处理，各自独立入口
+                groupKey = "solo|" + item;
             }
 
-            option.textContent = labelText;
+            const ts = Number(playerInfo.currentTimestamp) || 0;
+            const g = groups[groupKey];
+            if (!g || ts > g.ts) groups[groupKey] = { ts: ts, name: item, label: labelText };
+        });
+        Object.keys(groups).forEach((groupKey) => {
+            const g = groups[groupKey];
+            let option = document.createElement("option");
+            option.value = g.name;
+            option.textContent = g.label;
             container.appendChild(option);
         })
     }
@@ -1263,7 +1352,7 @@
             // HouseRooms
             exportObj.players[player_num].player.equipment = [];
             exportObj.players[player_num].houseRooms = {};
-            let mateName = obj.players[player_num].character.name;
+            let mateName = obj.players[player_num].character?.name || obj.players[player_num].name;
             let team_mate_str = GM_getValue(mateName, "")
             let team_mate_obj = null;
             if (team_mate_str) {
@@ -1901,29 +1990,33 @@
     function convertCombatSimulatorData(loadout, snapshot, state) {
         snapshot = snapshot || {};
         state = state || {};
+        // 数据归属校验：state 是当前 tab 实时数据，必属当前角色；init_character_data 快照
+        // 多开时可能是最后登录的别人 —— 只有名字与当前角色一致才采用，
+        // 否则退回当前角色自己的登录存档 profile_<角色名>；完全无法确定归属时才退回旧快照
+        const owner = currentTabCharacter || loadout?.sharableCharacter?.name || "";
+        let snap = {};
+        if (!owner) {
+            snap = snapshot;
+        } else if (snapshot?.character?.name === owner) {
+            snap = snapshot;
+        } else {
+            try {
+                const own = JSON.parse(GM_getValue("profile_" + owner));
+                if (own?.character?.name === owner) snap = own;
+            } catch (e) {}
+        }
         const player = {};
         // 战斗等级（与导入器一致：skillHrid 包含匹配）
         const levelProps = { stamina: 'staminaLevel', intelligence: 'intelligenceLevel', attack: 'attackLevel', melee: 'meleeLevel', defense: 'defenseLevel', ranged: 'rangedLevel', magic: 'magicLevel' };
-        for (const skill of state.characterSkills || snapshot.characterSkills || []) {
+        for (const skill of state.characterSkills || snap.characterSkills || []) {
             for (const [key, prop] of Object.entries(levelProps)) {
                 if (String(skill.skillHrid || '').includes(key)) player[prop] = skill.level;
             }
         }
         // 装备：配装穿戴位；强化等级取配装 hash 与「同角色」物品列表中同 hrid 最高强化的较大值
-        // （与导入器口径一致）。物品列表必须确认属于配装所属角色，避免多角色登录时串用别人的强化等级：
-        // 依次取 当前页面实时 state → 配装所属角色自己的登录快照 profile_<角色名> → 名字校验通过的登录快照
+        // （与导入器口径一致）。物品列表已随上方归属校验取自当前角色（state 或校验通过的登录快照）
         player.equipment = [];
-        const loadoutOwner = loadout?.sharableCharacter?.name || "";
-        let characterItems = getCollectionValues(state.characterItems || []);
-        if (!characterItems.length && loadoutOwner) {
-            try {
-                const own = JSON.parse(GM_getValue("profile_" + loadoutOwner));
-                if (own?.character?.name === loadoutOwner) characterItems = getCollectionValues(own.characterItems || []);
-            } catch (e) {}
-        }
-        if (!characterItems.length && loadoutOwner && snapshot?.character?.name === loadoutOwner) {
-            characterItems = getCollectionValues(snapshot.characterItems || []);
-        }
+        let characterItems = getCollectionValues(state.characterItems || snap.characterItems || []);
         const maxEnhByHrid = {};
         for (const it of characterItems) {
             if (!it?.itemHrid) continue;
@@ -1950,7 +2043,7 @@
             { abilityHrid: '', level: 1 },
         ];
         let normalIndex = 1;
-        const characterAbilities = state.characterAbilities || snapshot.characterAbilities || [];
+        const characterAbilities = state.characterAbilities || snap.characterAbilities || [];
         const abilityDetailMap = GM_getValue("initData_abilityDetailMap") || {};
         for (const abilityHrid of Object.values(loadout.abilityMap || {})) {
             if (!abilityHrid) continue;
@@ -1964,23 +2057,23 @@
         }
         // 房屋（houseRoomHrid → 等级）
         const houseRooms = {};
-        for (const house of Object.values(state.characterHouseRoomMap || snapshot.characterHouseRoomMap || {})) {
+        for (const house of Object.values(state.characterHouseRoomMap || snap.characterHouseRoomMap || {})) {
             if (house?.houseRoomHrid) houseRooms[house.houseRoomHrid] = house.level;
         }
         // 成就（achievementHrid → 是否完成）
         const achievements = {};
-        for (const achievement of Object.values(state.characterAchievements || snapshot.characterAchievements || [])) {
+        for (const achievement of Object.values(state.characterAchievements || snap.characterAchievements || [])) {
             achievements[achievement.achievementHrid] = achievement.isCompleted;
         }
         // 公会增益（guildBuffHrid → 等级）
         const guildBuffs = {};
-        for (const guildBuff of Object.values(state.characterGuildBuffMap || snapshot.characterGuildBuffMap || {})) {
+        for (const guildBuff of Object.values(state.characterGuildBuffMap || snap.characterGuildBuffMap || {})) {
             guildBuffs[guildBuff.guildBuffHrid] = guildBuff.level;
         }
         // 迷宫（characterInfo 中的 5 项等级）
         const labyrinth = {};
         for (const key of ['labyrinthCombatDamageLevel', 'labyrinthAttackSpeedLevel', 'labyrinthCastSpeedLevel', 'labyrinthCriticalRateLevel', 'labyrinthExperienceLevel']) {
-            labyrinth[key] = state.characterInfo?.[key] ?? snapshot.characterInfo?.[key] ?? 0;
+            labyrinth[key] = state.characterInfo?.[key] ?? snap.characterInfo?.[key] ?? 0;
         }
         return {
             player,
@@ -2232,8 +2325,8 @@
         const loadouts = reactLoadouts.length ? reactLoadouts : getCollectionValues(getGameHost()?.state?.characterLoadoutMap);
         const loadout = loadouts.find(item => item?.name === name);
         if (!loadout) { showLoadoutToast('未找到当前配装', 'error'); return; }
-        // 等级/房屋/成就/公会神龛/迷宫：当前页面实时 state（当前角色）优先，
-        // init_character_data 快照兜底（同一浏览器登录过多个角色时快照可能是最后登录的号）
+        // 等级/房屋/成就/公会神龛/迷宫：当前页面实时 state（当前角色）优先；
+        // init_character_data 快照仅在名字与当前角色一致时采用，否则用该角色自己的登录存档（见 convertCombatSimulatorData）
         let snapshot = {};
         try { snapshot = JSON.parse(GM_getValue("init_character_data", "null")) || {}; }
         catch (_) { snapshot = {}; }
