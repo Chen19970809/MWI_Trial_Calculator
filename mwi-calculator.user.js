@@ -257,7 +257,9 @@
                 MWI_Calculator_UI.renderTargetState(this.displayElement, state);
             }
             if (this.ownedSpan) {
-                const newText = MWI_Calculator_Utils.formatNumber(this.getOwnedCount());
+                let newText = MWI_Calculator_Utils.formatNumber(this.getOwnedCount());
+                const detail = this.getEnhancedOwnedDetail();
+                if (detail) newText += `(${detail})`;
                 if (this.ownedSpan.textContent !== newText) {
                     this.ownedSpan.textContent = newText;
                 }
@@ -269,6 +271,27 @@
                 }
             }
             MWI_Calculator_UI.scheduleTargetLayout(this.displayElement);
+        }
+        // 目标拥有数含强化库存：+N 版本同样计入拥有，仅当需求数量超出总拥有时才产生制作缺口。
+        getOwnedCount() {
+            let owned = MWI_Calculator_ItemsMap.getCount(this.itemHrid);
+            const levels = MWI_Calculator_ItemsMap.map.get(this.itemHrid);
+            if (levels) {
+                for (const [level, count] of levels) {
+                    if (level > 0 && count > 0) owned += count;
+                }
+            }
+            return owned;
+        }
+        // 强化拥有明细，如 "+2×1、+5×1"；无强化库存时返回空串。
+        getEnhancedOwnedDetail() {
+            const levels = MWI_Calculator_ItemsMap.map.get(this.itemHrid);
+            if (!levels) return '';
+            const parts = [];
+            for (const [level, count] of [...levels].sort(([a], [b]) => a - b)) {
+                if (level > 0 && count > 0) parts.push(`+${level}*${count}`);
+            }
+            return parts.join('、');
         }
         removeDisplayElement() {
             MWI_Calculator_UI.detachTargetLayout(this.displayElement);
@@ -396,9 +419,11 @@
             this.requiredItemsMap.forEach(item => item.removeDisplayElement());
             this.targetItemsMap.clear();
             this.requiredItemsMap.clear();
-            this.downgradeRows?.forEach(row => row.element.remove());
-            this.downgradeRows?.clear();
-            if (this.downgradeDetails) this.downgradeDetails.hidden = true;
+            for (const sectionKey of ['downgrade', 'inherit']) {
+                this[`${sectionKey}Rows`]?.forEach(row => row.element.remove());
+                this[`${sectionKey}Rows`]?.clear();
+                if (this[`${sectionKey}Details`]) this[`${sectionKey}Details`].hidden = true;
+            }
             this.targetItemCategoryMap.forEach(category => { category.needCalc = true; });
             for (const map of [this.targetItemDetailsMap, this.shortageItemDetailsMap, this.requiredItemDetailsMap]) {
                 map.forEach(details => { details.open = true; details.hidden = true; });
@@ -999,20 +1024,21 @@
             }, 300);
         }
         // 计算所有所需材料
-        static calculateAllRequiredItems(inventoryMap, { enhancedInventory = null, downgradeItems = null } = {}) {
+        static calculateAllRequiredItems(inventoryMap, { enhancedInventory = null, downgradeItems = null, inheritItems = null } = {}) {
             const result = new Map();
             const queueMap = new Map();
-            // 各用途分别计数，但同一物品仍合并展开配方，避免重复取整。
+            // 用途：target=目标本体；material=直接材料（必须+0）；chain=目标链升级基底（强化可继承到成品）；
+            // upgrade=材料链升级基底（产出+N最终仍需降级）。同一物品仍合并展开配方，避免重复取整。
             const enqueue = (itemHrid, count, purpose = 'material') => {
                 if (!(count > 0)) return;
-                if (!queueMap.has(itemHrid)) queueMap.set(itemHrid, { target: 0, material: 0, upgrade: 0 });
+                if (!queueMap.has(itemHrid)) queueMap.set(itemHrid, { target: 0, material: 0, upgrade: 0, chain: 0 });
                 queueMap.get(itemHrid)[purpose] += count;
             };
             // 使用副本共享扣减，A/B及不同配方之间不会重复占用同一件强化装备。
             const enhanced = new Map([...(enhancedInventory || new Map())].map(([hrid, levels]) =>
                 [hrid, new Map([...levels].filter(([level, count]) => Number.isInteger(level) && level > 0 && Number.isFinite(count) && count > 0)
                     .sort(([a], [b]) => a - b))]));
-            const useEnhanced = (itemHrid, need, needsDowngrade) => {
+            const useEnhanced = (itemHrid, need, recordType) => {
                 let remaining = need;
                 for (const [level, available] of enhanced.get(itemHrid) || []) {
                     if (!(remaining > 0)) break;
@@ -1020,10 +1046,15 @@
                     if (!(used > 0)) continue;
                     enhanced.get(itemHrid).set(level, available - used);
                     remaining = Math.max(0, remaining - used);
-                    if (needsDowngrade && downgradeItems) {
-                        const key = `${itemHrid}:${level}`;
-                        const previous = downgradeItems.get(key);
-                        downgradeItems.set(key, { itemHrid, enhancementLevel: level, count: (previous?.count || 0) + used });
+                    // recordType：'downgrade'=需降级（材料链），'inherit'=强化被继承（目标链基底），
+                    // 'own'=计为目标已拥有（不产生任何提示记录）。
+                    if (recordType === 'downgrade' || recordType === 'inherit') {
+                        const record = recordType === 'inherit' ? inheritItems : downgradeItems;
+                        if (record) {
+                            const key = `${itemHrid}:${level}`;
+                            const previous = record.get(key);
+                            record.set(key, { itemHrid, enhancementLevel: level, count: (previous?.count || 0) + used });
+                        }
                     }
                 }
                 return remaining;
@@ -1064,26 +1095,44 @@
             while (queueMap.size > 0) {
                 const [itemHrid, needs] = queueMap.entries().next().value;
                 queueMap.delete(itemHrid);
-                // 0级先满足目标和普通材料；强化库存优先留给可直接继承强化的升级基底。
+                // 0级库存先满足目标与必须+0的材料；强化库存优先留给目标链基底（继承不损失），其次材料链基底/材料（需降级）。
                 let available = Math.max(0, inventoryMap.get(itemHrid) || 0);
-                for (const purpose of ['target', 'material', 'upgrade']) {
+                for (const purpose of ['target', 'material', 'chain', 'upgrade']) {
                     const used = Math.min(available, needs[purpose]);
                     available -= used;
                     needs[purpose] -= used;
                 }
                 inventoryMap.set(itemHrid, available);
-                needs.upgrade = useEnhanced(itemHrid, needs.upgrade, false);
-                needs.material = useEnhanced(itemHrid, needs.material, true);
-                const remain = needs.target + needs.material + needs.upgrade;
+                // 目标缺口优先用强化库存计为已拥有：已有 +N 版本时不再展开配方制造缺口，
+                // 且该件强化物品不会被后续基底/材料用途重复占用。
+                needs.target = useEnhanced(itemHrid, needs.target, 'own');
+                needs.chain = useEnhanced(itemHrid, needs.chain, 'inherit');
+                needs.upgrade = useEnhanced(itemHrid, needs.upgrade, 'downgrade');
+                needs.material = useEnhanced(itemHrid, needs.material, 'downgrade');
+                const remain = needs.target + needs.material + needs.chain + needs.upgrade;
                 if (!(remain > 0)) continue;
                 result.set(itemHrid, (result.get(itemHrid) || 0) + remain);
                 const recipe = MWI_Calculator_ActionDetailPlus.tryGetRecipe(itemHrid);
                 if (!recipe) continue;
                 const redundant = this.materialPlanningMode === 'redundant';
                 const times = this.getProductionActionCount(recipe, remain);
+                // 目标链缺口（target/chain，强化可继承）与材料链缺口（material/upgrade，产出必须+0需再降级）分配基底去向；
+                // 两者并存时按缺口比例拆分，降级侧向上取整以保证降级提示不遗漏。
+                const inheritable = needs.target + needs.chain;
+                const downgradable = needs.material + needs.upgrade;
                 for (const input of recipe.inputs) {
                     const amount = redundant ? this.getMaterialBudget(input.count, times, input.consumptionVariance || 0) : input.count * times;
-                    enqueue(input.itemHrid, amount, input.isUpgradeBase ? 'upgrade' : 'material');
+                    if (!input.isUpgradeBase) {
+                        enqueue(input.itemHrid, amount, 'material');
+                        continue;
+                    }
+                    if (inheritable > 0 && downgradable > 0) {
+                        const downShare = Math.min(amount, Math.ceil(amount * downgradable / remain));
+                        enqueue(input.itemHrid, amount - downShare, 'chain');
+                        if (downShare > 0) enqueue(input.itemHrid, downShare, 'upgrade');
+                    } else {
+                        enqueue(input.itemHrid, amount, downgradable > 0 ? 'upgrade' : 'chain');
+                    }
                 }
             }
             return result;
@@ -1506,7 +1555,10 @@
             rightDiv.style.padding = '0px 2px';
             rightDiv.appendChild(MWI_Calculator_Calculator.createMaterialPlanningModeSelector());
             rightDiv.appendChild(MWI_Calculator_Calculator.createHouseAcquisitionModeSelector());
-            rightDiv.appendChild(this.createDowngradeSection());
+            rightDiv.appendChild(this.createDowngradeSection('downgrade',
+                MWI_Calculator_I18n.isChinese() ? '强化降级' : 'Enhancement downgrade'));
+            rightDiv.appendChild(this.createDowngradeSection('inherit',
+                MWI_Calculator_I18n.isChinese() ? '强化继承' : 'Enhancement inherit'));
             const shortageItemDetails = document.createElement('details');
             shortageItemDetails.style.background = '#902f10';
             shortageItemDetails.style.borderRadius = '4px';
@@ -3359,10 +3411,12 @@
             const inventoryMap = MWI_Calculator_ItemsMap.getInventoryMap();
             const totalNeeds = MWI_Calculator_Calculator.calculateAllRequiredItems(new Map());
             const downgradeItems = new Map();
+            const inheritItems = new Map();
             const remainNeeds = this.calculateAllRequiredItems(inventoryMap, {
-                enhancedInventory: MWI_Calculator_ItemsMap.getEnhancedInventoryMap(), downgradeItems
+                enhancedInventory: MWI_Calculator_ItemsMap.getEnhancedInventoryMap(), downgradeItems, inheritItems
             });
             this.renderDowngradeItems(downgradeItems);
+            this.renderDowngradeItems(inheritItems, 'inherit');
             // 移除不存在的物品
             [...MWI_Calculator_Calculator.requiredItemsMap.keys()].forEach(itemHrid => {
                 if (!totalNeeds.has(itemHrid)) {
@@ -3471,42 +3525,52 @@
             MWI_Calculator_UI.attachTargetLayout(container, itemContainer, rightDiv, ownedSpan, targetInput, removeButton);
             targetInput.addEventListener('input', () => MWI_Calculator_UI.scheduleTargetLayout(container));
         }
-        static createDowngradeSection() {
+        static createDowngradeSection(sectionKey, titleText) {
             const details = document.createElement('details');
             details.className = 'mwi-downgrade-section';
             details.hidden = true;
             details.open = true;
             const summary = document.createElement('summary');
-            summary.textContent = MWI_Calculator_I18n.isChinese() ? '强化降级' : 'Enhancement downgrade';
+            summary.textContent = titleText;
             details.appendChild(summary);
             // 虚拟分类仅承载圆角底框，不增加分类标题或折叠操作。
             const itemsContainer = document.createElement('div');
             itemsContainer.className = 'mwi-downgrade-items';
             Object.assign(itemsContainer.style, MWI_Calculator_UIStyles.category);
             details.appendChild(itemsContainer);
-            this.downgradeItemsContainer = itemsContainer;
-            this.downgradeDetails = details;
-            this.downgradeRows = new Map();
+            this[`${sectionKey}ItemsContainer`] = itemsContainer;
+            this[`${sectionKey}Details`] = details;
+            this[`${sectionKey}Rows`] = new Map();
             return details;
         }
-        static renderDowngradeItems(items) {
-            if (!this.downgradeDetails) return;
-            for (const [key, row] of this.downgradeRows) {
-                if (!items.has(key)) { row.element.remove(); this.downgradeRows.delete(key); }
+        static renderDowngradeItems(items, sectionKey = 'downgrade') {
+            const rows = this[`${sectionKey}Rows`];
+            const details = this[`${sectionKey}Details`];
+            const itemsContainer = this[`${sectionKey}ItemsContainer`];
+            if (!details) return;
+            // 继承行无需降级跳转，仅展示"强化将被继承"的信息。
+            const isInherit = sectionKey === 'inherit';
+            for (const [key, row] of rows) {
+                if (!items.has(key)) { row.element.remove(); rows.delete(key); }
             }
             const sorted = [...items.entries()].sort(([, a], [, b]) =>
                 MWI_Calculator_Utils.getSortIndexByItemHrid(a.itemHrid) - MWI_Calculator_Utils.getSortIndexByItemHrid(b.itemHrid)
                 || a.itemHrid.localeCompare(b.itemHrid) || a.enhancementLevel - b.enhancementLevel);
             let previous = null;
             for (const [key, item] of sorted) {
-                let row = this.downgradeRows.get(key);
+                let row = rows.get(key);
                 if (!row) {
                     // 复用缺口物品行，保持图标、名称、数量框及间距一致。
                     const displayItem = {
                         iconHref: MWI_Calculator_Utils.getIconHrefByItemHrid(item.itemHrid),
                         displayName: MWI_Calculator_I18n.getItemName(item.itemHrid),
                     };
-                    this.createShortageItemDisplayElement(displayItem, () => this.gotoDowngradeEnhancing(item));
+                    // 继承行无需跳转，空回调避免回退到默认制作/购买跳转。
+                    this.createShortageItemDisplayElement(displayItem, isInherit ? () => {} : () => this.gotoDowngradeEnhancing(item));
+                    if (isInherit) {
+                        displayItem.itemJumpButton.title = MWI_Calculator_I18n.isChinese()
+                            ? '作为升级基底使用，强化等级将被继承' : 'Used as upgrade base; enhancement is inherited';
+                    }
                     const element = displayItem.shortageDisplayElement;
                     element.classList.add('mwi-downgrade-item');
                     const label = displayItem.itemJumpButton.querySelector('span');
@@ -3535,22 +3599,23 @@
                     const quantity = displayItem.shortageSpan;
                     quantity.classList.add('mwi-downgrade-count');
                     row = { element, quantity };
-                    this.downgradeRows.set(key, row);
+                    rows.set(key, row);
                 }
                 const equippedNeeded = Math.max(0, item.count - MWI_Calculator_ItemsMap.getInventoryOnlyCount(item.itemHrid, item.enhancementLevel));
                 const title = `${MWI_Calculator_I18n.getItemName(item.itemHrid)} +${item.enhancementLevel}`
+                    + (isInherit ? '（作为升级基底，强化将被继承）' : '')
                     + (equippedNeeded > 0 ? `（其中 ${equippedNeeded} 件已装备，请先手动卸下）` : '');
                 if (row.element.title !== title) row.element.title = title;
                 const text = MWI_Calculator_Utils.formatNumber(item.count);
                 if (row.quantity.textContent !== text) row.quantity.textContent = text;
                 if (previous) {
                     if (previous.nextElementSibling !== row.element) previous.insertAdjacentElement('afterend', row.element);
-                } else if (this.downgradeItemsContainer.firstElementChild !== row.element) {
-                    this.downgradeItemsContainer.prepend(row.element);
+                } else if (itemsContainer.firstElementChild !== row.element) {
+                    itemsContainer.prepend(row.element);
                 }
                 previous = row.element;
             }
-            this.downgradeDetails.hidden = sorted.length === 0;
+            details.hidden = sorted.length === 0;
         }
         static gotoDowngradeEnhancing(item) {
             if (!this.canUseCharacterData()) return false;
