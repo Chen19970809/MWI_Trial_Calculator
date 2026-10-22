@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         [银河奶牛]生产制作计算器-预设版
-// @version      0.1.0
+// @version      0.1.1
 // @namespace    http://tampermonkey.net/
 // @description  银河奶牛计算器，自动计算需求缺口，一键跳转到制作、购买。Calculator for MilkyWayIdle，Automatically calculate supply-demand gaps and navigate to production or purchasing with a single click.
 // @author       RERoger、MonsterFC
@@ -3473,14 +3473,14 @@
         // 货币代币 → 对应宝箱定义（中英文本地化名称，运行时反查 hrid）。
         static getTokenChestDefs() {
             this.tokenChestDefs ||= [
-                { token: ['奇幻代币', 'Chimerical Token'], chest: ['奇幻宝箱', 'Chimerical Chest'], perChest: 487.5 },
-                { token: ['阴森代币', 'Sinister Token'], chest: ['阴森宝箱', 'Sinister Chest'], perChest: 487.5 },
-                { token: ['秘法代币', 'Enchanted Token'], chest: ['秘法宝箱', 'Enchanted Chest'], perChest: 487.5 },
-                { token: ['海盗代币', 'Pirate Token'], chest: ['海盗宝箱', 'Pirate Chest'], perChest: 487.5 },
-                { token: ['阴森精炼碎片', 'Sinister Refinement Shard'], chest: ['阴森精炼宝箱', 'Sinister Refinement Chest'], perChest: 1.875 },
-                { token: ['奇幻精炼碎片', 'Chimerical Refinement Shard'], chest: ['奇幻精炼宝箱', 'Chimerical Refinement Chest'], perChest: 1.875 },
-                { token: ['秘法精炼碎片', 'Enchanted Refinement Shard'], chest: ['秘法精炼宝箱', 'Enchanted Refinement Chest'], perChest: 1.875 },
-                { token: ['海盗精炼碎片', 'Pirate Refinement Shard'], chest: ['海盗精炼宝箱', 'Pirate Refinement Chest'], perChest: 1.875 },
+                { token: ['奇幻代币', 'Chimerical Token'], chest: ['奇幻宝箱', 'Chimerical Chest'], perChest: 462, perChestMax: 726 },
+                { token: ['阴森代币', 'Sinister Token'], chest: ['阴森宝箱', 'Sinister Chest'], perChest: 487.5, perChestMax: 767  },
+                { token: ['秘法代币', 'Enchanted Token'], chest: ['秘法宝箱', 'Enchanted Chest'], perChest: 487.5, perChestMax: 847  },
+                { token: ['海盗代币', 'Pirate Token'], chest: ['海盗宝箱', 'Pirate Chest'], perChest: 487.5, perChestMax: 877  },
+                { token: ['阴森精炼碎片', 'Sinister Refinement Shard'], chest: ['阴森精炼宝箱', 'Sinister Refinement Chest'], perChest: 1.875, perChestMax: 1.875  },
+                { token: ['奇幻精炼碎片', 'Chimerical Refinement Shard'], chest: ['奇幻精炼宝箱', 'Chimerical Refinement Chest'], perChest: 1.875, perChestMax: 1.875  },
+                { token: ['秘法精炼碎片', 'Enchanted Refinement Shard'], chest: ['秘法精炼宝箱', 'Enchanted Refinement Chest'], perChest: 1.875, perChestMax: 1.875  },
+                { token: ['海盗精炼碎片', 'Pirate Refinement Shard'], chest: ['海盗精炼宝箱', 'Pirate Refinement Chest'], perChest: 1.875, perChestMax: 1.875  },
             ];
             return this.tokenChestDefs;
         }
@@ -3495,7 +3495,7 @@
                 if (def) {
                     const chestHrid = MWI_Calculator_I18n.getHridByName(def.chest[0], 'itemNames')
                         || MWI_Calculator_I18n.getHridByName(def.chest[1], 'itemNames');
-                    if (chestHrid) pair = { chestHrid, perChest: def.perChest };
+                    if (chestHrid) pair = { chestHrid, perChest: def.perChest, perChestMax: def.perChestMax };
                 }
             }
             this.tokenChestCache.set(itemHrid, pair);
@@ -3506,8 +3506,12 @@
         static updateTokenChestRow(requiredItem, lastElement) {
             const pair = this.getTokenChestPair(requiredItem.itemHrid);
             const shortage = requiredItem.shortageCount || 0;
+            // 冗余按常规开出量折算，极限按最大开出量折算（缺失时回退常规值）；非映射物品直接跳过。
+            const perChest = pair
+                ? (this.materialPlanningMode === 'limit' ? (pair.perChestMax ?? pair.perChest) : pair.perChest)
+                : 0;
             const need = pair && shortage > 0
-                ? Math.max(0, Math.ceil(shortage / pair.perChest) - MWI_Calculator_ItemsMap.getCount(pair.chestHrid))
+                ? Math.max(0, Math.ceil(shortage / perChest) - MWI_Calculator_ItemsMap.getCount(pair.chestHrid))
                 : 0;
             if (!(need > 0)) {
                 requiredItem.chestRowElement?.remove();
@@ -3531,7 +3535,7 @@
             }
             const text = MWI_Calculator_Utils.formatNumber(need);
             if (requiredItem.chestRowSpan.textContent !== text) requiredItem.chestRowSpan.textContent = text;
-            const title = `缺口 ${MWI_Calculator_Utils.formatNumber(shortage)} ÷ ${pair.perChest}/箱 - 现有宝箱，向上取整`;
+            const title = `缺口 ${MWI_Calculator_Utils.formatNumber(shortage)} ÷ ${perChest}/箱 - 现有宝箱，向上取整`;
             if (requiredItem.chestRowElement.title !== title) requiredItem.chestRowElement.title = title;
             lastElement.insertAdjacentElement('afterend', requiredItem.chestRowElement);
             return requiredItem.chestRowElement;
