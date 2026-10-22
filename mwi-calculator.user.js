@@ -283,15 +283,9 @@
             }
             return owned;
         }
-        // 强化拥有明细，如 "+2×1、+5×1"；无强化库存时返回空串。
+        // 强化拥有明细，如 "+2*1、+5*1"；无强化库存时返回空串。
         getEnhancedOwnedDetail() {
-            const levels = MWI_Calculator_ItemsMap.map.get(this.itemHrid);
-            if (!levels) return '';
-            const parts = [];
-            for (const [level, count] of [...levels].sort(([a], [b]) => a - b)) {
-                if (level > 0 && count > 0) parts.push(`+${level}*${count}`);
-            }
-            return parts.join('、');
+            return MWI_Calculator_ItemsMap.getEnhancedOwnedDetail(this.itemHrid);
         }
         removeDisplayElement() {
             MWI_Calculator_UI.detachTargetLayout(this.displayElement);
@@ -323,6 +317,9 @@
             this.overflowSpan = null;
             this.requiredSpan = null;
             this.displayNameSpan = null;
+            // 货币代币缺口下方折算的宝箱行（仅代币缺口存在时显示）
+            this.chestRowElement = null;
+            this.chestRowSpan = null;
             this.shortageCount = shortageCount;
             this.overflowCount = overflowCount;
         }
@@ -382,6 +379,9 @@
         removeDisplayElement() {
             this.shortageDisplayElement?.remove();
             this.requiredDisplayElement?.remove();
+            this.chestRowElement?.remove();
+            this.chestRowElement = null;
+            this.chestRowSpan = null;
         }
     }
     class MWI_Calculator_Calculator {
@@ -2041,6 +2041,12 @@
                 return false;
             }
         }
+        // 预设行拥有数文本：与目标行同口径（含强化库存及 +N*数量 明细）。
+        static formatPresetOwnedText(itemHrid) {
+            const owned = MWI_Calculator_ItemsMap.getTotalOwnedCount(itemHrid);
+            const detail = MWI_Calculator_ItemsMap.getEnhancedOwnedDetail(itemHrid);
+            return detail ? `${owned}(${detail})` : String(owned);
+        }
         // 预设类内物品行：布局与原大类目标行一致（勾选框/拥有/需求），
         // 需求数量自动填入预设值且可修改；修改后在预设名字框显示保存按钮；无删除按钮。
         static createPresetItemDisplayElement(presetItem, applied, rowEntry = null) {
@@ -2066,7 +2072,7 @@
             const ownedSpan = document.createElement('span');
             ownedSpan.style.padding = '4px 1px';
             ownedSpan.style.marginLeft = '4px';
-            ownedSpan.textContent = String(MWI_Calculator_ItemsMap.getCount(presetItem.itemHrid));
+            ownedSpan.textContent = this.formatPresetOwnedText(presetItem.itemHrid);
             // 斜杠分隔符
             const slash = document.createElement('span');
             slash.textContent = '/';
@@ -2099,7 +2105,7 @@
                 presetItem.count = value;
                 applied.dirty = true;
                 if (applied.saveButton) applied.saveButton.style.display = '';
-                const owned = MWI_Calculator_ItemsMap.getCount(presetItem.itemHrid);
+                const owned = MWI_Calculator_ItemsMap.getTotalOwnedCount(presetItem.itemHrid);
                 MWI_Calculator_UI.renderTargetState(container, owned >= value ? 'completed' : 'pending');
                 MWI_Calculator_Calculator.saveAndScheduleRender();
                 MWI_Calculator_Calculator.saveAppliedPresets();
@@ -2114,7 +2120,7 @@
             // 与目标行相同的自适应布局（无删除按钮，传占位元素占位）
             MWI_Calculator_UI.attachTargetLayout(container, itemContainer, rightDiv, ownedSpan, targetInput, document.createElement('button'));
             // 行状态与目标行同规则：达标=completed，未达标=pending
-            const state = MWI_Calculator_ItemsMap.getCount(presetItem.itemHrid) >= presetItem.count ? 'completed' : 'pending';
+            const state = MWI_Calculator_ItemsMap.getTotalOwnedCount(presetItem.itemHrid) >= presetItem.count ? 'completed' : 'pending';
             MWI_Calculator_UI.renderTargetState(container, state);
             return { container, ownedSpan, checkbox: needCalcCheckbox };
         }
@@ -2134,8 +2140,8 @@
                 let hasCritical = false;
                 let minRatio = Number.POSITIVE_INFINITY;
                 for (const row of rows) {
-                    const owned = MWI_Calculator_ItemsMap.getCount(row.item.itemHrid);
-                    row.ownedSpan.textContent = String(owned);
+                    const owned = MWI_Calculator_ItemsMap.getTotalOwnedCount(row.item.itemHrid);
+                    row.ownedSpan.textContent = this.formatPresetOwnedText(row.item.itemHrid);
                     if (row.item.count > 0) {
                         const ratio = owned / row.item.count;
                         if (ratio < minRatio) minRatio = ratio;
@@ -2146,7 +2152,7 @@
                 // 仅点击「监测」才恢复自动评估
                 const manualFull = applied.manualFull === true;
                 for (const row of rows) {
-                    const owned = MWI_Calculator_ItemsMap.getCount(row.item.itemHrid);
+                    const owned = MWI_Calculator_ItemsMap.getTotalOwnedCount(row.item.itemHrid);
                     // 补满（手动）状态：尊重用户手动勾选/取消勾选，不做自动覆盖；
                     // 非补满状态：按预警规则自动评估
                     if (!manualFull) {
@@ -3454,6 +3460,8 @@
                     }
                     requiredItem.updateDisplayElement();
                     lastShortageElement = requiredItem.shortageDisplayElement;
+                    // 货币代币缺口下方折算显示对应宝箱还需数量
+                    lastShortageElement = this.updateTokenChestRow(requiredItem, lastShortageElement);
                     lastRequiredElement = requiredItem.requiredDisplayElement;
                     shortageItemCount += requiredItem.shortageCount > 0 ? 1 : 0;
                     requiredItemCount++;
@@ -3461,6 +3469,72 @@
                 if (shortageDetails.hidden !== (shortageItemCount === 0)) shortageDetails.hidden = shortageItemCount === 0;
                 if (requiredDetails.hidden !== (requiredItemCount === 0)) requiredDetails.hidden = requiredItemCount === 0;
             });
+        }
+        // 货币代币 → 对应宝箱定义（中英文本地化名称，运行时反查 hrid）。
+        static getTokenChestDefs() {
+            this.tokenChestDefs ||= [
+                { token: ['奇幻代币', 'Chimerical Token'], chest: ['奇幻宝箱', 'Chimerical Chest'], perChest: 487.5 },
+                { token: ['阴森代币', 'Sinister Token'], chest: ['阴森宝箱', 'Sinister Chest'], perChest: 487.5 },
+                { token: ['秘法代币', 'Enchanted Token'], chest: ['秘法宝箱', 'Enchanted Chest'], perChest: 487.5 },
+                { token: ['海盗代币', 'Pirate Token'], chest: ['海盗宝箱', 'Pirate Chest'], perChest: 487.5 },
+                { token: ['阴森精炼碎片', 'Sinister Refinement Shard'], chest: ['阴森精炼宝箱', 'Sinister Refinement Chest'], perChest: 1.875 },
+                { token: ['奇幻精炼碎片', 'Chimerical Refinement Shard'], chest: ['奇幻精炼宝箱', 'Chimerical Refinement Chest'], perChest: 1.875 },
+                { token: ['秘法精炼碎片', 'Enchanted Refinement Shard'], chest: ['秘法精炼宝箱', 'Enchanted Refinement Chest'], perChest: 1.875 },
+                { token: ['海盗精炼碎片', 'Pirate Refinement Shard'], chest: ['海盗精炼宝箱', 'Pirate Refinement Chest'], perChest: 1.875 },
+            ];
+            return this.tokenChestDefs;
+        }
+        // 代币/精炼碎片 → 宝箱映射（含每箱折合数量）；非映射物品或反查失败返回 null。
+        static getTokenChestPair(itemHrid) {
+            this.tokenChestCache ||= new Map();
+            if (this.tokenChestCache.has(itemHrid)) return this.tokenChestCache.get(itemHrid);
+            let pair = null;
+            const tokenName = MWI_Calculator_I18n.getItemName(itemHrid);
+            if (tokenName && tokenName !== itemHrid) {
+                const def = this.getTokenChestDefs().find(d => d.token.includes(tokenName));
+                if (def) {
+                    const chestHrid = MWI_Calculator_I18n.getHridByName(def.chest[0], 'itemNames')
+                        || MWI_Calculator_I18n.getHridByName(def.chest[1], 'itemNames');
+                    if (chestHrid) pair = { chestHrid, perChest: def.perChest };
+                }
+            }
+            this.tokenChestCache.set(itemHrid, pair);
+            return pair;
+        }
+        // 代币缺口行下方折算显示对应宝箱还需数量：ceil(缺口/每箱代币) - 现有宝箱。
+        // 返回缺口清单中新的尾行元素（宝箱行或原代币行），保证后续缺口行插在其后。
+        static updateTokenChestRow(requiredItem, lastElement) {
+            const pair = this.getTokenChestPair(requiredItem.itemHrid);
+            const shortage = requiredItem.shortageCount || 0;
+            const need = pair && shortage > 0
+                ? Math.max(0, Math.ceil(shortage / pair.perChest) - MWI_Calculator_ItemsMap.getCount(pair.chestHrid))
+                : 0;
+            if (!(need > 0)) {
+                requiredItem.chestRowElement?.remove();
+                requiredItem.chestRowElement = null;
+                requiredItem.chestRowSpan = null;
+                return lastElement;
+            }
+            if (!requiredItem.chestRowElement) {
+                const displayItem = {
+                    itemHrid: pair.chestHrid,
+                    iconHref: MWI_Calculator_Utils.getIconHrefByItemHrid(pair.chestHrid),
+                    displayName: `└ ${MWI_Calculator_I18n.getItemName(pair.chestHrid)}`,
+                };
+                this.createShortageItemDisplayElement(displayItem, null);
+                const element = displayItem.shortageDisplayElement;
+                element.classList.add('mwi-token-chest-row');
+                element.style.marginLeft = '16px';
+                element.style.opacity = '0.85';
+                requiredItem.chestRowElement = element;
+                requiredItem.chestRowSpan = displayItem.shortageSpan;
+            }
+            const text = MWI_Calculator_Utils.formatNumber(need);
+            if (requiredItem.chestRowSpan.textContent !== text) requiredItem.chestRowSpan.textContent = text;
+            const title = `缺口 ${MWI_Calculator_Utils.formatNumber(shortage)} ÷ ${pair.perChest}/箱 - 现有宝箱，向上取整`;
+            if (requiredItem.chestRowElement.title !== title) requiredItem.chestRowElement.title = title;
+            lastElement.insertAdjacentElement('afterend', requiredItem.chestRowElement);
+            return requiredItem.chestRowElement;
         }
         // 创建目标物品元素
         static createTargetItemDisplayElement(targetItem) {
@@ -4964,6 +5038,27 @@
         // 获取物品数量
         static getCount(itemHrid, enhancementLevel = 0) {
             return MWI_Calculator_ItemsMap.map.get(itemHrid)?.get(enhancementLevel) ?? 0;
+        }
+        // 拥有总数（含强化库存）：+N 版本同样计入拥有，与目标行口径一致。
+        static getTotalOwnedCount(itemHrid) {
+            let owned = this.getCount(itemHrid);
+            const levels = this.map.get(itemHrid);
+            if (levels) {
+                for (const [level, count] of levels) {
+                    if (level > 0 && count > 0) owned += count;
+                }
+            }
+            return owned;
+        }
+        // 强化拥有明细，如 "+2*1、+5*1"；无强化库存时返回空串。
+        static getEnhancedOwnedDetail(itemHrid) {
+            const levels = this.map.get(itemHrid);
+            if (!levels) return '';
+            const parts = [];
+            for (const [level, count] of [...levels].sort(([a], [b]) => a - b)) {
+                if (level > 0 && count > 0) parts.push(`+${level}*${count}`);
+            }
+            return parts.join('、');
         }
         static getEnhancedInventoryMap() {
             const result = new Map();
