@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         KUNPO试炼专用极简版
 // @namespace    https://www.milkywayidle.com/
-// @version      0.0.1
+// @version      0.0.2
 // @description  上传等级、成就、房屋、迷宫配装、神龛到计算器
 // @author       MonsterFC、MusoAlpha、KUNPO成员测试
 // @license      MIT
@@ -24,10 +24,13 @@
 (function () {
     'use strict';
 
-    const SCRIPT_VERSION = '0.0.1';
+    const SCRIPT_VERSION = '0.0.2';
 
     // ── 更新日志：key = 版本号，value = 中文更新内容；发新版本时在顶部加一条即可 ──
     const CHANGELOG = {
+        '0.0.2': '1. 周四强制打开窗口提醒成员更新配装\n'
+            + '2. 重新排列按钮图标\n'
+            + '3. 职业管理',
         '0.0.1': '极简版本，功能说明：'
             + '1. 上传配装：在有外网环境时点击可一件上传配装等级/成就/房屋/迷宫配装/神龛到数据后台，无需额外操作 \n'
             + '2. 游戏内显示排刀高亮：打开公会试炼页面自动显示应参加的项目\n'
@@ -306,6 +309,11 @@
         const a = new Date(ts), b = new Date();
         return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
     }
+    // 周四且当前角色今天还没上传过配装 → 挂载时强制展开面板，点「−」关闭时拦截提醒；
+    // 上传成功写入 K_LAST_UPLOAD 后本判定自动失效（关闭恢复正常）。
+    function thursdayUploadPending() {
+        return new Date().getDay() === 4 && !uploadedToday();
+    }
     // 一次性迁移：本地还没有上传时间时，若本会话已拉到云端数据、且缓存里「自己」这条
     // 的光环至少有一个 > 0，说明之前上传过 → 把上次上传时间定为 2026-09-25，
     // 避免老成员因为新功能上线被误判成「从未上传」而在周四被反复提醒。
@@ -426,7 +434,7 @@
         Object.assign(panel.style, {
             display: 'none',
             position: 'relative',
-            width: 'min(400px, calc(100vw - 24px))',
+            width: 'min(320px, calc(100vw - 24px))',
             boxSizing: 'border-box',
             padding: '12px',
             borderRadius: '10px',
@@ -467,12 +475,13 @@
         status.textContent = '等待人物数据';
         status.style.cssText = 'margin:0 0 9px 0;min-height:1.3em;color:#9db4d8;word-break:break-all';
 
+        // 按钮容器改为纵向堆叠，内部按「固定行」分组（行定义见 actions.append 处）
         const actions = document.createElement('div');
-        actions.style.cssText = 'display:flex;gap:6px;flex-wrap:wrap';
+        actions.style.cssText = 'display:flex;flex-direction:column;gap:6px';
         const sendBtn = document.createElement('button');
         sendBtn.type = 'button';
         sendBtn.textContent = '上传配装';
-        sendBtn.title = '读取云端最新数据，只把本人的等级/成就/房屋/配装合并后上传（不影响其他成员、排刀与技能配置）';
+        sendBtn.title = '打开上传确认窗口：读取云端最新数据，只把本人的等级/成就/房屋/配装合并后上传，并附带本地职业数据（不影响其他成员、排刀与技能配置）';
         Object.assign(sendBtn.style, {
             border: '0',
             borderRadius: '7px',
@@ -482,12 +491,35 @@
             cursor: 'pointer',
             font: '600 12px/1 system-ui, sans-serif',
         });
-        sendBtn.addEventListener('click', () => { void uploadLoadoutsToServer(); });
+        sendBtn.addEventListener('click', () => showUploadConfirmModal());
         const jsonBtn = document.createElement('button');
         jsonBtn.type = 'button';
-        jsonBtn.textContent = '下载 JSON 备份';
-        jsonBtn.title = '导出当前角色全部迷宫配装到 JSON 文件';
+        // 呼吸光圈动画（只注入一次）：绿色高亮引导成员注意下载入口
+        if (!document.getElementById('kunpo-jsonbtn-style')) {
+            const glowStyle = document.createElement('style');
+            glowStyle.id = 'kunpo-jsonbtn-style';
+            glowStyle.textContent = '@keyframes kunpo-export-glow{0%,100%{box-shadow:0 0 0 0 rgba(31,157,85,.55)}50%{box-shadow:0 0 0 6px rgba(31,157,85,0)}}';
+            document.head.appendChild(glowStyle);
+        }
+        jsonBtn.textContent = '↓';
+        jsonBtn.title = '下载 JSON 备份：导出当前角色全部迷宫配装到 JSON 文件';
         Object.assign(jsonBtn.style, {
+            border: '0',
+            borderRadius: '7px',
+            padding: '6px 11px',
+            background: '#1f9d55',
+            color: '#fff',
+            cursor: 'pointer',
+            font: '600 15px/1 system-ui, sans-serif',
+            animation: 'kunpo-export-glow 2.4s ease-in-out infinite',
+        });
+        jsonBtn.addEventListener('click', () => exportJsonData());
+        // 《职业管理》：查看/编辑云端共享空间里本人的职业（出战切换、增删），详见 openProfManager
+        const profBtn = document.createElement('button');
+        profBtn.type = 'button';
+        profBtn.textContent = '职业管理';
+        profBtn.title = '查看云端共享空间里本人的所有职业：双击切换出战职业、可增删职业';
+        Object.assign(profBtn.style, {
             border: '0',
             borderRadius: '7px',
             padding: '6px 9px',
@@ -496,7 +528,7 @@
             cursor: 'pointer',
             font: '600 12px/1 system-ui, sans-serif',
         });
-        jsonBtn.addEventListener('click', () => exportJsonData());
+        profBtn.addEventListener('click', () => { void openProfManager(); });
         const setBtn = document.createElement('button');
         setBtn.type = 'button';
         setBtn.textContent = '⚙ 设置';
@@ -534,7 +566,17 @@
                 updBtn.textContent = '检查脚本更新';
             });
         });
-        actions.append(sendBtn, jsonBtn, setBtn, updBtn);
+        // ── 按钮固定分两行排布 ──
+        //   第一行（常驻）：上传配装 / 下载 JSON 备份
+        //   第二行（常驻）：检查脚本更新 / 设置
+        const rowCss = 'display:flex;gap:6px;flex-wrap:wrap';
+        const actionRow1 = document.createElement('div');
+        actionRow1.style.cssText = rowCss;
+        const actionRow2 = document.createElement('div');
+        actionRow2.style.cssText = rowCss;
+        actionRow1.append(sendBtn, jsonBtn, profBtn);
+        actionRow2.append(updBtn, setBtn);
+        actions.append(actionRow1, actionRow2);
 
         panel.append(collapseBtn, heading, intro, status, actions);
         state.introEl = intro;   // 提示行：显示上次上传配装时间 / 周四上传提醒
@@ -597,14 +639,24 @@
             if (suppressClick) { suppressClick = false; return; }
             applyCollapsed(false);
         });
-        collapseBtn.addEventListener('click', () => applyCollapsed(true));
+        // 周四且当天还没上传配装：点「−」先正常收起，提醒后 0.5 秒自动弹回
+        // （上传成功后本拦截自动解除）。重复点击只保留一个待执行的弹回定时器。
+        let reopenTimer = 0;
+        collapseBtn.addEventListener('click', () => {
+            if (!thursdayUploadPending()) { applyCollapsed(true); return; }
+            applyCollapsed(true);
+            showAssignmentToast('上传配装后可关闭窗口~');
+            clearTimeout(reopenTimer);
+            reopenTimer = setTimeout(() => { reopenTimer = 0; applyCollapsed(false); }, 500);
+        });
 
         // 视口尺寸变化时保持可见：收起态重新钳制图标；展开态重新钳制面板。
         uiResizeHandler = () => { clampPanelToViewport(); };
         window.addEventListener('resize', uiResizeHandler);
 
         // 默认收起为 K 图标；记住用户上次的展开/收起选择。
-        applyCollapsed(localStorage.getItem(UI_COLLAPSED_KEY) !== '0');
+        // 例外：周四且当前角色当天还没上传配装 → 无视记忆状态强制展开面板提醒上传。
+        applyCollapsed(thursdayUploadPending() ? false : localStorage.getItem(UI_COLLAPSED_KEY) !== '0');
         applyGuildActionVisibility();   // 建完面板立刻按公会门控决定各按钮显隐
         seedCosCredentials();           // 把内置云函数地址/口令落盘，为「以后从代码里移除常量」做准备
         setStatus('等待人物数据');
@@ -1256,6 +1308,73 @@
             auras: (profile.auras && typeof profile.auras === 'object') ? profile.auras : {},
         };
     }
+    // ── 上传确认弹窗：与《DIY插件分享》/《职业管理》同款全屏遮罩+居中 ──
+    // 点「确认上传」才真正执行上传流程（GET 不补水本地职业，并把本地职业数据附带写上）；
+    // 「职业管理」叠加打开职业管理弹窗（不关闭本窗口，关闭职业管理后可继续上传）；
+    // 「×」/点遮罩空白 = 取消上传并关闭。
+    function showUploadConfirmModal() {
+        document.getElementById('kunpo-upload-modal')?.remove();
+        const overlay = document.createElement('div');
+        overlay.id = 'kunpo-upload-modal';
+        overlay.style.cssText = 'position:fixed;inset:0;z-index:2147483647;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center';
+        const box = document.createElement('div');
+        box.style.cssText = 'position:relative;width:min(400px,92vw);max-height:80vh;overflow-y:auto;padding:16px;border-radius:12px;'
+            + 'background:linear-gradient(145deg,#152447,#1d3566);color:#eef3ff;border:1px solid #6f9bd8;box-shadow:0 10px 28px rgba(3,10,26,.55);font:12.5px/1.5 system-ui,sans-serif';
+        const title = document.createElement('div');
+        title.style.cssText = 'font-weight:700;font-size:15px;margin-bottom:10px;color:#8fc3ff';
+        title.textContent = '确认上传';
+        const close = document.createElement('button');
+        close.type = 'button'; close.textContent = '×';
+        close.style.cssText = 'position:absolute;top:8px;right:12px;background:none;border:0;color:#c3d2f2;font:700 20px/1 system-ui;cursor:pointer';
+        close.addEventListener('click', function () { overlay.remove(); });
+        const msg = document.createElement('div');
+        msg.style.cssText = 'margin-bottom:12px;white-space:pre-wrap;word-break:break-word;color:#dbe6fb';
+        msg.textContent = '将读取云端最新数据，只把本人的等级/成就/房屋/迷宫配装/神龛/光环合并后上传到共享空间，'
+            + '并把本地保存的职业数据一并附带上传。\n不影响其他成员、排刀与技能配置。';
+        const btnRow = document.createElement('div');
+        btnRow.style.cssText = 'display:flex;gap:8px;flex-wrap:wrap';
+        const okBtn = document.createElement('button');
+        okBtn.type = 'button';
+        okBtn.textContent = '确认上传';
+        okBtn.title = '读取云端数据并上传（附带本地职业数据）';
+        Object.assign(okBtn.style, {
+            border: '0',
+            borderRadius: '7px',
+            padding: '7px 12px',
+            flex: '1',
+            background: '#0a84ff',
+            color: '#fff',
+            cursor: 'pointer',
+            font: '600 12.5px/1 system-ui, sans-serif',
+        });
+        okBtn.addEventListener('click', function () {
+            overlay.remove();
+            void uploadLoadoutsToServer();
+        });
+        const profBtn = document.createElement('button');
+        profBtn.type = 'button';
+        profBtn.textContent = '职业管理';
+        profBtn.title = '打开职业管理（本窗口保留，关闭职业管理后可继续上传）';
+        Object.assign(profBtn.style, {
+            border: '0',
+            borderRadius: '7px',
+            padding: '7px 12px',
+            flex: '1',
+            background: '#344879',
+            color: '#fff',
+            cursor: 'pointer',
+            font: '600 12.5px/1 system-ui, sans-serif',
+        });
+        profBtn.addEventListener('click', function () { void openProfManager(); });   // 不关闭本弹窗 → 叠加
+        btnRow.append(okBtn, profBtn);
+        box.appendChild(close);
+        box.appendChild(title);
+        box.appendChild(msg);
+        box.appendChild(btnRow);
+        overlay.appendChild(box);
+        overlay.addEventListener('click', function (ev) { if (ev.target === overlay) overlay.remove(); });
+        document.body.appendChild(overlay);
+    }
     async function uploadLoadoutsToServer() {
         // 上传配装不受试炼结束静默限制：静默只停“读取/提示”类逻辑，
         // 上传走的是已缓存数据 + 云端读写，与本周排刀是否结束无关。
@@ -1275,7 +1394,8 @@
         setStatus('正在读取云端数据…', 'idle');
         try {
             const key = await deriveKey(cfg.password, cfg.guild);
-            const remote = await cloudFetchRecord(cfg, key);
+            // skipProfsHydrate：本次读取不把云端职业覆盖到本地（防止本地职业改动被冲掉）
+            const remote = await cloudFetchRecord(cfg, key, { skipProfsHydrate: true });
             const me = profileToMember(members[0]);
             if (!me) throw new Error('无法解析本人数据');
             const list = Array.isArray(remote.members) ? remote.members.slice() : [];
@@ -1290,6 +1410,21 @@
             delete next.achievementActionTypeBuffsDict;
             if (idx >= 0) list[idx] = next; else list.push(next);
             const merged = Object.assign({}, remote, { members: list }); // guild / trials / plan 原样保留
+            // 附带本地职业数据：本人字段（byName[me]/sel[me]）以本地为准，
+            // 职业合集 list 只增不删、不碰他人数据；本地没有任何职业缓存时不改动云端职业字段。
+            const localProfs = readLocalProfs();
+            const myLocalList = Array.isArray(localProfs.byName[myName]) ? localProfs.byName[myName] : null;
+            const myLocalSel = (typeof localProfs.sel[myName] === 'string' && localProfs.sel[myName]) ? localProfs.sel[myName] : '';
+            if (myLocalList || myLocalSel) {
+                const p = normalizeProfs(merged.profs);
+                if (myLocalList) {
+                    p.byName[myName] = myLocalList.slice();
+                    myLocalList.forEach(function (s) { if (p.list.indexOf(s) < 0) p.list.push(s); });
+                }
+                if (myLocalSel) p.sel[myName] = myLocalSel;
+                p._ts = Date.now();
+                merged.profs = p;
+            }
             const rec = await encryptRecord(JSON.stringify(merged), key);
             setStatus('正在上传…', 'idle');
             await cloudPutRecord(cfg, rec);
@@ -1310,6 +1445,207 @@
             console.error('[KUNPO] 上传失败：', e);
             alert('上传失败：' + msg);
         }
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // ▼ 职业管理：查看/编辑云端共享空间里本人的职业（本地编辑，不上传云端）
+    //   云端字段（与 index.html 计算器网页端共用同一份记录）：
+    //     record.profs = { _ts, list(职业合集), byName{角色名:[职业…]}, sel{角色名:出战职业} }
+    //   本地缓存 localStorage['kunpo_profs_cache']：仅当本地缺少全职业数据或本人数据时
+    //   才拉取一次云端（GET），之后不再主动与云端交互；改动只写本地缓存。
+    //   其余任意云端读取（上传配装/拉排刀/光环等）会顺带把云端 profs 全量写入本地缓存：
+    //   全覆盖，一切数据以云端为主；仅当云端记录里没有 profs 字段（老记录）时不动本地。
+    //   交互：第一行=出战职业；其余行双击切换出战、「−」删除；底部下拉+「+」新增。
+    // ═══════════════════════════════════════════════════════════════════════
+    const K_PROFS_CACHE = 'kunpo_profs_cache';
+    function normalizeProfs(raw) {
+        const p = (raw && typeof raw === 'object' && !Array.isArray(raw)) ? raw : {};
+        return {
+            _ts: Number(p._ts) || 0,
+            list: Array.isArray(p.list) ? p.list.filter(s => typeof s === 'string') : [],
+            byName: (p.byName && typeof p.byName === 'object' && !Array.isArray(p.byName)) ? p.byName : {},
+            sel: (p.sel && typeof p.sel === 'object' && !Array.isArray(p.sel)) ? p.sel : {},
+        };
+    }
+    function readLocalProfs() {
+        try { return normalizeProfs(JSON.parse(localStorage.getItem(K_PROFS_CACHE) || 'null')); }
+        catch (_) { return normalizeProfs(null); }
+    }
+    function saveLocalProfs(p) {
+        try { localStorage.setItem(K_PROFS_CACHE, JSON.stringify(p)); } catch (_) {}
+    }
+    // 本地是否已具备「全职业数据 + 本人数据」：二者都齐才不再与云端交互
+    // （云端暂时为空/还没有本人条目时，每次打开都会重拉，直到数据出现为止）
+    function profsHasLocalData(p, me) {
+        return !!(p && Array.isArray(p.list) && p.list.length > 0
+            && p.byName && Array.isArray(p.byName[me]));
+    }
+    // 其余任意云端读取（上传配装/拉排刀/光环等都经过 cloudFetchRecord）顺带补水：
+    // 每次都把云端 profs 全量写入本地缓存——全覆盖，一切数据以云端为主；
+    // 弹窗里的本地改动会在下一次云端读取时被云端数据覆盖。
+    // 仅当云端记录里没有 profs 字段（老版本记录）时不动本地，避免把本地清空。
+    function hydrateLocalProfsFromRecord(record) {
+        try {
+            const raw = record && record.profs;
+            if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return;
+            saveLocalProfs(normalizeProfs(raw));
+        } catch (_) { /* 补水失败不影响主流程 */ }
+    }
+    async function openProfManager() {
+        const me = String(currentCharacterName() || '').trim();
+        if (!me) { showAssignmentToast('尚未读取到角色名，请稍后再试'); return; }
+        let profs = readLocalProfs();
+        if (profsHasLocalData(profs, me)) { showProfManagerModal(me, profs); return; }   // 本地已有 → 不再拉取
+        const cfg = assignmentConfig();
+        if (!cfg) { alert('请先在「⚙ 设置」里填写正确的 JSON 获取地址（需含 bin 与 pwd）。'); return; }
+        try {
+            setStatus('正在读取云端职业数据…', 'idle');
+            const key = await deriveKey(cfg.password, cfg.guild);
+            // 会话里已拉过整份记录（上传配装/排刀）就直接复用，否则真拉一次
+            const remote = await cloudFetchRecord(cfg, key, cloudRecordCache.data ? { cacheTtl: Infinity } : null);
+            profs = normalizeProfs(remote && remote.profs);
+            saveLocalProfs(profs);
+            setStatus('职业数据已就绪', 'good');
+        } catch (e) {
+            setStatus('职业数据读取失败', 'error');
+            alert('读取云端职业数据失败：' + (e && e.message ? e.message : String(e)));
+            return;
+        }
+        showProfManagerModal(me, profs);
+    }
+    function showProfManagerModal(me, profs) {
+        document.getElementById('kunpo-prof-modal')?.remove();
+        let myList = (Array.isArray(profs.byName[me]) ? profs.byName[me] : [])
+            .filter(s => typeof s === 'string').slice();
+        let mySel = (typeof profs.sel[me] === 'string') ? profs.sel[me] : '';
+        let profsPool = profs.list.slice();          // 职业合集快照（下拉可选项来源）
+
+        // 外层遮罩 + 居中弹窗：与正式版《DIY插件分享》弹窗同一位置/形态
+        const overlay = document.createElement('div');
+        overlay.id = 'kunpo-prof-modal';
+        overlay.style.cssText = 'position:fixed;inset:0;z-index:2147483647;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center';
+        const box = document.createElement('div');
+        box.id = 'kunpo-prof-box';
+        box.style.cssText = 'position:relative;width:min(340px,92vw);max-height:80vh;overflow-y:auto;padding:14px;'
+            + 'border-radius:12px;border:1px solid #6f9bd8;background:linear-gradient(145deg,#152447,#1d3566);color:#eef3ff;'
+            + 'font:12.5px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif;box-shadow:0 10px 28px rgba(3,10,26,.55)';
+        const title = document.createElement('strong');
+        title.textContent = '职业管理 · ' + me;
+        title.style.cssText = 'display:block;font-size:14px;margin:0 0 8px 0';
+        box.appendChild(title);
+        const close = document.createElement('button');
+        close.type = 'button'; close.textContent = '×'; close.title = '关闭';
+        close.style.cssText = 'position:absolute;top:7px;right:7px;min-width:24px;height:24px;border:0;border-radius:7px;'
+            + 'background:#344879;color:#fff;cursor:pointer;font:700 16px/1 system-ui,sans-serif';
+        close.addEventListener('click', () => overlay.remove());
+        box.appendChild(close);
+        const listBox = document.createElement('div');
+        box.appendChild(listBox);
+        const hint = document.createElement('div');
+        hint.style.cssText = 'margin-top:6px;color:#7f93bb;font-size:10.5px;line-height:1.6';
+        hint.textContent = '双击职业行 = 设为出战职业；「−」= 删除该职业（出战职业不显示删除按钮）；底部下拉选择后点「+」新增。';
+        box.appendChild(hint);
+        overlay.appendChild(box);
+        overlay.addEventListener('click', function (ev) { if (ev.target === overlay) overlay.remove(); });
+        document.body.appendChild(overlay);
+
+        function renderRows() {
+            listBox.textContent = '';
+            // 第一行：出战职业（金色高亮，不可删除）
+            const selRow = document.createElement('div');
+            selRow.style.cssText = 'display:flex;align-items:center;gap:6px;padding:6px 8px;margin:0 0 6px 0;'
+                + 'border:1px solid #ffd60a;border-radius:7px;background:rgba(255,214,10,.08);user-select:none';
+            const badge = document.createElement('span');
+            badge.textContent = '出战';
+            badge.style.cssText = 'flex:0 0 auto;color:#ffd60a;font:700 10.5px/1.4 system-ui,sans-serif;'
+                + 'border:1px solid #ffd60a;border-radius:4px;padding:1px 4px';
+            const selName = document.createElement('span');
+            selName.style.cssText = 'flex:1;word-break:break-all;font-weight:600';
+            selName.textContent = mySel || '（未设置出战职业）';
+            selRow.append(badge, selName);
+            listBox.appendChild(selRow);
+            // 其余职业行：双击切换出战，「−」删除
+            const rest = myList.filter(function (s) { return s !== mySel; });
+            rest.forEach(function (prof) {
+                const row = document.createElement('div');
+                row.style.cssText = 'display:flex;align-items:center;gap:6px;padding:6px 8px;margin:0 0 6px 0;'
+                    + 'border:1px solid #45598c;border-radius:7px;background:rgba(10,20,44,.5);user-select:none;cursor:pointer';
+                row.title = '双击切换为出战职业';
+                const name = document.createElement('span');
+                name.style.cssText = 'flex:1;word-break:break-all';
+                name.textContent = prof;
+                const del = document.createElement('button');
+                del.type = 'button'; del.textContent = '−'; del.title = '删除该职业';
+                del.style.cssText = 'flex:0 0 auto;min-width:22px;height:22px;border:0;border-radius:6px;'
+                    + 'background:#6e2f3a;color:#fff;cursor:pointer;font:700 13px/1 system-ui,sans-serif';
+                del.addEventListener('click', function (ev) { ev.stopPropagation(); delProf(prof); });
+                row.addEventListener('dblclick', function () { switchProf(prof); });
+                row.append(name, del);
+                listBox.appendChild(row);
+            });
+            if (!rest.length) {
+                const empty = document.createElement('div');
+                empty.style.cssText = 'margin:0 0 6px 0;color:#7f93bb;font-size:11px';
+                empty.textContent = '没有其余职业，可在下方下拉框新增。';
+                listBox.appendChild(empty);
+            }
+            // 最后一行的下一行：下拉框 + 「+」新增
+            const addRow = document.createElement('div');
+            addRow.style.cssText = 'display:flex;align-items:center;gap:6px;margin-top:2px';
+            const select = document.createElement('select');
+            select.style.cssText = 'flex:1;min-width:0;padding:4px 6px;border:1px solid #45598c;border-radius:5px;'
+                + 'background:#0e1830;color:#eef3ff;font:12px/1.4 system-ui,sans-serif';
+            const options = profsPool.filter(function (s) { return myList.indexOf(s) < 0; });
+            if (options.length) {
+                const placeholder = document.createElement('option');
+                placeholder.value = ''; placeholder.textContent = '选择要新增的职业…';
+                select.appendChild(placeholder);
+                options.forEach(function (s) {
+                    const opt = document.createElement('option');
+                    opt.value = s; opt.textContent = s;
+                    select.appendChild(opt);
+                });
+            } else {
+                const opt = document.createElement('option');
+                opt.value = ''; opt.textContent = '（云端职业合集为空，请会长在网页端维护）';
+                select.appendChild(opt);
+                select.disabled = true;
+            }
+            const addBtn = document.createElement('button');
+            addBtn.type = 'button'; addBtn.textContent = '+'; addBtn.title = '新增该职业';
+            addBtn.style.cssText = 'flex:0 0 auto;min-width:26px;height:26px;border:0;border-radius:6px;'
+                + 'background:#1f9d55;color:#fff;cursor:pointer;font:700 14px/1 system-ui,sans-serif';
+            addBtn.disabled = !options.length;
+            addBtn.addEventListener('click', function () { addProf(select.value); });
+            addRow.append(select, addBtn);
+            listBox.appendChild(addRow);
+        }
+        // 改动只写本地缓存（profs._ts 仅本地更新），不上传云端
+        function saveLocal() {
+            profs.byName[me] = myList.slice();
+            profs.sel[me] = mySel;
+            myList.forEach(function (s) { if (profs.list.indexOf(s) < 0) profs.list.push(s); });
+            profs._ts = Date.now();
+            saveLocalProfs(profs);
+            profsPool = profs.list.slice();
+        }
+        function switchProf(prof) {
+            mySel = prof;
+            saveLocal();
+            renderRows();
+        }
+        function delProf(prof) {
+            myList = myList.filter(function (s) { return s !== prof; });
+            saveLocal();
+            renderRows();
+        }
+        function addProf(prof) {
+            if (!prof || myList.indexOf(prof) >= 0) return;
+            myList = myList.concat([prof]);
+            saveLocal();
+            renderRows();
+        }
+        renderRows();
     }
 
     // GM_registerMenuCommand('设置试炼计算器页面地址（必须！！！）', setCalculatorUrl);
@@ -1512,6 +1848,9 @@
         const sig = cloudRecordSig(cfg);
         if (ttl > 0 && cloudRecordCache.data && cloudRecordCache.sig === sig
             && Date.now() - cloudRecordCache.fetchedAt < ttl) {
+            // skipProfsHydrate：上传确认流程的读取不补水（防止本地职业改动被云端冲掉，
+            // 上传时会反过来以本地为准附带职业数据）
+            if (!(opts && opts.skipProfsHydrate)) { try { hydrateLocalProfsFromRecord(cloudRecordCache.data); } catch (_) {} }
             return cloudRecordCache.data;
         }
         // 同一地址并发时复用同一个请求：启动瞬间排刀与光环同时要数据时只发一次
@@ -1526,6 +1865,7 @@
             // 拉到数据后：尝试补齐「上次上传时间」的一次性迁移，并刷新面板提示行
             // （面板可能一直开着，不主动刷的话「未拉取」会一直挂着）
             try { seedLastUploadFromCache(); updateIntroLine(); } catch (_) {}
+            if (!(opts && opts.skipProfsHydrate)) { try { hydrateLocalProfsFromRecord(data); } catch (_) {} }   // 顺带补水本地职业缓存
             return data;
         })().finally(function () { cloudRecordCache.inFlight = null; });
         cloudRecordCache.inFlight = p;
@@ -1792,6 +2132,15 @@
         const announce = !!(opts && opts.announce);
         const expired = !!(opts && opts.expired);
         if (trialEndState.silenced) return;
+        // 统一过期闸门：排刀已过期且非「手动强制展示」→ 一律不渲染高亮。
+        // 之前 onEnterTrialPage 的 .then 回调在 refreshAssignment 的过期判定之后
+        // 无条件调用本函数，绕过判定把过期排刀的高亮重新画上（残留"上周高亮"）。
+        const dl = assignmentState.doc && assignmentState.doc.t ? Date.parse(assignmentState.doc.t) : NaN;
+        if (!expired && !assignmentState.forceShowExpired && Number.isFinite(dl) && Date.now() > dl) {
+            clearAssignmentUi();
+            announceAssignment('排刀信息已过期，尚未发布新排刀', announce);
+            return;
+        }
         assignmentState.rendering = true;
         try {
             injectAssignmentStyle();
