@@ -543,8 +543,9 @@
     }
     // 周四且当前角色今天还没上传过配装 → 挂载时强制展开面板，点「−」关闭时拦截提醒；
     // 上传成功写入 K_LAST_UPLOAD 后本判定自动失效（关闭恢复正常）。
+    // 仅 KUNPO 成员（游戏内公会就是 KUNPO）生效：其他公会成员不强制弹出、不拦截关闭。
     function thursdayUploadPending() {
-        return new Date().getDay() === 4 && !uploadedToday();
+        return new Date().getDay() === 4 && !uploadedToday() && isKunpoMember();
     }
     // 一次性迁移：本地还没有上传时间时，若本会话已拉到云端数据、且缓存里「自己」这条
     // 的光环至少有一个 > 0，说明之前上传过 → 把上次上传时间定为 2026-09-25，
@@ -1674,6 +1675,17 @@
         if (!cfg) {
             setStatus('地址缺少 bin/pwd', 'error');
             alert('请先在「⚙ 设置」里填写正确的 JSON 获取地址（需含 bin 与 pwd）。');
+            return;
+        }
+        // 非 KUNPO 成员禁止把数据传进 KUNPO 共享空间：上传目标（地址里的 guild）是 KUNPO、
+        // 而游戏内公会已读到且不是 KUNPO 时阻止，提示改填自己公会的地址；
+        // 填了自己公会的地址（guild=自己公会）则不受影响。公会信息未读到时不拦截（与门控同口径）。
+        const targetGuild = String((cfg && cfg.guild) || '').trim().toUpperCase();
+        if (targetGuild === String(GUILD_DEFAULTS.name).trim().toUpperCase()
+            && guildGate.known && !isKunpoMember()) {
+            setStatus('非 KUNPO 公会，已阻止上传', 'error');
+            alert('当前游戏内公会不是 KUNPO，已阻止上传到 KUNPO 共享空间。\n'
+                + '如需上传到你所在公会的共享空间，请在「⚙ 设置」里填写你公会的 JSON 获取地址（含 guild/bin/pwd）后再试。');
             return;
         }
         setStatus('正在读取云端数据…', 'idle');
@@ -2852,6 +2864,17 @@
         const want = String(guildConfig.name || '').trim().toUpperCase();
         const got = String(guildGate.name || '').trim().toUpperCase();
         return !!want && !!got && want !== got;
+    }
+    // 是否 KUNPO 成员：以游戏内读到的公会名/ID 为准（与设置里填什么无关）。
+    // 其他公会成员即便在设置里填了自己的公会名，也不算 KUNPO 成员——
+    // 周四强制提醒、向默认 KUNPO 共享空间上传等 KUNPO 专属行为都以本判定为准。
+    // 公会信息未读到时返回 false（提醒类行为宁可不触发）。
+    function isKunpoMember() {
+        if (!guildGate.known) return false;
+        const name = String(guildGate.name || '').trim().toUpperCase();
+        if (name === String(GUILD_DEFAULTS.name).trim().toUpperCase()) return true;
+        const kunpoId = Number(GUILD_DEFAULTS.id) || 0;
+        return kunpoId > 0 && Number(guildGate.id) === kunpoId;
     }
     // ── 公会职位：guildCharacterDict[我的characterID].role ──────────────
     // 实测值示例：'officer'（官员）。枚举按通用命名映射，未识别的原样返回，便于确认。
