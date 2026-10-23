@@ -3182,8 +3182,11 @@
     const UPDATE_CHECK_KEY = 'kunpo_update_last_check';
     const UPDATE_DISMISS_KEY = 'kunpo_update_dismissed';
     const UPDATE_CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000;
-    const UPDATE_PRIMARY_URL = 'https://raw.githubusercontent.com/Chen19970809/MWI_Trial_Calculator/refs/heads/main/KUNPO%E8%AF%95%E7%82%BC%E4%B8%93%E7%94%A8.user.js';
-    const UPDATE_FALLBACK_URL = 'https://cdn.jsdelivr.net/gh/Chen19970809/MWI_Trial_Calculator@main/KUNPO%E8%AF%95%E7%82%BC%E4%B8%93%E7%94%A8.user.js';
+    // 注意：必须指向「极简版」自己的文件（与头部 @downloadURL 同路径）。
+    // 之前误指向正式版 KUNPO试炼专用.user.js，导致拿正式版的 1.1.x 与极简版的 0.0.x 比较，
+    // 极简版永远弹「有新版本」。
+    const UPDATE_PRIMARY_URL = 'https://raw.githubusercontent.com/Chen19970809/MWI_Trial_Calculator/refs/heads/main/KUNPO%E8%AF%95%E7%82%BC%E4%B8%93%E7%94%A8%E6%9E%81%E7%AE%80%E7%89%88.user.js';
+    const UPDATE_FALLBACK_URL = 'https://cdn.jsdelivr.net/gh/Chen19970809/MWI_Trial_Calculator@main/KUNPO%E8%AF%95%E7%82%BC%E4%B8%93%E7%94%A8%E6%9E%81%E7%AE%80%E7%89%88.user.js';
     // 语义化版本比较：'1.2.10' > '1.2.9'，缺段按 0 补齐，忽略非数字后缀。
     function compareVersions(a, b) {
         const pa = String(a).split('.').map(s => parseInt(s, 10) || 0);
