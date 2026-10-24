@@ -1,5 +1,5 @@
 // ==UserScript==
-// @name         KUNPO试炼专用极简版
+// @name         KUNPO试炼专用极简版_IOS
 // @namespace    https://www.milkywayidle.com/
 // @version      0.0.4
 // @description  上传等级、成就、房屋、迷宫配装、神龛到计算器
@@ -11,9 +11,8 @@
 // @grant        GM_registerMenuCommand
 // @grant        GM_xmlhttpRequest
 // @grant        GM.xmlHttpRequest
-// @downloadURL  https://github.com/Chen19970809/MWI_Trial_Calculator/raw/refs/heads/main/KUNPO%E8%AF%95%E7%82%BC%E4%B8%93%E7%94%A8%E6%9E%81%E7%AE%80%E7%89%88.user.js
-// @updateURL    https://github.com/Chen19970809/MWI_Trial_Calculator/raw/refs/heads/main/KUNPO%E8%AF%95%E7%82%BC%E4%B8%93%E7%94%A8%E6%9E%81%E7%AE%80%E7%89%88.user.js
-// @connect      api.jsonbin.io
+// @downloadURL  https://github.com/Chen19970809/MWI_Trial_Calculator/raw/refs/heads/main/KUNPO%E8%AF%95%E7%82%BC%E4%B8%93%E7%94%A8%E6%9E%81%E7%AE%80%E7%89%88_IOS%E6%B5%8B%E8%AF%95.user.js
+// @updateURL    https://github.com/Chen19970809/MWI_Trial_Calculator/raw/refs/heads/main/KUNPO%E8%AF%95%E7%82%BC%E4%B8%93%E7%94%A8%E6%9E%81%E7%AE%80%E7%89%88_IOS%E6%B5%8B%E8%AF%95.user.js
 // @connect      1315858741-5moib0woaa.ap-shanghai.tencentscf.com
 // @connect      mwi-guild.43.167.210.211.sslip.io
 // @connect      raw.githubusercontent.com
