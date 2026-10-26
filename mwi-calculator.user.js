@@ -1142,6 +1142,11 @@
             MWI_Calculator_ItemsMap.itemsUpdatedCallbacks.push((enditemsMap) => {
                 MWI_Calculator_Calculator.scheduleRender();
             });
+            // 制作页护符卡片制作缺口角标：页面 DOM 变化与库存变化均触发刷新（内部 200ms 节流）。
+            MWI_Calculator_ItemsMap.itemsUpdatedCallbacks.push(() => {
+                MWI_Calculator_Calculator.scheduleCharmShortageUpdate();
+            });
+            this.initCraftCharmShortageObserver();
         }
         // 单实例面板随可见角色页签栏迁移，覆盖桌面右栏和窄屏“我的物品”。
         static initializeCalculatorUI() {
@@ -3540,6 +3545,103 @@
             lastElement.insertAdjacentElement('afterend', requiredItem.chestRowElement);
             return requiredItem.chestRowElement;
         }
+        //#region 制作页护符卡片制作缺口角标（仅战斗类护符）
+        // 战斗类护符判定：5 种战斗风格各级护符（基础/高级/专家/大师/大师品级）。
+        static isCombatCharmItemHrid(itemHrid) {
+            return /\/items\/[a-z0-9_]*_(stamina|intelligence|attack|defense|magic|melee|ranged)_charm$/.test(itemHrid || '');
+        }
+        // 制作 1 个战斗护符所需上一级护符数量：inputs 数量已含工匠茶减免（calculateActionDetail
+        // 对 crafting 统一处理），升级基底固定 1 个；总需求向上取整（如材料 7.1 + 基底 1 = 8.1 → 9）。
+        // 拥有数为上一级护符全强化档位总数。返回 { owned, need, title } 或 null（无配方/无护符材料）。
+        static getCharmCraftShortage(itemHrid) {
+            if (!this.isCombatCharmItemHrid(itemHrid)) return null;
+            const recipe = MWI_Calculator_ActionDetailPlus.tryGetRecipe(itemHrid);
+            if (!recipe) return null;
+            let materialHrid = null;
+            let materialCount = 0;
+            let hasBase = false;
+            for (const input of recipe.inputs) {
+                if (input.isUpgradeBase) { hasBase = true; materialHrid = input.itemHrid; continue; }
+                if (this.isCombatCharmItemHrid(input.itemHrid)) {
+                    materialCount += input.count || 0;
+                    materialHrid = input.itemHrid;
+                }
+            }
+            if (!materialHrid || !(materialCount > 0)) return null;
+            const exact = materialCount + (hasBase ? 1 : 0);
+            const need = Math.ceil(exact);
+            const owned = MWI_Calculator_ItemsMap.getTotalOwnedCount(materialHrid);
+            const title = `制作 1 个需 ${need} 个${MWI_Calculator_I18n.getItemName(materialHrid)}`
+                + `（材料 ${Math.round(materialCount * 100) / 100}${hasBase ? ' + 升级基底 1' : ''} = ${Math.round(exact * 100) / 100}，向上取整），拥有 ${owned}`;
+            return { owned, need, title };
+        }
+        // 卡片定位：从图标 use 元素向上找同时包含图标与名称的最小祖先（即卡片容器）。
+        // 限制爬行层数与祖先文本量，避免在无名称容器（背包格等）上爬到 body 产生大字符串开销。
+        static findCharmCard(useEl, itemName) {
+            let el = useEl.parentElement;
+            for (let depth = 0; el && depth < 12; depth++) {
+                const text = el.textContent || '';
+                if (text.includes(itemName)) return el;
+                if (text.length > 3000) return null;
+                el = el.parentElement;
+            }
+            return null;
+        }
+        static ensureCharmShortageBadge(card, itemHrid) {
+            let badge = card.querySelector(':scope > [data-mwi-craft-shortage]');
+            if (!badge || badge.dataset.mwiCraftShortage !== itemHrid) {
+                badge?.remove();
+                badge = document.createElement('div');
+                badge.dataset.mwiCraftShortage = itemHrid;
+                badge.style.cssText = 'position:absolute;left:4px;bottom:4px;z-index:5;padding:1px 5px;'
+                    + 'border-radius:4px;font-size:12px;font-weight:700;line-height:16px;color:#fff;background:#eb3f3f;pointer-events:none';
+                if (getComputedStyle(card).position === 'static') card.style.position = 'relative';
+                card.appendChild(badge);
+            }
+            return badge;
+        }
+        // 扫描制作页护符卡片并维护左下角制作缺口角标；离开护符页签时残留角标一并清理。
+        static updateCraftCharmShortageOverlays() {
+            const seen = new Set();
+            for (const useEl of document.querySelectorAll('use')) {
+                // 游戏 use href 兼容两种格式：#物品名 / …/items/物品名（参考 KUNPO 动作库存模块）。
+                const href = useEl.getAttribute('href') || useEl.getAttribute('xlink:href') || '';
+                let tail = href.split('#').pop() || '';
+                if (tail.includes('/')) tail = tail.split('/').pop() || '';
+                const itemHrid = `/items/${tail}`;
+                if (!this.isCombatCharmItemHrid(itemHrid)) continue;
+                // 页面限定依赖卡片内含名称文本：背包格等无名称容器爬不到卡片，天然排除。
+                const card = this.findCharmCard(useEl, MWI_Calculator_I18n.getItemName(itemHrid));
+                if (!card) continue;
+                const shortage = this.getCharmCraftShortage(itemHrid);
+                if (!shortage) continue;
+                const badge = this.ensureCharmShortageBadge(card, itemHrid);
+                const text = `${shortage.owned}/${shortage.need}`;
+                if (badge.textContent !== text) badge.textContent = text;
+                const color = shortage.owned >= shortage.need ? MWI_Calculator_UITheme.activeHeading : MWI_Calculator_UITheme.danger;
+                if (badge.style.background !== color) badge.style.background = color;
+                if (badge.title !== shortage.title) badge.title = shortage.title;
+                seen.add(badge);
+            }
+            for (const badge of document.querySelectorAll('[data-mwi-craft-shortage]')) {
+                if (!seen.has(badge)) badge.remove();
+            }
+        }
+        static scheduleCharmShortageUpdate() {
+            if (this.charmShortageTimer) return;
+            this.charmShortageTimer = setTimeout(() => {
+                this.charmShortageTimer = 0;
+                try { this.updateCraftCharmShortageOverlays(); }
+                catch (error) { console.warn('[MWI_Calculator] 护符制作缺口角标更新失败', error); }
+            }, 200);
+        }
+        static initCraftCharmShortageObserver() {
+            if (this.charmShortageObserver) return;
+            this.charmShortageObserver = new MutationObserver(() => this.scheduleCharmShortageUpdate());
+            this.charmShortageObserver.observe(document.body, { childList: true, subtree: true });
+            this.scheduleCharmShortageUpdate();
+        }
+        //#endregion
         // 创建目标物品元素
         static createTargetItemDisplayElement(targetItem) {
             const { container, itemContainer, leftDiv, rightDiv } = MWI_Calculator_Calculator.createBaseItemDisplayItem(targetItem);
