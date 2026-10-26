@@ -3603,6 +3603,11 @@
         // 扫描制作页护符卡片并维护左下角制作缺口角标；离开护符页签时残留角标一并清理。
         static updateCraftCharmShortageOverlays() {
             const seen = new Set();
+            // 悬浮提示/动作详情弹窗等浮层内的护符图标不注入：其材料行含名称文本，
+            // 会被 findCharmCard 误判为卡片（按 role 与常见浮层类名排除）。
+            const excludeSel = '[role="dialog"], [role="tooltip"], [class*="tooltip" i], [class*="Tooltip" i],'
+                + ' [class^="SkillActionDetail"], [class*="modal" i], [class*="Modal" i],'
+                + ' [class*="popover" i], [class*="Popover" i], [class*="popup" i], [class*="Popup" i]';
             for (const useEl of document.querySelectorAll('use')) {
                 // 游戏 use href 兼容两种格式：#物品名 / …/items/物品名（参考 KUNPO 动作库存模块）。
                 const href = useEl.getAttribute('href') || useEl.getAttribute('xlink:href') || '';
@@ -3610,6 +3615,7 @@
                 if (tail.includes('/')) tail = tail.split('/').pop() || '';
                 const itemHrid = `/items/${tail}`;
                 if (!this.isCombatCharmItemHrid(itemHrid)) continue;
+                if (useEl.closest(excludeSel)) continue;
                 // 页面限定依赖卡片内含名称文本：背包格等无名称容器爬不到卡片，天然排除。
                 const card = this.findCharmCard(useEl, MWI_Calculator_I18n.getItemName(itemHrid));
                 if (!card) continue;
