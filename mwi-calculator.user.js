@@ -1634,8 +1634,8 @@
             return addItemSection;
         }
         // 创建预设选择组件：与「选择房屋」「选择大类」同级。
-        // 点击展开下拉列表，列表最上端固定「管理预设」按钮；
-        // 点击后原位切换为「新增/保存/取消」三个管理按钮（事件暂留空，等待下一步实现）。
+        // 保留原「选择预设」折叠/展开交互（无管理模式切换）：展开后列表顶部即
+        // 「新增/退出」按钮；行点击 = 启用预设（已启用的行点击无效），行尾红色垃圾桶 = 删除预设。
         static createPresetSelectionComponent() {
             const section = document.createElement('div');
             section.style.background = MWI_Calculator_UITheme.surface;
@@ -1676,34 +1676,10 @@
             list.style.position = 'absolute';
             list.style.left = '0px';
             list.style.top = '32px';
-            // 管理区（固定在下拉列表最上端）：默认仅「管理预设」，进入管理模式后原位显示三个按钮
-            const manageArea = document.createElement('div');
-            manageArea.style.display = 'flex';
-            manageArea.style.marginBottom = '2px';
-            const manageButton = document.createElement('button');
-            manageButton.type = 'button';
-            manageButton.textContent = MWI_Calculator_I18n.isChinese() ? '管理预设' : 'Manage presets';
-            manageButton.style.cssText = 'flex:1;color:#fff;border:none;border-radius:4px;padding:4px;margin:2px;cursor:pointer';
-            manageButton.style.background = '#1976D2';
-            const editButtons = document.createElement('div');
-            editButtons.style.display = 'none';
-            editButtons.style.flex = '1';
-            const enterManageMode = () => {
-                MWI_Calculator_Calculator.presetManageMode = true;
-                manageButton.style.display = 'none';
-                editButtons.style.display = 'flex';
-                MWI_Calculator_Calculator.refreshPresetOptions();
-            };
-            const exitManageMode = () => {
-                MWI_Calculator_Calculator.presetManageMode = false;
-                editButtons.style.display = 'none';
-                manageButton.style.display = '';
-                MWI_Calculator_Calculator.refreshPresetOptions();
-            };
-            manageButton.addEventListener('click', (event) => {
-                event.stopPropagation();
-                enterManageMode();
-            });
+            // 列表顶部按钮区：新增（打开编辑弹窗新建）
+            const buttonRow = document.createElement('div');
+            buttonRow.style.display = 'flex';
+            buttonRow.style.marginBottom = '2px';
             const newPresetButton = document.createElement('button');
             newPresetButton.type = 'button';
             newPresetButton.textContent = MWI_Calculator_I18n.isChinese() ? '新增' : 'New';
@@ -1711,31 +1687,18 @@
             newPresetButton.style.background = '#4CAF50';
             newPresetButton.addEventListener('click', (event) => {
                 event.stopPropagation();
-                exitManageMode();
                 MWI_Calculator_Calculator.closeCalculatorDropdowns();
                 MWI_Calculator_Calculator.showPresetEditorDialog();
             });
-            const exitPresetButton = document.createElement('button');
-            exitPresetButton.type = 'button';
-            exitPresetButton.textContent = MWI_Calculator_I18n.isChinese() ? '退出' : 'Exit';
-            exitPresetButton.style.cssText = 'flex:1;color:#fff;border:none;border-radius:4px;padding:4px;margin:2px;cursor:pointer';
-            exitPresetButton.style.background = '#6B7280';
-            exitPresetButton.addEventListener('click', (event) => {
-                event.stopPropagation();
-                exitManageMode();
-            });
-            editButtons.append(newPresetButton, exitPresetButton);
-            manageArea.append(manageButton, editButtons);
-            // 预设选项容器：已保存的预设名称条目渲染在此处
+            buttonRow.appendChild(newPresetButton);
+            // 预设行列表
             const presetOptions = document.createElement('div');
             MWI_Calculator_Calculator.presetOptionsContainer = presetOptions;
             MWI_Calculator_Calculator.refreshPresetOptions();
-            list.appendChild(manageArea);
+            list.appendChild(buttonRow);
             list.appendChild(presetOptions);
             selected.addEventListener('click', (event) => {
                 event.stopPropagation();
-                // 每次展开下拉都重置为「管理预设」默认状态（即使上次关闭时处于新增/退出管理模式）
-                if (list.style.display !== 'block') exitManageMode();
                 MWI_Calculator_Calculator.toggleCalculatorDropdown(list);
             });
             MWI_Calculator_Calculator.registerCalculatorDropdown(dropdown, list);
@@ -1813,14 +1776,13 @@
                 return false;
             }
         }
-        // 重建下拉列表中的预设名称条目：仅管理模式下点击名称打开编辑弹窗、
-        // 显示 "-" 删除按钮；普通模式（按钮为「管理预设」时）点击应用/取消应用预设。
-        // BUILTIN_PRESETS 中同名条目视为内置预设，始终显示在下拉列表底部。
+        // 重建常驻预设列表：行点击 = 启用预设（已启用的行点击无效，取消启用走
+        // 已应用预设区域的「−」按钮）；行尾垃圾桶 = 删除预设。
+        // BUILTIN_PRESETS 中同名条目视为内置预设，固定垫底显示。
         static refreshPresetOptions() {
             const container = this.presetOptionsContainer;
             if (!container) return;
             const zh = MWI_Calculator_I18n.isChinese();
-            const manageMode = this.presetManageMode === true;
             const builtinPresets = this.BUILTIN_PRESETS || [];
             const builtinNames = new Set(builtinPresets.map(preset => preset?.name).filter(Boolean));
             container.innerHTML = '';
@@ -1841,57 +1803,49 @@
                 option.style.padding = '4px';
                 option.style.alignItems = 'center';
                 option.style.display = 'flex';
-                option.style.cursor = 'default';
+                const applied = this.presetAppliedMap.has(name);
                 const nameLabel = document.createElement('span');
                 nameLabel.textContent = isBuiltin ? `${name}（内置）` : name;
                 nameLabel.title = isBuiltin ? (zh ? '内置预设' : 'Built-in preset') : '';
                 nameLabel.style.cssText = 'flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis';
-                if (manageMode) {
-                    nameLabel.style.cursor = 'pointer';
-                    nameLabel.addEventListener('click', (event) => {
-                        event.stopPropagation();
-                        MWI_Calculator_Calculator.closeCalculatorDropdowns();
-                        MWI_Calculator_Calculator.showPresetEditorDialog(name);
-                    });
-                    const deleteButton = document.createElement('button');
-                    deleteButton.type = 'button';
-                    deleteButton.textContent = '-';
-                    deleteButton.title = zh ? '删除预设' : 'Delete preset';
-                    deleteButton.style.cssText = 'flex:0 0 auto;margin-left:4px;color:#fff;border:none;border-radius:4px;padding:1px 7px;cursor:pointer;background:#c05621';
-                    deleteButton.addEventListener('click', (event) => {
-                        event.stopPropagation();
-                        if (!confirm(zh ? `确定删除预设「${name}」？` : `Delete preset "${name}"?`)) return;
-                        // 若该预设已应用，先移除其同层级类（会恢复此前被自动取消勾选的物品）
-                        this.removeAppliedPreset(name);
-                        this.presetMap.delete(name);
-                        this.savePresets();
-                        this.refreshPresetOptions();
-                    });
-                    option.append(nameLabel, deleteButton);
+                if (applied) {
+                    // 已启用：绿色标记，点击无效
+                    nameLabel.style.color = '#4CAF50';
+                    nameLabel.title = (nameLabel.title ? `${nameLabel.title}；` : '') + (zh ? '已启用' : 'Applied');
                 }
                 else {
-                    // 普通模式：点击名称应用/取消应用预设（建立同层级类并自动取消勾选重合项）
                     nameLabel.style.cursor = 'pointer';
-                    nameLabel.addEventListener('click', (event) => {
-                        event.stopPropagation();
-                        MWI_Calculator_Calculator.applyPreset(name);
-                    });
-                    option.appendChild(nameLabel);
                 }
+                nameLabel.addEventListener('click', (event) => {
+                    event.stopPropagation();
+                    MWI_Calculator_Calculator.applyPreset(name);
+                });
+                const deleteButton = document.createElement('button');
+                deleteButton.type = 'button';
+                deleteButton.title = zh ? '删除预设' : 'Delete preset';
+                deleteButton.style.cssText = 'flex:0 0 auto;margin-left:4px;border:none;border-radius:4px;padding:2px;cursor:pointer;background:#eb3f3f;line-height:0';
+                deleteButton.appendChild(MWI_Calculator_Utils.createIconSvg(MWI_Calculator_Utils.getIconHrefByMiscHrid('remove')));
+                deleteButton.addEventListener('click', (event) => {
+                    event.stopPropagation();
+                    if (!confirm(zh ? `确定删除预设「${name}」？` : `Delete preset "${name}"?`)) return;
+                    // 若该预设已应用，先移除其同层级类（会恢复此前被自动取消勾选的物品）
+                    this.removeAppliedPreset(name);
+                    this.presetMap.delete(name);
+                    this.savePresets();
+                    this.refreshPresetOptions();
+                });
                 option.addEventListener('mouseenter', () => { option.style.background = '#4a4c6a'; });
                 option.addEventListener('mouseleave', () => { option.style.background = 'transparent'; });
+                option.append(nameLabel, deleteButton);
                 container.appendChild(option);
             };
             for (const name of [...userNames, ...builtinOrder]) renderEntry(name, builtinNames.has(name));
         }
-        // 普通模式点击预设名称：在原大类（食物/茶/咖啡等）同层级建立以预设命名的
-        // details 类，展示预设内全部物品与数量；与原大类重合的物品自动取消勾选
-        //（不再参与计算）。再次点击同一预设名称 = 取消应用并恢复勾选。
+        // 点击预设行：在原大类（食物/茶/咖啡等）同层级建立以预设命名的 details 类，
+        // 展示预设内全部物品与数量；与原大类重合的物品自动取消勾选（不再参与计算）。
+        // 已启用的预设点击无效（取消启用走已应用区域的「−」按钮）。
         static applyPreset(name) {
-            if (this.presetAppliedMap.has(name)) {
-                this.removeAppliedPreset(name);
-                return;
-            }
+            if (this.presetAppliedMap.has(name)) return;
             const source = this.presetMap.get(name);
             if (!source || !Array.isArray(source.items) || source.items.length === 0) return;
             // 应用视图使用副本：行内改数量不影响预设数据，点保存才覆盖
@@ -1937,8 +1891,22 @@
             fillButton.style.cssText = 'color:#fff;border:none;border-radius:4px;cursor:pointer;background:#1976D2';
             Object.assign(fillButton.style, MWI_Calculator_UIStyles.cornerAction);
             summary.appendChild(fillButton);
+            // 补满左侧的「−」：取消启用该预设（移除预设类并恢复被自动取消勾选的物品）
+            const unapplyButton = document.createElement('button');
+            unapplyButton.type = 'button';
+            unapplyButton.textContent = '−';
+            unapplyButton.title = zh ? '取消启用该预设：移除预设类并恢复被自动取消勾选的物品' : 'Unapply preset';
+            unapplyButton.style.cssText = 'color:#fff;border:none;border-radius:4px;cursor:pointer;background:#6B7280';
+            Object.assign(unapplyButton.style, MWI_Calculator_UIStyles.cornerAction);
+            unapplyButton.style.right = '44px';
+            unapplyButton.addEventListener('click', event => {
+                event.preventDefault();
+                event.stopPropagation();
+                this.removeAppliedPreset(name);
+            });
+            summary.appendChild(unapplyButton);
             // 物品行与原大类目标行同布局，需求数量自动填入预设值，可修改
-            const applied = { details, checkedItems, rows: [], saveButton, dirty: false, alertRatio, manualFull: manualFull === true, statusSpan, fillButton };
+            const applied = { name, details, checkedItems, rows: [], saveButton, dirty: false, alertRatio, manualFull: manualFull === true, statusSpan, fillButton };
             for (const item of items) {
                 const entry = { item, container: null, ownedSpan: null, checkbox: null, checked: item.checked !== false };
                 const row = this.createPresetItemDisplayElement(item, applied, entry);
@@ -2121,6 +2089,33 @@
             rightDiv.appendChild(ownedSpan);
             rightDiv.appendChild(slash);
             rightDiv.appendChild(targetInput);
+            // 齿轮：打开该预设的编辑弹窗；垃圾桶：从已应用视图中移除该物品行
+            // （移除后与数量修改同流程：标记 dirty 并显示保存按钮，点保存才同步回预设本体）
+            const editPresetButton = document.createElement('button');
+            editPresetButton.type = 'button';
+            editPresetButton.textContent = '⚙';
+            editPresetButton.title = MWI_Calculator_I18n.isChinese() ? '编辑该预设（物品与预警比例）' : 'Edit preset';
+            editPresetButton.style.cssText = 'flex:0 0 auto;margin-left:2px;border:none;background:transparent;cursor:pointer;font-size:14px;line-height:1;padding:0 2px';
+            editPresetButton.addEventListener('click', (event) => {
+                event.stopPropagation();
+                MWI_Calculator_Calculator.showPresetEditorDialog(applied.name);
+            });
+            const removeRowButton = document.createElement('button');
+            removeRowButton.type = 'button';
+            removeRowButton.title = MWI_Calculator_I18n.isChinese() ? '从已应用预设中移除该物品（点保存后同步回预设）' : 'Remove item (save to sync)';
+            removeRowButton.style.cssText = 'flex:0 0 auto;margin-left:2px;border:none;border-radius:4px;padding:2px;cursor:pointer;background:#eb3f3f;line-height:0';
+            removeRowButton.appendChild(MWI_Calculator_Utils.createIconSvg(MWI_Calculator_Utils.getIconHrefByMiscHrid('remove')));
+            removeRowButton.addEventListener('click', (event) => {
+                event.stopPropagation();
+                entry.container.remove();
+                applied.rows = applied.rows.filter(row => row !== entry);
+                applied.dirty = true;
+                if (applied.saveButton) applied.saveButton.style.display = '';
+                this.updateAppliedPresetRows();
+                MWI_Calculator_Calculator.saveAppliedPresets();
+                MWI_Calculator_Calculator.saveAndScheduleRender();
+            });
+            rightDiv.append(editPresetButton, removeRowButton);
             leftDiv.remove();
             // 与目标行相同的自适应布局（无删除按钮，传占位元素占位）
             MWI_Calculator_UI.attachTargetLayout(container, itemContainer, rightDiv, ownedSpan, targetInput, document.createElement('button'));
@@ -4292,7 +4287,6 @@
     MWI_Calculator_Calculator.requiredItemsMap = new Map();
     MWI_Calculator_Calculator.presetMap = new Map();
     MWI_Calculator_Calculator.presetOptionsContainer = null;
-    MWI_Calculator_Calculator.presetManageMode = false;
     MWI_Calculator_Calculator.presetAppliedMap = new Map();
     MWI_Calculator_Calculator.presetDetailsHost = null;
     // ── 内置预设模板（按需增删）────────────────────────────────
