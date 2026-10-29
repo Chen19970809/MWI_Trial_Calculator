@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         [银河奶牛]生产制作计算器-预设版
-// @version      0.1.1
+// @version      0.1.3
 // @namespace    http://tampermonkey.net/
 // @description  银河奶牛计算器，自动计算需求缺口，一键跳转到制作、购买。Calculator for MilkyWayIdle，Automatically calculate supply-demand gaps and navigate to production or purchasing with a single click.
 // @author       RERoger、MonsterFC
@@ -1668,7 +1668,7 @@
             list.style.borderRadius = '4px';
             list.style.padding = '4px';
             list.style.margin = '2px';
-            list.style.width = '150px';
+            list.style.width = '100%';
             list.style.maxHeight = '335px';
             list.style.overflowY = 'auto';
             list.style.zIndex = '1000';
@@ -1820,6 +1820,16 @@
                     event.stopPropagation();
                     MWI_Calculator_Calculator.applyPreset(name);
                 });
+                // 齿轮：直接打开该预设的编辑弹窗；垃圾桶：删除预设
+                const editButton = document.createElement('button');
+                editButton.type = 'button';
+                editButton.textContent = '⚙';
+                editButton.title = zh ? '编辑该预设（物品与预警比例）' : 'Edit preset';
+                editButton.style.cssText = 'flex:0 0 auto;margin-left:4px;border:none;border-radius:4px;background:#6B7280;cursor:pointer;font-size:12px;line-height:1;padding:2px 3px;color:#fff';
+                editButton.addEventListener('click', (event) => {
+                    event.stopPropagation();
+                    MWI_Calculator_Calculator.showPresetEditorDialog(name);
+                });
                 const deleteButton = document.createElement('button');
                 deleteButton.type = 'button';
                 deleteButton.title = zh ? '删除预设' : 'Delete preset';
@@ -1836,16 +1846,19 @@
                 });
                 option.addEventListener('mouseenter', () => { option.style.background = '#4a4c6a'; });
                 option.addEventListener('mouseleave', () => { option.style.background = 'transparent'; });
-                option.append(nameLabel, deleteButton);
+                option.append(nameLabel, editButton, deleteButton);
                 container.appendChild(option);
             };
             for (const name of [...userNames, ...builtinOrder]) renderEntry(name, builtinNames.has(name));
         }
         // 点击预设行：在原大类（食物/茶/咖啡等）同层级建立以预设命名的 details 类，
         // 展示预设内全部物品与数量；与原大类重合的物品自动取消勾选（不再参与计算）。
-        // 已启用的预设点击无效（取消启用走已应用区域的「−」按钮）。
+        // 再次点击已启用的预设 = 取消生效（行名恢复白色；也可用已应用区域的「−」按钮）。
         static applyPreset(name) {
-            if (this.presetAppliedMap.has(name)) return;
+            if (this.presetAppliedMap.has(name)) {
+                this.removeAppliedPreset(name);
+                return;
+            }
             const source = this.presetMap.get(name);
             if (!source || !Array.isArray(source.items) || source.items.length === 0) return;
             // 应用视图使用副本：行内改数量不影响预设数据，点保存才覆盖
@@ -1943,6 +1956,8 @@
             // 预设物品并入缺口计算，无论是否与原清单重合都需要重算
             this.saveAndScheduleRender();
             this.saveAppliedPresets();
+            // 同步预设列表的启用标记（未启用白色 → 已启用绿色）
+            this.refreshPresetOptions();
         }
         // 取消已应用的预设：移除同层级类，恢复此前被自动取消勾选的物品
         static removeAppliedPreset(name) {
@@ -1959,6 +1974,8 @@
             this.presetAppliedMap.delete(name);
             this.saveAndScheduleRender();
             this.saveAppliedPresets();
+            // 同步预设列表的启用标记（已启用绿色 → 恢复白色）
+            this.refreshPresetOptions();
         }
         // 已应用预设的存储键：与 TargetItems 同前缀、按角色 ID 区分
         static getAppliedPresetsStorageKey() {
@@ -4511,6 +4528,221 @@
             });
             // 初次填充
             scheduleSkillActionDetailRefresh(skillActionTimeInput);
+            // 产出的装备物品名后追加「当前等级/装备要求等级 技能名」提示
+            MWI_Calculator_ActionDetailPlus.ensureEquipmentLevelHints(outputItems);
+        }
+        // 获取角色当前技能等级：优先用 init_character_data 登录快照（游戏 state 无技能等级字段），
+        // state.characterSkills / characterSkillLevelMap 保留作兜底
+        static getCharacterSkillLevel(skillHrid) {
+            if (!skillHrid) return null;
+            const snapshot = MWI_Calculator.characterSkillLevelMap;
+            if (snapshot instanceof Map) {
+                const level = snapshot.get(skillHrid);
+                if (level != null) return level;
+            }
+            const state = MWI_Calculator.gameObject?.state;
+            const skills = state?.characterSkills;
+            if (Array.isArray(skills)) {
+                const found = skills.find(skill => skill?.skillHrid === skillHrid);
+                if (found && found.level != null) return Number(found.level) || 0;
+            }
+            const levelMap = state?.characterSkillLevelMap;
+            if (levelMap) {
+                const value = typeof levelMap.get === 'function' ? levelMap.get(skillHrid) : levelMap[skillHrid];
+                if (value != null) return Number(value) || 0;
+            }
+            return null;
+        }
+        // 产出装备等级提示：定位「产出」区块中的物品图标，装备物品名后追加「当前/要求 技能名」（幂等，React 重渲染后自动补挂）
+        static equipHintObserver = null;
+        static ensureEquipmentLevelHints(outputItems) {
+            const panel = document.querySelector('[class^="SkillActionDetail_regularComponent"]');
+            if (!panel) return;
+            this.applyEquipmentLevelHints(panel, outputItems);
+            this.setupEquipHintClickGuard(panel);
+            if (this.equipHintObserver) this.equipHintObserver.disconnect();
+            let frame = null;
+            const observer = new MutationObserver(() => {
+                if (frame) return;
+                frame = requestAnimationFrame(() => {
+                    frame = null;
+                    if (!panel.isConnected) { observer.disconnect(); return; }
+                    MWI_Calculator_ActionDetailPlus.applyEquipmentLevelHints(panel, outputItems);
+                });
+            });
+            observer.observe(panel, { childList: true, subtree: true });
+            this.equipHintObserver = observer;
+        }
+        static applyEquipmentLevelHints(panel, outputItems) {
+            const zh = MWI_Calculator_I18n.isChinese();
+            // 收集当前面板产出的等级不足状态，供「添加到队列/立即开始」拦截确认使用
+            this.equipHintState = { unmet: false, entries: [] };
+            const equipHintState = this.equipHintState;
+            // 仅处理本次动作的固定产出物品，避免误伤升级基底、材料与掉落物
+            const outputHrids = new Set((outputItems || []).map(item => item.itemHrid));
+            const isOutputText = text => zh ? text === '产出' : /^outputs?$/i.test(text);
+            // ① 定位「产出」标签
+            let outputLabel = [...panel.querySelectorAll('[class*="SkillActionDetail_label"]')]
+                .find(el => isOutputText((el.textContent || '').trim()));
+            if (!outputLabel) {
+                outputLabel = [...panel.querySelectorAll('div,span')]
+                    .find(el => el.children.length === 0 && isOutputText((el.textContent || '').trim()));
+            }
+            if (!outputLabel) return;
+            // ② 自标签向上找包含物品图标（svg use href 含 #）的最小行容器
+            let scope = null;
+            let node = outputLabel.parentElement;
+            for (let depth = 0; node && panel.contains(node) && depth < 5; depth++, node = node.parentElement) {
+                if (node.querySelector('svg use[href*="#"]')) { scope = node; break; }
+            }
+            // 兜底：取产出标签之后（DOM 顺序）的全部物品图标，配合产出 hrid 白名单双重过滤
+            const uses = scope
+                ? [...scope.querySelectorAll('svg use[href*="#"]')]
+                : [...panel.querySelectorAll('svg use[href*="#"]')]
+                    .filter(use => outputLabel.compareDocumentPosition(use) & Node.DOCUMENT_POSITION_FOLLOWING);
+            // ③ 逐个产出物品：有装备等级要求才注入提示
+            for (const use of uses) {
+                const href = use.getAttribute('href') || '';
+                if (!href.includes('#')) continue;
+                const itemHrid = '/items/' + href.split('#').pop();
+                if (!outputHrids.has(itemHrid)) continue;
+                const requirements = MWI_Calculator.initClientData?.itemDetailMap?.[itemHrid]?.equipmentDetail?.levelRequirements;
+                if (!Array.isArray(requirements) || requirements.length === 0) continue;
+                const itemContainer = use.closest('[class*="Item_itemContainer"]');
+                if (!itemContainer) continue;
+                const parts = [];
+                const details = [];
+                let unmet = false;
+                let unknown = false;
+                for (const requirement of requirements) {
+                    const skillHrid = requirement?.skillHrid || requirement?.skill || '';
+                    const requiredLevel = Number(requirement?.level) || 0;
+                    const currentLevel = this.getCharacterSkillLevel(skillHrid);
+                    if (currentLevel == null) unknown = true;
+                    else if (currentLevel < requiredLevel) unmet = true;
+                    const skillName = MWI_Calculator_I18n.getName(skillHrid, 'skillNames');
+                    const displaySkill = skillName && !String(skillName).startsWith('/')
+                        ? skillName
+                        : String(skillHrid).split('/').pop();
+                    parts.push(`${currentLevel == null ? '?' : currentLevel}/${requiredLevel} ${displaySkill}`);
+                    details.push(zh
+                        ? `当前${displaySkill}等级：${currentLevel == null ? '未知' : currentLevel}，装备要求：${requiredLevel}`
+                        : `${displaySkill}: ${currentLevel == null ? '?' : currentLevel}/${requiredLevel}`);
+                }
+                equipHintState.entries.push({
+                    itemName: MWI_Calculator_I18n.getItemName(itemHrid) || itemHrid,
+                    parts: parts.slice(),
+                    canEquip: !unmet && !unknown,
+                });
+                if (unmet) equipHintState.unmet = true;
+                const text = parts.join('  ');
+                const color = unknown ? '#9aa4b2' : (unmet ? '#faa21e' : '#7bd88f');
+                const title = `${MWI_Calculator_I18n.getItemName(itemHrid)}\n` + details.join('\n');
+                // 独立成行：插在物品行容器（itemContainer 的父级，含数量+图标+名称的 flex 行）之后，
+                // 落入外层纵向流中自然另起一行；不插进行容器内部——nowrap flex 会把 flex-basis:100% 压缩在名称右侧
+                const rowEl = itemContainer.parentElement || itemContainer;
+                let hint = rowEl.nextElementSibling;
+                if (!(hint && hint.classList && hint.classList.contains('mwi-equip-level-hint'))) hint = null;
+                if (!hint) {
+                    hint = document.createElement('div');
+                    hint.className = 'mwi-equip-level-hint';
+                    hint.style.cssText = 'display:block;width:100%;margin-top:2px;font-size:12px;font-weight:600;white-space:nowrap;';
+                    rowEl.insertAdjacentElement('afterend', hint);
+                }
+                // 仅在值变化时写入：textContent 赋值会替换文本节点产生 childList mutation，
+                // 无条件写入会让面板 observer 每帧空转
+                if (hint.textContent !== text) hint.textContent = text;
+                if (hint.style.color !== color) hint.style.color = color;
+                if (hint.title !== title) hint.title = title;
+            }
+        }
+        // 当前面板产出装备的等级不足状态（applyEquipmentLevelHints 维护）
+        static equipHintState = null;
+        // 「继续」放行标志：确认弹框后放行一次按钮点击，避免拦截器二次拦截
+        static equipHintClickBypass = false;
+        // 拦截「添加到队列/立即开始」：产出装备等级不足时先弹确认框（捕获阶段，先于 React 合成事件）
+        static setupEquipHintClickGuard(panel) {
+            if (!panel || panel.dataset.mwiEquipGuard === '1') return;
+            panel.dataset.mwiEquipGuard = '1';
+            panel.addEventListener('click', event => {
+                if (MWI_Calculator_ActionDetailPlus.equipHintClickBypass) {
+                    MWI_Calculator_ActionDetailPlus.equipHintClickBypass = false;
+                    return;
+                }
+                const button = event.target?.closest?.('button, [role="button"]');
+                if (!button || !panel.contains(button)) return;
+                const text = (button.textContent || '').replace(/\s+/g, '');
+                // 模糊匹配：中文实际文案可能为「添加到队列/添加至队列/加入队列」等变体
+                const isQueueOrStart = MWI_Calculator_I18n.isChinese()
+                    ? (text.includes('队列') || text.includes('立即开始'))
+                    : /queue|start/i.test(text);
+                if (!isQueueOrStart) return;
+                const state = MWI_Calculator_ActionDetailPlus.equipHintState;
+                // 仅产出装备等级不足时弹确认框；可装备/等级未知/材料类动作直接放行
+                if (!state?.unmet || state.entries.length === 0) return;
+                event.preventDefault();
+                event.stopImmediatePropagation();
+                MWI_Calculator_ActionDetailPlus.showEquipLevelConfirmDialog(state, () => {
+                    MWI_Calculator_ActionDetailPlus.equipHintClickBypass = true;
+                    button.click();
+                });
+            }, true);
+        }
+        // 等级提醒确认框：当前等级/装备等级 + 制作后不可装备结论，《取消》《继续》
+        static showEquipLevelConfirmDialog(state, onContinue) {
+            const zh = MWI_Calculator_I18n.isChinese();
+            const overlay = document.createElement('div');
+            overlay.style.cssText = 'position:fixed;inset:0;z-index:2147483647;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center';
+            const card = document.createElement('div');
+            card.style.cssText = 'background:#2c2e45;color:#E7E7E7;border:1px solid #4a4c6a;border-radius:8px;'
+                + 'padding:16px 20px;max-width:380px;box-shadow:0 8px 24px rgba(0,0,0,.5);font-size:13px;';
+            const title = document.createElement('div');
+            title.textContent = zh ? '等级提醒' : 'Level Reminder';
+            title.style.cssText = 'font-size:15px;font-weight:700;margin-bottom:10px;color:#faa21e;text-align:center';
+            card.appendChild(title);
+            const body = document.createElement('div');
+            // 仅展示不足的装备（等级未知不计入 unmet，不会进入弹框）
+            const unmetEntries = state.entries.filter(entry => !entry.canEquip);
+            for (const entry of unmetEntries) {
+                const line = document.createElement('div');
+                line.style.cssText = 'margin:4px 0;line-height:1.6;white-space:nowrap;';
+                const nameSpan = document.createElement('span');
+                nameSpan.style.fontWeight = '700';
+                nameSpan.textContent = entry.itemName;
+                const infoSpan = document.createElement('span');
+                infoSpan.style.color = entry.canEquip ? '#7bd88f' : '#faa21e';
+                infoSpan.textContent = entry.canEquip
+                    ? (zh ? `：${entry.parts.join('，')}，制作后可装备` : `: ${entry.parts.join(', ')}, can be equipped after crafting`)
+                    : (zh ? `：${entry.parts.join('，')}，制作后不可装备` : `: ${entry.parts.join(', ')}, cannot be equipped after crafting`);
+                line.appendChild(nameSpan);
+                line.appendChild(infoSpan);
+                body.appendChild(line);
+            }
+            card.appendChild(body);
+            const tip = document.createElement('div');
+            tip.textContent = state.unmet
+                ? (zh ? '当前等级不足，制作完成后暂时无法装备，确认继续？' : 'Insufficient level: the item cannot be equipped when finished. Continue?')
+                : (zh ? '当前等级满足装备要求，确认继续？' : 'Level requirements are met. Continue?');
+            tip.style.cssText = 'margin-top:8px;color:' + (state.unmet ? '#9aa4b2' : '#7bd88f');
+            const buttonRow = document.createElement('div');
+            buttonRow.style.cssText = 'display:flex;justify-content:space-between;gap:8px;margin-top:14px;';
+            const cancelButton = document.createElement('button');
+            cancelButton.type = 'button';
+            cancelButton.textContent = zh ? '取消' : 'Cancel';
+            cancelButton.style.cssText = 'color:#fff;border:none;border-radius:4px;padding:6px 16px;cursor:pointer;background:#6B7280';
+            const continueButton = document.createElement('button');
+            continueButton.type = 'button';
+            continueButton.textContent = zh ? '继续' : 'Continue';
+            continueButton.style.cssText = 'color:#fff;border:none;border-radius:4px;padding:6px 16px;cursor:pointer;background:#1976D2';
+            buttonRow.appendChild(cancelButton);
+            buttonRow.appendChild(continueButton);
+            card.appendChild(buttonRow);
+            overlay.appendChild(card);
+            document.body.appendChild(overlay);
+            const close = () => overlay.remove();
+            cancelButton.addEventListener('click', close);
+            overlay.addEventListener('click', event => { if (event.target === overlay) close(); });
+            continueButton.addEventListener('click', () => { close(); onContinue(); });
         }
         // 创建升级物品组件
         static createUpgradeItemComponent(upgradeItemHrid) {
@@ -5398,6 +5630,15 @@
             MWI_Calculator.hasCharacterSession = true;
             MWI_Calculator.characterID = MWI_Calculator_Calculator.normalizeCharacterID(data?.character?.id);
             MWI_Calculator.characterGameMode = String(data?.character?.gameMode || '').toLowerCase();
+            // 登录/切角色快照携带全量技能等级（init_character_data 顶层 characterSkills），
+            // 生产行动窗口的产出装备等级提示依赖此数据（游戏 React state 中没有该字段）
+            if (Array.isArray(data?.characterSkills)) {
+                const skillLevelMap = new Map();
+                for (const skill of data.characterSkills) {
+                    if (skill?.skillHrid && skill.level != null) skillLevelMap.set(skill.skillHrid, Number(skill.level) || 0);
+                }
+                MWI_Calculator.characterSkillLevelMap = skillLevelMap;
+            }
             MWI_Calculator_Calculator.prepareCharacterSession(MWI_Calculator.characterID);
             MWI_Calculator_ItemsMap.clear();
             MWI_Calculator_ItemsMap.update(data.characterItems);
