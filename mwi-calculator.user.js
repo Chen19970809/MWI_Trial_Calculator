@@ -306,6 +306,53 @@
             return MWI_Calculator.gameObject?.state?.characterHouseRoomDict?.[this.itemHrid]?.level || 0;
         }
     }
+    // 虚拟目标：开箱-X宝箱（hrid 形如 /open_chests/chimerical_chest）。
+    // 名称/图标沿用不带「开箱-」前缀的原宝箱；拥有数自动监测对应宝箱的实时数量。
+    // 缺口逻辑：把现有宝箱全部开掉需要每箱一把钥匙（缺口=缺少的钥匙），钥匙缺口再由通用流程展开钥匙配方（钥匙碎片）。
+    class TargetChestOpen extends TargetItem {
+        // 宝箱→钥匙手动映射（自动推导 chest hrid+'_key' 失败时在此补，键为宝箱 hrid 尾段）：
+        // 例：{ chimerical_chest: '/items/chimerical_chest_key' }
+        static CHEST_KEY_HRID_OVERRIDES = {};
+        constructor(itemHrid, count, needCalc = true) {
+            super(itemHrid, count, needCalc);
+        }
+        get chestHrid() {
+            return '/items/' + this.itemHrid.split('/').pop();
+        }
+        initDisplayProperties() {
+            const chestHrid = this.chestHrid;
+            this.categoryHrid = MWI_Calculator.initClientData?.itemDetailMap?.[chestHrid]?.categoryHrid || '/item_categories/chest';
+            const chestName = MWI_Calculator_I18n.getItemName(chestHrid);
+            const baseName = chestName && chestName !== chestHrid ? chestName : chestHrid.split('/').pop();
+            this.displayName = baseName + (MWI_Calculator_I18n.isChinese() ? '-开箱' : '-Open');
+            this.iconHref = MWI_Calculator_Utils.getIconHrefByItemHrid(chestHrid);
+            this.sortIndex = MWI_Calculator_Utils.getSortIndexByItemHrid(chestHrid);
+        }
+        getOwnedCount() {
+            return MWI_Calculator_ItemsMap.getTotalOwnedCount(this.chestHrid);
+        }
+        getEnhancedOwnedDetail() {
+            return '';
+        }
+        // 对应钥匙 hrid：优先手动映射；精炼宝箱与同名代币宝箱共用同一把钥匙（无独立精炼钥匙），
+        // 先按「去掉 _refinement 的宝箱 hrid+'_key'」推导，失败再试原 hrid+'_key'。
+        // 所有推导结果须真实存在于物品数据，否则返回 null（可在 CHEST_KEY_HRID_OVERRIDES 手动补）。
+        resolveKeyHrid() {
+            const tail = this.itemHrid.split('/').pop();
+            const override = TargetChestOpen.CHEST_KEY_HRID_OVERRIDES[tail];
+            if (override) return override;
+            const detailMap = MWI_Calculator.initClientData?.itemDetailMap;
+            const baseTail = tail.replace('_refinement', '');
+            const candidates = [];
+            if (baseTail !== tail) candidates.push(baseTail + '_key');
+            candidates.push(tail + '_key');
+            for (const candidate of candidates) {
+                const keyHrid = '/items/' + candidate;
+                if (detailMap?.[keyHrid]) return keyHrid;
+            }
+            return null;
+        }
+    }
     class RequiredItem extends DisplayItem {
         constructor(itemHrid, count, shortageCount, overflowCount) {
             super(itemHrid, count);
@@ -622,6 +669,7 @@
                     let target;
                     if (item.itemHrid.startsWith('/items/')) target = new TargetItem(item.itemHrid, item.count, enabled);
                     else if (item.itemHrid.startsWith('/house_rooms/')) target = new TargetHouseRoom(item.itemHrid, item.count, enabled);
+                    else if (item.itemHrid.startsWith('/open_chests/')) target = new TargetChestOpen(item.itemHrid, item.count, enabled);
                     else throw new Error('未知目标类型');
                     validItemsMap.set(item.itemHrid, target);
                 }
@@ -819,6 +867,7 @@
                     const enabled = typeof item.needCalc === 'boolean' ? item.needCalc : true;
                     if (item.itemHrid.startsWith('/items/')) merged.set(item.itemHrid, new TargetItem(item.itemHrid, item.count, enabled));
                     else if (item.itemHrid.startsWith('/house_rooms/')) merged.set(item.itemHrid, new TargetHouseRoom(item.itemHrid, item.count, enabled));
+                    else if (item.itemHrid.startsWith('/open_chests/')) merged.set(item.itemHrid, new TargetChestOpen(item.itemHrid, item.count, enabled));
                     else throw new Error('未知目标类型');
                     added++;
                 }
@@ -1061,6 +1110,15 @@
             };
             this.targetItemsMap.forEach(targetItem => {
                 if (!targetItem.needCalc || !this.targetItemCategoryMap.get(targetItem.categoryHrid)?.needCalc) return;
+                // 开箱目标：把现有宝箱全部开掉需要每箱一把钥匙；钥匙已有库存自动扣减，
+                // 缺口再由通用流程展开钥匙配方（钥匙碎片）。虚拟 hrid 本身不进配方队列。
+                if (targetItem.itemHrid.startsWith('/open_chests/')) {
+                    // 输入的期望数量=要开的箱数（默认 0，不产生缺口）；钥匙已有库存自动扣减，
+                    // 缺口再由通用流程展开钥匙配方（钥匙碎片）
+                    const keyHrid = targetItem.resolveKeyHrid();
+                    if (targetItem.count > 0 && keyHrid) enqueue(keyHrid, targetItem.count, 'target');
+                    return;
+                }
                 if (targetItem.itemHrid.includes('/house_rooms/')) {
                     const currentLevel = MWI_Calculator.gameObject.state.characterHouseRoomDict?.[targetItem.itemHrid]?.level || 0;
                     const costs = MWI_Calculator.initClientData?.houseRoomDetailMap?.[targetItem.itemHrid]?.upgradeCostsMap;
@@ -1926,6 +1984,7 @@
                 entry.container = row.container;
                 entry.ownedSpan = row.ownedSpan;
                 entry.checkbox = row.checkbox;
+                entry.countInput = row.countInput;
                 applied.rows.push(entry);
                 details.appendChild(row.container);
             }
@@ -1976,6 +2035,63 @@
             this.saveAppliedPresets();
             // 同步预设列表的启用标记（已启用绿色 → 恢复白色）
             this.refreshPresetOptions();
+        }
+        // 预设编辑保存后同步到启用中的视图：增删行、更新数量与预警比例。
+        // 与目标清单的 needCalc 转移同 applyPresetItems/removeAppliedPreset 规则：
+        // 新增物品占位取消目标勾选（记录于 checkedItems），移除物品恢复目标勾选。
+        // manualFull 与各行勾选状态保留；同步后视图与预设本体一致，清除行内待保存标记。
+        static syncAppliedPreset(presetName, items, alertRatio) {
+            const applied = this.presetAppliedMap.get(presetName);
+            if (!applied) return;
+            const normalizedItems = (Array.isArray(items) ? items : [])
+                .filter(item => item && typeof item.itemHrid === 'string' && Number.isFinite(item.count) && item.count > 0)
+                .map(item => ({ itemHrid: item.itemHrid, count: item.count }));
+            applied.alertRatio = this.normalizeAlertRatio(alertRatio);
+            const nextByHrid = new Map(normalizedItems.map(item => [item.itemHrid, item.count]));
+            // 移除编辑后消失的行：恢复其占用的目标清单勾选
+            for (const row of [...applied.rows]) {
+                if (nextByHrid.has(row.item.itemHrid)) continue;
+                const index = applied.checkedItems.indexOf(row.item.itemHrid);
+                if (index !== -1) {
+                    applied.checkedItems.splice(index, 1);
+                    const target = this.targetItemsMap.get(row.item.itemHrid);
+                    if (target && !target.needCalc) {
+                        target.needCalc = true;
+                        target.updateDisplayElement();
+                    }
+                }
+                row.container.remove();
+                applied.rows = applied.rows.filter(entry => entry !== row);
+            }
+            // 新增缺失的行、更新已有行的数量
+            const existingByHrid = new Map(applied.rows.map(row => [row.item.itemHrid, row]));
+            for (const item of normalizedItems) {
+                const existing = existingByHrid.get(item.itemHrid);
+                if (existing) {
+                    existing.item.count = item.count;
+                    if (existing.countInput) existing.countInput.value = String(item.count);
+                    continue;
+                }
+                const target = this.targetItemsMap.get(item.itemHrid);
+                if (target && target.needCalc) {
+                    target.needCalc = false;
+                    target.updateDisplayElement();
+                    applied.checkedItems.push(item.itemHrid);
+                }
+                const entry = { item: { itemHrid: item.itemHrid, count: item.count }, container: null, ownedSpan: null, checkbox: null, checked: true };
+                const row = this.createPresetItemDisplayElement(entry.item, applied, entry);
+                entry.container = row.container;
+                entry.ownedSpan = row.ownedSpan;
+                entry.checkbox = row.checkbox;
+                entry.countInput = row.countInput;
+                applied.rows.push(entry);
+                applied.details.appendChild(row.container);
+            }
+            applied.dirty = false;
+            if (applied.saveButton) applied.saveButton.style.display = 'none';
+            this.updateAppliedPresetRows();
+            this.saveAppliedPresets();
+            this.saveAndScheduleRender();
         }
         // 已应用预设的存储键：与 TargetItems 同前缀、按角色 ID 区分
         static getAppliedPresetsStorageKey() {
@@ -2124,8 +2240,9 @@
             removeRowButton.appendChild(MWI_Calculator_Utils.createIconSvg(MWI_Calculator_Utils.getIconHrefByMiscHrid('remove')));
             removeRowButton.addEventListener('click', (event) => {
                 event.stopPropagation();
-                entry.container.remove();
-                applied.rows = applied.rows.filter(row => row !== entry);
+                if (!rowEntry) return;
+                rowEntry.container.remove();
+                applied.rows = applied.rows.filter(row => row !== rowEntry);
                 applied.dirty = true;
                 if (applied.saveButton) applied.saveButton.style.display = '';
                 this.updateAppliedPresetRows();
@@ -2139,7 +2256,7 @@
             // 行状态与目标行同规则：达标=completed，未达标=pending
             const state = MWI_Calculator_ItemsMap.getTotalOwnedCount(presetItem.itemHrid) >= presetItem.count ? 'completed' : 'pending';
             MWI_Calculator_UI.renderTargetState(container, state);
-            return { container, ownedSpan, checkbox: needCalcCheckbox };
+            return { container, ownedSpan, checkbox: needCalcCheckbox, countInput: targetInput };
         }
         // 库存变化触发重渲染时，同步已应用预设行的拥有数量与达标状态，
         // 并按预警比例评估各行勾选状态（是否计入缺口计算）：
@@ -2646,6 +2763,7 @@
                     if (applied) {
                         this.presetAppliedMap.delete(existingName);
                         this.presetAppliedMap.set(presetName, applied);
+                        applied.name = presetName;
                         const appliedSummary = applied.details.querySelector('summary');
                         if (appliedSummary) appliedSummary.textContent = presetName;
                     }
@@ -2654,6 +2772,8 @@
                 if (presetName !== existingName && this.presetAppliedMap.has(presetName)) {
                     this.removeAppliedPreset(presetName);
                 }
+                // 若该预设正在启用（含改名转移的应用状态），把编辑内容同步到启用视图
+                this.syncAppliedPreset(presetName, items, alertRatio);
                 this.savePresets();
                 this.refreshPresetOptions();
                 close();
@@ -2845,6 +2965,44 @@
             });
             if (addedCount > 0) MWI_Calculator_Calculator.saveAndScheduleRender();
         }
+        // 「开箱-X宝箱」虚拟物品检索候选（缓存，语言切换时重建）。
+        // 返回 [{hrid, chestHrid, name}]；原宝箱 hrid 反查失败的条目跳过。
+        static getChestOpenCandidates() {
+            const lang = MWI_Calculator_I18n.getGameLanguage();
+            if (this.chestOpenCandidates?.lang === lang) return this.chestOpenCandidates.list;
+            const zh = MWI_Calculator_I18n.isChinese();
+            const list = [];
+            for (const def of this.getTokenChestDefs()) {
+                const chestHrid = MWI_Calculator_I18n.getHridByName(def.chest[0], 'itemNames')
+                    || MWI_Calculator_I18n.getHridByName(def.chest[1], 'itemNames');
+                if (!chestHrid) continue;
+                const chestName = MWI_Calculator_I18n.getItemName(chestHrid);
+                const baseName = chestName && chestName !== chestHrid ? chestName : def.chest[0];
+                list.push({
+                    hrid: '/open_chests/' + chestHrid.split('/').pop(),
+                    chestHrid,
+                    name: baseName + (zh ? '-开箱' : '-Open'),
+                });
+            }
+            this.chestOpenCandidates = { lang, list };
+            return list;
+        }
+        // 添加单个「开箱-X宝箱」虚拟目标；已存在时更新期望数量。
+        // 未显式指定数量时默认填当前宝箱数（最多可开数，即"默认最大"）。
+        static addTargetChestOpenItem(targetHrid, count = null) {
+            if (!this.canUseCharacterData()) return;
+            const existing = this.targetItemsMap.get(targetHrid);
+            if (existing) {
+                if (count != null) existing.count = count;
+                existing.updateDisplayElement();
+            }
+            else {
+                const target = new TargetChestOpen(targetHrid, 0, true);
+                target.count = count != null ? count : target.getOwnedCount();
+                this.targetItemsMap.set(targetHrid, target);
+            }
+            this.saveAndScheduleRender();
+        }
         // 三个下拉框共享互斥管理；捕获阶段处理，不受选项stopPropagation影响。
         static registerCalculatorDropdown(root, menu) {
             this.calculatorDropdowns ||= new Map();
@@ -2972,22 +3130,29 @@
                 const itemDetailMap = MWI_Calculator?.initClientData?.itemDetailMap;
                 if (!itemDetailMap)
                     return;
-                const filteredItems = Object.keys(itemDetailMap)
-                    .filter(itemHrid => {
-                    const name = MWI_Calculator_I18n.getItemName(itemHrid).toLowerCase();
-                    return searchTerms.every(term => name.includes(term));
-                })
-                    .sort((a, b) => {
-                    const sortIndexA = MWI_Calculator_Utils.getSortIndexByItemHrid(a);
-                    const sortIndexB = MWI_Calculator_Utils.getSortIndexByItemHrid(b);
-                    return sortIndexA - sortIndexB;
-                });
+                // 「开箱-X宝箱」虚拟物品一并参与检索（名称含"开箱-"前缀与原宝箱名，多关键词 AND 同规则）
+                const sortKey = hrid => hrid.startsWith('/open_chests/')
+                    ? MWI_Calculator_Utils.getSortIndexByItemHrid('/items/' + hrid.split('/').pop())
+                    : MWI_Calculator_Utils.getSortIndexByItemHrid(hrid);
+                const chestOpenMatches = this.getChestOpenCandidates()
+                    .filter(candidate => searchTerms.every(term => candidate.name.toLowerCase().includes(term)))
+                    .map(candidate => candidate.hrid);
+                const filteredItems = [
+                    ...chestOpenMatches,
+                    ...Object.keys(itemDetailMap).filter(itemHrid => {
+                        const name = MWI_Calculator_I18n.getItemName(itemHrid).toLowerCase();
+                        return searchTerms.every(term => name.includes(term));
+                    }),
+                ].sort((a, b) => sortKey(a) - sortKey(b));
                 if (filteredItems.length === 0) {
                     searchResults.style.display = 'none';
                     return;
                 }
                 MWI_Calculator_Calculator.populateSearchResults(searchResults, filteredItems, (itemHrid) => {
-                    itemSearchInput.value = MWI_Calculator_I18n.getItemName(itemHrid);
+                    // 「开箱-X宝箱」虚拟物品回填定制显示名（名称不在 itemNames 字典）
+                    itemSearchInput.value = itemHrid.startsWith('/open_chests/')
+                        ? (this.getChestOpenCandidates().find(candidate => candidate.hrid === itemHrid)?.name || itemHrid)
+                        : MWI_Calculator_I18n.getItemName(itemHrid);
                     searchResults.style.display = 'none';
                 });
                 MWI_Calculator_Calculator.openCalculatorDropdown(searchResults);
@@ -3053,14 +3218,19 @@
                 if (index === 0) {
                     resultItem.style.background = '#4a4c6a';
                 }
-                // 物品图标
+                // 物品图标/名称：「开箱-X宝箱」虚拟物品沿用原宝箱图标与定制显示名
+                const chestCandidate = itemHrid.startsWith('/open_chests/')
+                    ? this.getChestOpenCandidates().find(candidate => candidate.hrid === itemHrid)
+                    : null;
                 const itemIcon = document.createElement('div');
-                const iconHref = MWI_Calculator_Utils.getIconHrefByItemHrid(itemHrid);
+                const iconHref = chestCandidate
+                    ? MWI_Calculator_Utils.getIconHrefByItemHrid(chestCandidate.chestHrid)
+                    : MWI_Calculator_Utils.getIconHrefByItemHrid(itemHrid);
                 const svg = MWI_Calculator_Utils.createIconSvg(iconHref);
                 itemIcon.appendChild(svg);
                 // 物品名称
                 const itemName = document.createElement('span');
-                itemName.textContent = MWI_Calculator_I18n.getItemName(itemHrid);
+                itemName.textContent = chestCandidate ? chestCandidate.name : MWI_Calculator_I18n.getItemName(itemHrid);
                 itemName.style.marginLeft = '2px';
                 resultItem.appendChild(itemIcon);
                 resultItem.appendChild(itemName);
@@ -3084,11 +3254,17 @@
                 MWI_Calculator_Calculator.importCalculatorData(characterID);
                 return;
             }
-            const itemHrid = MWI_Calculator_I18n.getItemHridByName(InputValue);
-            if (!itemHrid)
-                return;
-            const count = parseInt(countInput.value, 10) || 1;
-            MWI_Calculator_Calculator.addTargetItem(itemHrid, count);
+            let itemHrid = MWI_Calculator_I18n.getItemHridByName(InputValue);
+            if (!itemHrid) {
+                // 「开箱-X宝箱」虚拟物品：显示名不在 itemNames 字典，按候选名匹配后添加虚拟目标
+                const chestCandidate = this.getChestOpenCandidates()
+                    .find(candidate => candidate.name === InputValue);
+                if (!chestCandidate) return;
+                this.addTargetChestOpenItem(chestCandidate.hrid);
+            }
+            else {
+                this.addTargetItem(itemHrid, parseInt(countInput.value, 10) || 1);
+            }
             itemSearchInput.value = '';
             countInput.value = '1';
             searchResults.style.display = 'none';
@@ -3617,9 +3793,11 @@
             const seen = new Set();
             // 悬浮提示/动作详情弹窗等浮层内的护符图标不注入：其材料行含名称文本，
             // 会被 findCharmCard 误判为卡片（按 role 与常见浮层类名排除）。
+            // 聊天/交易频道消息同样含名称文本（消息气泡会被误判为卡片），一并排除。
             const excludeSel = '[role="dialog"], [role="tooltip"], [class*="tooltip" i], [class*="Tooltip" i],'
                 + ' [class^="SkillActionDetail"], [class*="modal" i], [class*="Modal" i],'
-                + ' [class*="popover" i], [class*="Popover" i], [class*="popup" i], [class*="Popup" i]';
+                + ' [class*="popover" i], [class*="Popover" i], [class*="popup" i], [class*="Popup" i],'
+                + ' [class*="chat" i], [class*="message" i]';
             for (const useEl of document.querySelectorAll('use')) {
                 // 游戏 use href 兼容两种格式：#物品名 / …/items/物品名（参考 KUNPO 动作库存模块）。
                 const href = useEl.getAttribute('href') || useEl.getAttribute('xlink:href') || '';
@@ -3649,7 +3827,12 @@
             if (this.charmShortageTimer) return;
             this.charmShortageTimer = setTimeout(() => {
                 this.charmShortageTimer = 0;
-                try { this.updateCraftCharmShortageOverlays(); }
+                try {
+                    // 计算器页签未激活期间物品增量只标 dirty 不入库；刷新角标前先从游戏实时背包重建，
+                    // 避免制作消耗/产出后角标数量陈旧
+                    MWI_Calculator.resyncItemsFromGameState();
+                    this.updateCraftCharmShortageOverlays();
+                }
                 catch (error) { console.warn('[MWI_Calculator] 护符制作缺口角标更新失败', error); }
             }, 200);
         }
@@ -3681,7 +3864,8 @@
             // 可编辑的需求数量输入框
             const targetInput = document.createElement('input');
             targetInput.type = 'text';
-            targetInput.placeholder = '需求';
+            targetInput.placeholder = targetItem.itemHrid?.startsWith('/open_chests/') ? '开箱数' : '需求';
+            if (targetItem.itemHrid?.startsWith('/open_chests/')) targetInput.style.textAlign = 'right';
             targetInput.style.background = '#dde2f8';
             targetInput.style.color = '#000000';
             targetInput.style.border = 'none';
@@ -3711,9 +3895,17 @@
             removeButton.addEventListener('click', () => {
                 MWI_Calculator_Calculator.removeTargetItem(targetItem.itemHrid);
             });
-            rightDiv.appendChild(ownedSpan);
-            rightDiv.appendChild(slash);
-            rightDiv.appendChild(targetInput);
+            if (targetItem.itemHrid?.startsWith('/open_chests/')) {
+                // 开箱行布局：要开的数量（输入框）在前，当前宝箱数（拥有）在后
+                rightDiv.appendChild(targetInput);
+                rightDiv.appendChild(slash);
+                rightDiv.appendChild(ownedSpan);
+            }
+            else {
+                rightDiv.appendChild(ownedSpan);
+                rightDiv.appendChild(slash);
+                rightDiv.appendChild(targetInput);
+            }
             rightDiv.appendChild(removeButton);
             targetItem.displayElement = container;
             targetItem.needCalcCheckbox = needCalcCheckbox;
@@ -5576,6 +5768,9 @@
                 }
                 else {
                     MWI_Calculator.itemDataDirty = true;
+                    // 挂起期间物品增量不入库；护符角标等常显功能仍需新鲜库存，
+                    // 调度一次刷新（内部 200ms 节流，回调里先 resync 再重算）
+                    MWI_Calculator_Calculator.scheduleCharmShortageUpdate();
                 }
                 return;
             }
