@@ -165,7 +165,7 @@
             if (hasText) button.style.color = MWI_Calculator_UITheme.onAction;
         }
         // 分类组件负责 DOM、布局和交互隔离，调用方只传标题与业务回调。
-        static createCategory(name, onToggle, onClear = null) {
+        static createCategory(name, onToggle, onClear = null, onMax = null) {
             const details = document.createElement('details');
             Object.assign(details.style, MWI_Calculator_UIStyles.category);
             details.open = true;
@@ -175,6 +175,27 @@
             Object.assign(summary.style, MWI_Calculator_UIStyles.summary);
             if (onClear) {
                 Object.assign(summary.style, MWI_Calculator_UIStyles.summaryWithAction);
+                // MAX：将本分类所有目标数量填入当前最大已有数量（位于清空按钮左侧）
+                if (onMax) {
+                    const maxButton = document.createElement('button');
+                    maxButton.className = 'mwi-calculator-max-category';
+                    maxButton.textContent = 'MAX';
+                    maxButton.title = '将本分类所有目标数量填入当前最大已有数量';
+                    maxButton.setAttribute('aria-label', maxButton.title);
+                    maxButton.style.background = '#1976D2';
+                    maxButton.style.color = MWI_Calculator_UITheme.onAction;
+                    maxButton.style.border = 'none';
+                    maxButton.style.borderRadius = '4px';
+                    maxButton.style.cursor = 'pointer';
+                    Object.assign(maxButton.style, MWI_Calculator_UIStyles.cornerAction);
+                    maxButton.style.right = '44px';
+                    maxButton.addEventListener('click', event => {
+                        event.preventDefault();
+                        event.stopPropagation();
+                        onMax();
+                    });
+                    summary.appendChild(maxButton);
+                }
                 const button = document.createElement('button');
                 button.className = 'mwi-calculator-remove-category';
                 button.textContent = '清空';
@@ -998,6 +1019,17 @@
             MWI_Calculator_Calculator.targetItemsMap.delete(itemHrid);
             MWI_Calculator_Calculator.saveAndScheduleRender();
         }
+        // 分类 MAX：把该分类下所有目标的需求数量填入当前拥有数
+        // （开箱虚拟目标即当前宝箱数；普通目标即当前库存数）。
+        static fillTargetItemsMaxByCategory(categoryHrid) {
+            if (!this.canUseCharacterData()) return;
+            for (const item of this.targetItemsMap.values()) {
+                if (item.categoryHrid !== categoryHrid) continue;
+                item.count = item.getOwnedCount();
+                item.updateDisplayElement();
+            }
+            this.saveAndScheduleRender();
+        }
         // 清空指定大类中的所有目标（包括未勾选目标），只保存和刷新一次。
         static removeTargetItemsByCategory(categoryHrid) {
             if (!this.canUseCharacterData()) return;
@@ -1662,8 +1694,11 @@
                 const categoryName = MWI_Calculator_I18n.getName(categoryHrid, 'itemCategoryNames');
                 const onClear = ItemDetailsMap === this.targetItemDetailsMap
                     ? () => this.removeTargetItemsByCategory(categoryHrid) : null;
+                // MAX 仅出现在开箱虚拟物品所属的分类（如战利品）；按分类归属判断，不依赖清单加载时机
+                const onMax = (onClear && categoryHrid === this.getChestOpenCategoryHrid())
+                    ? () => this.fillTargetItemsMaxByCategory(categoryHrid) : null;
                 const { details } = MWI_Calculator_UI.createCategory(
-                    categoryName, () => this.saveDetailsOpenState(), onClear
+                    categoryName, () => this.saveDetailsOpenState(), onClear, onMax
                 );
                 container.appendChild(details);
                 ItemDetailsMap.set(categoryHrid, details);
@@ -3002,6 +3037,13 @@
                 this.targetItemsMap.set(targetHrid, target);
             }
             this.saveAndScheduleRender();
+        }
+        // 开箱虚拟物品所属分类（取第一个候选宝箱的物品分类，缓存）
+        static getChestOpenCategoryHrid() {
+            const candidate = this.getChestOpenCandidates()[0];
+            return candidate
+                ? (MWI_Calculator.initClientData?.itemDetailMap?.[candidate.chestHrid]?.categoryHrid || null)
+                : null;
         }
         // 三个下拉框共享互斥管理；捕获阶段处理，不受选项stopPropagation影响。
         static registerCalculatorDropdown(root, menu) {
