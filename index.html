@@ -303,6 +303,9 @@ table.member-table td.idx-cell input.idx-input { width:44px; text-align:center; 
 #btn-migrate-cos.busy { opacity:.6; pointer-events:none; }
 #btn-upload-cos.busy { opacity:.6; pointer-events:none; }
 table.member-table td.name-cell { text-align:left; }
+#display-area td.display-debuff-name { position:relative; cursor:pointer; }
+#display-area td.display-debuff-name.has-debuff { background:repeating-linear-gradient(135deg,rgba(220,38,38,.24) 0 6px,rgba(220,38,38,.12) 6px 12px); box-shadow:inset 3px 0 #ef4444; }
+#display-area td.display-debuff-name.has-debuff::after { content:'DEBUFF'; position:absolute; right:4px; bottom:1px; font-size:9px; line-height:1; font-weight:800; letter-spacing:1px; color:#ef4444; opacity:.55; pointer-events:none; }
 table.member-table td input { width:100%; border:1px solid transparent; background:transparent; font-size:13px; padding:2px 4px; border-radius:3px; color:var(--text); }
 table.member-table td input:focus { border-color:var(--accent); background:var(--input-bg); outline:none; }
 table.member-table td.skill-input input { width:52px; text-align:center; }
@@ -1075,7 +1078,7 @@ const I18N = {
     calculate:'计算最优分配', assignCol:'生活', nameCol:'角色名', maxMembers:'人数上限',
     displayAssign:'展示分配', displaySettings:'展示设置',
     skillConfig:'技能配置', skillConfigTip:'点击下方图标，从全部技能图标中单选一个', skillConfigPick:'选择技能', skillConfigNoProf:'请先排刀',
-    auraConfig:'光环设置', auraCarrier:'光环携带者', auraCarrierError:'光环战斗位置错误', auraCarrierNeed:'应参加', auraCarrierCurrent:'当前战斗',
+    auraConfig:'光环设置', auraCarrier:'光环携带者', debuffNameTip:'双击角色名称添加 debuff 标记；单击已标记名称删除', auraCarrierError:'光环战斗位置错误', auraCarrierNeed:'应参加', auraCarrierCurrent:'当前战斗',
     auraData:'光环数据',
     auraChanges:'光环更改：{n} 处',
     profMgrName:'职业名', profMgrCount:'成员数', profMgrOrder:'顺序',
@@ -1102,7 +1105,7 @@ const I18N = {
     evenSplitProfessions:'平均分配职业',
     battleStatTotal:'人数', battleStatHeal:'奶', battleStatFork:'绿叉', battleStatShield:'盾', battleStatBow:'弓',
     buffGroupTitle:'加成与约束', buffGroupTip:'点击折叠/展开：全局加成、公会建筑、公会神龛、进度约束',
-    clearBattleEdit:'清除单独修改', clearBattleEditTip:'清除所有成员的单独指定，战斗结果恢复按「职业是否属于出战职业」自动计算',
+    clearBattleEdit:'清除单独修改', clearBattleEditTip:'清除所有成员的单独指定与 debuff 标记，战斗结果恢复按「职业是否属于出战职业」自动计算',
     publishPlanBtn:'发布试炼', planDeadline:'截止时间', planDeadlineTip:'把每个人的生活分配、战斗分配、职业选择连同截止时间一起上传。截止前其他人点「获取」会读取该排刀；超过截止时间后不再读取并提示「排刀未发布」。',
     planNeedDeadline:'请先选择截止时间', planDeadlinePassed:'请注意，本次发布排刀的截止时间已过。', planPublished:'排刀已发布并上传（截止 {t}）',
     planNotPublished:'排刀未发布', planActive:'排刀生效中，截止 {t}', planExpired:'排刀已过期',
@@ -1236,7 +1239,7 @@ const I18N = {
     calculate:'Calculate', assignCol:'Skilling', nameCol:'Name', maxMembers:'Max',
     displayAssign:'Display', displaySettings:'Display Settings',
     skillConfig:'Skill Config', skillConfigTip:'Click an icon to pick one (aura slot lists auras only, skill slots list non-auras)', skillConfigPick:'Pick a skill',
-    auraConfig:'Aura Config', auraCarrier:'Aura carrier', auraCarrierError:'Aura battle assignment mismatch', auraCarrierNeed:'Required', auraCarrierCurrent:'Current battle',
+    auraConfig:'Aura Config', auraCarrier:'Aura carrier', debuffNameTip:'Double-click a name to add a debuff mark; click a marked name to remove it', auraCarrierError:'Aura battle assignment mismatch', auraCarrierNeed:'Required', auraCarrierCurrent:'Current battle',
     auraData:'Aura Data',
     auraChanges:'Aura changes: {n}',
     profMgrName:'Profession', profMgrCount:'Members', profMgrOrder:'Order',
@@ -1265,7 +1268,7 @@ const I18N = {
     evenSplitProfessions:'Split Professions',
     battleStatTotal:'Members', battleStatHeal:'Heal', battleStatFork:'Blooming Trident', battleStatShield:'Shield', battleStatBow:'Bow',
     buffGroupTitle:'Buffs & Constraints', buffGroupTip:'Click to collapse/expand: Global Buffs, Guild Buildings, Guild Shrines, Progress Constraint',
-    clearBattleEdit:'Clear Manual', clearBattleEditTip:'Clear all manual overrides; battle results fall back to auto match by profession',
+    clearBattleEdit:'Clear Manual', clearBattleEditTip:'Clear all manual overrides and debuff marks; battle results fall back to auto match by profession',
     publishPlanBtn:'Publish Trial', planDeadline:'Deadline', planDeadlineTip:'Upload everyone\'s life assignment, battle assignment and profession with a deadline. Others can pull the plan before the deadline; after it expires it is no longer applied and "plan not published" is shown.',
     planNeedDeadline:'Please pick a deadline first', planDeadlinePassed:'The deadline has already passed, pick a new one', planPublished:'Plan published and uploaded (deadline {t})',
     planNotPublished:'Plan not published', planActive:'Plan active, deadline {t}', planExpired:'Plan expired',
@@ -5757,6 +5760,63 @@ function displayAuraCarrierInfo(p) {
   }
   return { className: classes.join(' '), title: title };
 }
+// 展示页 debuff 仅作人工提示，按公会与角色名在本机保存，不改变计算数据。
+let displayDebuffGuild = null;
+let displayDebuffNames = new Set();
+const displayDebuffRemovedOnClick = new WeakSet();
+function displayDebuffMarks() {
+  const guild = state.guild || 'default';
+  if (displayDebuffGuild !== guild) {
+    displayDebuffGuild = guild;
+    displayDebuffNames = new Set();
+    try {
+      const names = JSON.parse(localStorage.getItem(getStorageKey() + '_debuff_marks') || '[]');
+      if (Array.isArray(names)) names.forEach(function(name) { if (typeof name === 'string' && name.trim()) displayDebuffNames.add(name.trim()); });
+    } catch(e) {}
+  }
+  return displayDebuffNames;
+}
+function persistDisplayDebuffMarks() {
+  const marks = displayDebuffMarks();
+  try {
+    const key = getStorageKey() + '_debuff_marks';
+    if (marks.size) localStorage.setItem(key, JSON.stringify(Array.from(marks)));
+    else localStorage.removeItem(key);
+  } catch(e) {}
+}
+function displayNameCellHtml(p, rowIdx) {
+  const marked = displayDebuffMarks().has(String(p.name || '').trim());
+  return '<td class="name-cell display-debuff-name'+(marked ? ' has-debuff' : '')+'" data-debuff-name="'+escHtml(String(p.name || '').trim())+'" title="'+escHtml(t('debuffNameTip'))+'" onclick="onDisplayDebuffClick('+rowIdx+',event)" ondblclick="onDisplayDebuffDoubleClick('+rowIdx+',event)">'+escHtml(p.name)+'</td>';
+}
+function setDisplayDebuffMark(p, marked) {
+  if (!p || !p.name) return;
+  const name = String(p.name).trim(), marks = displayDebuffMarks();
+  if (marked) marks.add(name); else marks.delete(name);
+  persistDisplayDebuffMarks();
+  // 只更新背景，保留名称节点，确保浏览器的 click / dblclick 序列不被重绘打断。
+  document.querySelectorAll('#display-area td[data-debuff-name]').forEach(function(cell) {
+    if (cell.dataset.debuffName === name) cell.classList.toggle('has-debuff', marked);
+  });
+}
+function onDisplayDebuffClick(rowIdx, ev) {
+  if (!ev || ev.detail > 1) return;
+  const cell = ev.currentTarget, p = state.members[rowIdx];
+  displayDebuffRemovedOnClick.delete(cell);
+  if (p && displayDebuffMarks().has(String(p.name || '').trim())) {
+    displayDebuffRemovedOnClick.add(cell);
+    setDisplayDebuffMark(p, false);
+  }
+}
+function onDisplayDebuffDoubleClick(rowIdx, ev) {
+  if (ev) ev.preventDefault();
+  const cell = ev && ev.currentTarget;
+  // 对已有标记双击时，第一次 click 已删除，不能在 dblclick 时又加回来。
+  if (cell && displayDebuffRemovedOnClick.has(cell)) {
+    displayDebuffRemovedOnClick.delete(cell);
+    return;
+  }
+  setDisplayDebuffMark(state.members[rowIdx], true);
+}
 function renderDisplayArea() {
   refreshAuraBattleAssignments();
   const area = document.getElementById('display-area');
@@ -5800,7 +5860,7 @@ function renderDisplayArea() {
       // 列顺序：序号 | 角色名 | 职业 | 战斗 | 生活（生活 = 生活试炼分配图标）
       return '<tr>'+
         '<td class="idx-cell'+(inBattleTrial1 ? ' battle-trial-1-index' : '')+'">'+rowIdx+'</td>'+
-        '<td class="name-cell">'+escHtml(p.name)+'</td>'+
+        displayNameCellHtml(p, rowIdx)+
         '<td class="prof-cell">'+displayProfessionSelectHtml(p, prof)+'</td>'+
         '<td class="battle-cell'+(carrier.className ? ' '+carrier.className : '')+'"'+(carrier.title ? ' title="'+escHtml(carrier.title)+'"' : '')+'>'+displayBattleCellHtml(p, prof)+'</td>'+
         (cmp ? signupBattleCellHtml(p) : '')+
@@ -5893,9 +5953,12 @@ function professionToneClass(prof) {
   if (s.endsWith('枪')) return 'prof-spear';
   if (s.endsWith('锤')) return 'prof-hammer';
   if (s.endsWith('剑')) return 'prof-swaord';
-  if (s.endsWith('水')) return 'prof-watermage';
-  if (s.endsWith('火')) return 'prof-firemage';
+  if (s.endsWith('水法')) return 'prof-watermage';
+  if (s.endsWith('水叉')) return 'prof-watermage';
+  if (s.endsWith('火法')) return 'prof-firemage';
+  if (s.endsWith('火叉')) return 'prof-firemage';
   if (s.endsWith('绿叉')) return 'prof-nature';
+  if (s.endsWith('自然')) return 'prof-nature';
   return '';
 }
 function onDisplayProfessionChange(id, v) {
@@ -6096,9 +6159,12 @@ function toggleDisplayBattleEdit(checked) {
 function clearDisplayBattleOverrides(ev) {
   if (ev) ev.stopPropagation();
   const n = Object.keys(state.displayBattleOverrides || {}).length
-    + Object.keys(state.displayLifeOverrides || {}).length;
+    + Object.keys(state.displayLifeOverrides || {}).length
+    + displayDebuffMarks().size;
   state.displayBattleOverrides = {};
   state.displayLifeOverrides = {};
+  displayDebuffMarks().clear();
+  persistDisplayDebuffMarks();
   state.displayEvenSplitAssigned = {}; // 自动分配记录一并作废
   state.displayBattleManual = {};      // 手动指定标记一并作废
   try {
@@ -7078,6 +7144,12 @@ function updateMemberName(id, value) {
   if (p) {
     const lock = lifeAssignmentLock();
     const oldName = String(p.name || '').trim();
+    const debuffMarks = displayDebuffMarks();
+    if (debuffMarks.delete(oldName)) {
+      const newName = String(value || '').trim();
+      if (newName) debuffMarks.add(newName);
+      persistDisplayDebuffMarks();
+    }
     if (lock && Object.prototype.hasOwnProperty.call(lock.byName, oldName)) {
       const life = lock.byName[oldName];
       delete lock.byName[oldName];
