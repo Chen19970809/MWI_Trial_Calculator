@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MWI-Importer-改配装导出
 // @namespace    http://tampermonkey.net/
-// @version      2.4.1
+// @version      2.4.2
 // @description  脚本基于Mooneycalc-Importer v5.3，增加了组队模拟功能，使用时请手动查看队友装备以获取数据。https://amvoidguy.github.io/MWICombatSimulatorTest/dist/index.html.
 // @match        https://www.milkywayidle.com/*
 // @match        https://www.milkywayidlecn.com/*
@@ -26,6 +26,138 @@
     const userLanguage = navigator.language || navigator.userLanguage;
     const isZH = userLanguage.startsWith("zh");
     let profile_arr = new Array();
+    const AUTO_IMPORT_TEAM_DEFAULT = false; // 菜单可切换；默认只选中队伍，不自动覆盖模拟器配置。
+    const IMPORTER_AUTO_TEAM_KEY = "mwi_importer_auto_team";
+    const IMPORTER_ACTIVE_CHARACTER_KEY = "mwi_importer_active_character_v1";
+    const IMPORTER_GAME_CHARACTER_KEY = "mwi_importer_game_character_v1";
+    const IMPORTER_SIM_CHARACTER_KEY = "mwi_importer_sim_character_v1";
+    let currentTabCharacter = "";
+    const simulatorTeamState = {character: "", manual: false, initialized: false, attempts: 0};
+    function parseCachedObject(key) {
+        try {
+            const raw = GM_getValue(key, null);
+            const value = typeof raw === "string" ? JSON.parse(raw) : raw;
+            return value && typeof value === "object" ? value : null;
+        } catch (_) { return null; }
+    }
+    function getCharacterSnapshot(name) {
+        const profile = parseCachedObject("profile_" + String(name || "").trim());
+        return profile && profile.character && profile.character.name === name ? profile : null;
+    }
+    function rememberGameCharacter(name) {
+        name = String(name || "").trim();
+        if (!name) return;
+        try { sessionStorage.setItem(IMPORTER_GAME_CHARACTER_KEY, name); } catch (_) {}
+        if (document.visibilityState === "hidden" || (typeof document.hasFocus === "function" && !document.hasFocus())) return;
+        GM_setValue(IMPORTER_ACTIVE_CHARACTER_KEY, JSON.stringify({name: name, at: Date.now()}));
+    }
+    function resolveSimulatorCharacter() {
+        try {
+            const url = new URL(window.location.href);
+            const explicit = url.searchParams.get("mwiCharacter") || new URLSearchParams(url.hash.slice(1)).get("mwiCharacter");
+            if (explicit && explicit.trim()) return explicit.trim();
+        } catch (_) {}
+        try {
+            const saved = sessionStorage.getItem(IMPORTER_SIM_CHARACTER_KEY);
+            if (saved && saved.trim()) return saved.trim();
+        } catch (_) {}
+        const active = parseCachedObject(IMPORTER_ACTIVE_CHARACTER_KEY);
+        if (active && typeof active.name === "string" && active.name.trim()) return active.name.trim();
+        const legacy = parseCachedObject("init_character_data");
+        return String(legacy && legacy.character && legacy.character.name || "").trim();
+    }
+    function getImportCharacterName(checkedProfile) {
+        return String(checkedProfile || simulatorTeamState.character || currentTabCharacter || "").trim();
+    }
+    function startCharacterContextTracking() {
+        const publish = () => rememberGameCharacter(currentTabCharacter);
+        window.addEventListener("focus", publish);
+        document.addEventListener("visibilitychange", publish);
+        // 给新开的模拟器页面传递来源角色，四开时不依赖共享的最后登录记录。
+        const tagLink = (ev) => {
+            const link = ev.target && ev.target.closest ? ev.target.closest("a[href]") : null;
+            if (!link || !currentTabCharacter) return;
+            try {
+                const url = new URL(link.href, window.location.href);
+                if (!/^https?:$/.test(url.protocol) || !/\/MWICombatSimulatorTest(?:\/|$)/i.test(url.pathname)) return;
+                url.searchParams.set("mwiCharacter", currentTabCharacter);
+                link.href = url.href;
+                rememberGameCharacter(currentTabCharacter);
+            } catch (_) {}
+        };
+        document.addEventListener("pointerdown", tagLink, true);
+        document.addEventListener("click", tagLink, true);
+        document.addEventListener("auxclick", tagLink, true);
+    }
+    function registerAutoTeamImportMenu() {
+        if (typeof GM_registerMenuCommand !== "function") return;
+        const enabled = GM_getValue(IMPORTER_AUTO_TEAM_KEY, AUTO_IMPORT_TEAM_DEFAULT) === true;
+        GM_registerMenuCommand((enabled ? "✅ " : "⬜ ") + (isZH ? "打开模拟器后自动导入队伍" : "Auto-import team when opening simulator"), function () {
+            const next = GM_getValue(IMPORTER_AUTO_TEAM_KEY, AUTO_IMPORT_TEAM_DEFAULT) !== true;
+            GM_setValue(IMPORTER_AUTO_TEAM_KEY, next);
+            alert(isZH ? "自动导入队伍已" + (next ? "开启" : "关闭") + "，下次打开模拟器时生效。" : "Auto-import is now " + (next ? "enabled" : "disabled") + ". Applies when opening the simulator.");
+        });
+    }
+    function cacheCurrentPartyRoster(obj) {
+        if (!currentTabCharacter || !Object.prototype.hasOwnProperty.call(obj, "partyInfo")) return;
+        const pi = obj.partyInfo;
+        let names = [];
+        if (pi && pi.partySlotMap) {
+            const slots = Object.values(pi.partySlotMap).filter(slot => slot && slot.characterID);
+            const owner = getCharacterSnapshot(currentTabCharacter);
+            for (const slot of slots) {
+                const mate = pi.sharableCharacterMap && pi.sharableCharacterMap[slot.characterID];
+                const name = mate && mate.name || (String(slot.characterID) === String(owner && owner.character && owner.character.id) ? currentTabCharacter : "");
+                // 队伍名单尚未加载完整时不把它误写成单人队伍。
+                if (!name) return;
+                names.push(name);
+            }
+        } else if (pi !== null) return;
+        if (!names.length) names = [currentTabCharacter];
+        names = Array.from(new Set(names));
+        if (!names.includes(currentTabCharacter)) return;
+        const at = Date.now();
+        GM_setValue("party_roster_" + currentTabCharacter, JSON.stringify({
+            type: "party_roster", owner: currentTabCharacter, combatStartTime: at,
+            players: names.map(name => ({character: {name: name}})),
+        }));
+        const profile = getCharacterSnapshot(currentTabCharacter);
+        if (profile) {
+            profile.partyInfo = pi;
+            profile._mwiRosterUpdatedAt = at;
+            GM_setValue("profile_" + currentTabCharacter, JSON.stringify(profile));
+        }
+    }
+    async function initializeSimulatorTeam(button) {
+        if (simulatorTeamState.manual || simulatorTeamState.initialized) return;
+        if (!simulatorTeamState.character) simulatorTeamState.character = resolveSimulatorCharacter();
+        generateComboList(GM_getValue("profile_arr", []));
+        const select = document.getElementById("profile-combo-container");
+        const selected = select && select.value;
+        const name = simulatorTeamState.character;
+        if (!selected || !name || !getCharacterSnapshot(selected)) {
+            if (++simulatorTeamState.attempts < 10) {
+                setTimeout(() => { void initializeSimulatorTeam(button); }, 1000);
+            } else showTeamMemberToast(isZH ? "未找到登录角色的队伍，请刷新对应游戏页面，或手动选择队伍。" : "No team found for the current character. Refresh its game page or select a team manually.");
+            return;
+        }
+        simulatorTeamState.initialized = true;
+        try { sessionStorage.setItem(IMPORTER_SIM_CHARACTER_KEY, name); } catch (_) {}
+        const best = findBestTeamSnapshot(selected, "");
+        const members = best ? best.names : [selected];
+        let text = isZH ? "已切换至角色「" + name + "」所属队伍\n队员：" + members.join("、") : "Selected " + name + "'s team\nMembers: " + members.join(", ");
+        if (GM_getValue(IMPORTER_AUTO_TEAM_KEY, AUTO_IMPORT_TEAM_DEFAULT) === true) {
+            try {
+                const ok = await importCombatSimData(button, selected);
+                text += isZH ? (ok ? "\n已自动导入模拟器。" : "\n自动导入未完成，请检查队友数据后手动导入。") : (ok ? "\nAutomatically imported." : "\nAuto-import incomplete. Check member data and import manually.");
+            } catch (error) {
+                text += isZH ? "\n自动导入失败，请检查队友数据后手动导入。" : "\nAuto-import failed. Check member data and import manually.";
+                console.warn("[MWI-Importer] 自动导入失败", error);
+            }
+        } else text += isZH ? "\n自动导入已关闭，可点击“单人/组队导入”。" : "\nAuto-import is off. Click the team import button to import.";
+        showTeamMemberToast(text);
+    }
+
     const SCRIPT_SIMULATE_TIME = "24";//模拟时长
     //启动前先把所有队友的装备手动看一遍!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 
@@ -33,6 +165,7 @@
         hookWS();
         startLoadoutCopyButtonSync();
         hookWSSendCapture();
+        startCharacterContextTracking();
     } else if (document.URL.includes("mooneycalc")) {
         addImportButton1();
     } else if( document.URL.includes("MWICombatSimulatorTest") || document.URL.includes("localhost")){
@@ -40,6 +173,7 @@
         waitSimulationResultsLoading();
     }
     registerClearCacheMenu();
+    registerAutoTeamImportMenu();
 
     // ── 油猴菜单：删除本脚本全部缓存数据（GM 存储，不影响游戏本体与其它脚本的存储）──
     function registerClearCacheMenu() {
@@ -124,7 +258,6 @@
 
     let current_team_battle = "";
     // 当前标签页自己的角色名（收到 init_character_data 时记录；多开时各 tab 的名册归属各自角色）
-    let currentTabCharacter = "";
     function handleMessage(message) {
         let obj = JSON.parse(message);
         //const keys = GM_listValues();
@@ -132,6 +265,7 @@
         // keys.forEach(key => { GM_deleteValue(key); });
         if (obj && obj.type === "init_character_data") {
             currentTabCharacter = obj.character.name || currentTabCharacter;
+            rememberGameCharacter(currentTabCharacter);
 
             if(GM_getValue("profile_arr"))
             {
@@ -202,25 +336,7 @@
                 mergeLoadoutIntoProfile(lo.sharableCharacter.name, lo);
             }
         }
-        // 任何携带队伍信息的消息（登录、组队/换人/离队等）都实时更新名册缓存：
-        // 不进战斗也能拿到最新全队名单（单人时同样写入，扫描端会把单人快照降权）
-        if (obj && obj.partyInfo && obj.partyInfo.partySlotMap) {
-            try {
-                const roster = [];
-                Object.values(obj.partyInfo.partySlotMap).forEach((slot) => {
-                    if (slot && slot.characterID && obj.partyInfo.sharableCharacterMap && obj.partyInfo.sharableCharacterMap[slot.characterID]) roster.push(obj.partyInfo.sharableCharacterMap[slot.characterID].name);
-                });
-                if (roster.length) {
-                    // 归属当前 tab 自己的角色（多开时各 tab 名册互不干扰）
-                    const owner = currentTabCharacter;
-                    GM_setValue("party_roster_" + (owner || "_unknown"), JSON.stringify({
-                        type: "party_roster",
-                        combatStartTime: Date.now(),
-                        players: roster.map((n) => ({ character: { name: n } })),
-                    }));
-                }
-            } catch (e) {}
-        }
+        cacheCurrentPartyRoster(obj);
         return message;
     }
 
@@ -970,10 +1086,10 @@
     function addImportButton4() {
         const checkElem = () => {
             const selectedElement = document.querySelector(`button#buttonImportExport`);
-            if (selectedElement) {
+            if (selectedElement && document.getElementById("profile-combo-container")) {
                 clearInterval(timer);
                 console.log("Mooneycalc-Importer: Found elem");
-                let profileArr = GM_getValue("profile_arr");
+                let profileArr = GM_getValue("profile_arr", []);
 
                 generateComboList(profileArr);
 
@@ -1032,6 +1148,7 @@
                 button3Wrap.style.marginTop = "5px";
                 button.after(button3Wrap);
                 button3Wrap.appendChild(button3);
+                void initializeSimulatorTeam(button);
             }
         };
         let timer = setInterval(checkElem, 200);
@@ -1064,7 +1181,7 @@
         try {
             if (name === currentLoginName) {
                 // 当前登录角色：数据来自登录快照
-                let initObj = JSON.parse(GM_getValue("init_character_data"));
+                let initObj = getCharacterSnapshot(name);
                 if (initObj) {
                     found = true;
                     maxLevel = combatMaxLevelFromSkills(initObj.characterSkills);
@@ -1107,51 +1224,42 @@
     // 只有自己，单人快照不可靠）；同为多人按时间新者优先，同时间人数多者优先。
     // 登录名册以模拟 obj 形式参与（constructImportJsonObj_team 只读玩家名单，可无缝使用）。
     function findBestTeamSnapshot(checkedProfile, currentLoginName) {
+        const name = String(checkedProfile || currentLoginName || "").trim();
+        if (!name) return null;
+        // 该角色的实时名册优先，单人名册也有效，离队后不会被旧的多人战斗记录覆盖。
+        const owned = parseCachedObject("party_roster_" + name);
+        const ownedNames = listSnapshotPlayerNames(owned);
+        if (owned && ownedNames.includes(name)) return {obj: owned, names: ownedNames, ts: new Date(owned.combatStartTime).getTime() || 0};
         let best = null;
         const consider = (tb, ts) => {
             const names = listSnapshotPlayerNames(tb);
-            if (!names.length) return;
-            const match = names.includes(checkedProfile) ? 2 : (currentLoginName && names.includes(currentLoginName) ? 1 : 0);
-            if (!match) return;
-            const full = names.length >= 2 ? 1 : 0;
-            if (!best || match > best.match
-                || (match === best.match && full > best.full)
-                || (match === best.match && full === best.full && ts > best.ts)
-                || (match === best.match && full === best.full && ts === best.ts && names.length > best.names.length)) {
-                best = { obj: tb, names: names, ts: ts, match: match, full: full };
-            }
+            if (!names.includes(name)) return;
+            const full = names.length > 1 ? 1 : 0;
+            if (!best || full > best.full || (full === best.full && ts > best.ts)) best = {obj: tb, names: names, ts: ts, full: full};
         };
-        try {
-            (GM_listValues() || []).forEach((key) => {
-                if (typeof key !== "string" || (key.indexOf("team_battle_") !== 0 && key.indexOf("party_roster_") !== 0)) return;
-                let tb = null;
-                try { tb = JSON.parse(GM_getValue(key)); } catch (e) { return; }
-                if (!tb || !tb.players) return;
-                let ts = 0;
-                try { ts = new Date(tb.combatStartTime).getTime() || 0; } catch (e) {}
-                consider(tb, ts);
-            });
-        } catch (e) {}
-        // 登录名册候选：选中角色最后一次登录时的队伍槽位，是最新的全队名单来源
-        try {
-            const pi = JSON.parse(GM_getValue("profile_" + checkedProfile));
-            if (pi?.partyInfo?.partySlotMap) {
-                const roster = [];
-                Object.values(pi.partyInfo.partySlotMap).forEach((slot) => {
-                    if (slot?.characterID && pi.partyInfo.sharableCharacterMap?.[slot.characterID]) roster.push(pi.partyInfo.sharableCharacterMap[slot.characterID].name);
-                });
-                if (roster.length) {
-                    let ts = 0;
-                    try { ts = Number(pi.currentTimestamp) || 0; } catch (e) {}
-                    consider({ type: "login_roster", combatStartTime: ts, players: roster.map((n) => ({ character: { name: n } })) }, ts);
-                }
+        const profile = getCharacterSnapshot(name);
+        if (profile && Object.prototype.hasOwnProperty.call(profile, "partyInfo")) {
+            const pi = profile.partyInfo;
+            if (pi === null) return {obj: {players: [{character: {name: name}}]}, names: [name], ts: Number(profile.currentTimestamp) || 0};
+            const slots = Object.values(pi && pi.partySlotMap || {}).filter(slot => slot && slot.characterID);
+            const names = slots.map(slot => pi.sharableCharacterMap && pi.sharableCharacterMap[slot.characterID] && pi.sharableCharacterMap[slot.characterID].name || (String(slot.characterID) === String(profile.character.id) ? name : "")).filter(Boolean);
+            if (slots.length && names.length === slots.length && names.includes(name)) {
+                const tb = {players: names.map(member => ({character: {name: member}}))};
+                return {obj: tb, names: names, ts: Number(profile._mwiRosterUpdatedAt || profile.currentTimestamp) || 0};
             }
-        } catch (e) {}
+        }
+        try {
+            (GM_listValues() || []).forEach(key => {
+                if (typeof key !== "string" || !/^(team_battle_|party_roster_)/.test(key)) return;
+                const tb = parseCachedObject(key);
+                if (tb) consider(tb, new Date(tb.combatStartTime).getTime() || 0);
+            });
+        } catch (_) {}
+        if (!best && profile) best = {obj: {players: [{character: {name: name}}]}, names: [name], ts: 0};
         return best;
     }
     function buildTeamMemberStatusText(checkedProfile) {
-        let currentLoginName = "";
-        try { currentLoginName = JSON.parse(GM_getValue("init_character_data"))?.character?.name || ""; } catch (e) {}
+        const currentLoginName = getImportCharacterName(checkedProfile);
 
         // 队伍名单：与队伍导入同源（最佳快照），保证提示与实际导入一致；无快照时回退队伍槽位/自身
         let members = [];
@@ -1169,7 +1277,7 @@
             } catch (e) {}
         }
         members = members.filter((n, i) => members.indexOf(n) === i);
-        if (currentLoginName && !members.includes(currentLoginName)) members.unshift(currentLoginName);
+        // 只显示所选队伍，不能混入其他标签页最后登录的角色。
         if (!members.length) return null;
 
         let lines = [];
@@ -1215,7 +1323,7 @@
         if (!playerInfo) {
             button.textContent = isZH ? "错误：没有人物数据" : "Error: no character settings found";
             button.textContent += " profile_" + checkedProfile;
-            return;
+            return false;
         }
 
         let playerArr = [];
@@ -1225,31 +1333,24 @@
             playerArr.push(playerInfo.character.name)
         }
 
-        let currentLoginName = "";
-        try { currentLoginName = JSON.parse(GM_getValue("init_character_data"))?.character?.name || ""; } catch (e) {}
+        const currentLoginName = getImportCharacterName(checkedProfile);
 
-        let obj = null;
-        try { obj = JSON.parse(GM_getValue("team_battle_" + playerArr[0], "")); } catch (e) { obj = null; }
-
-        // 固定键快照可能过期（solo 登录只含自己，或还是旧队伍）→ 与扫描出的最佳快照竞争
-        // 只在扫描结果人数更多、或当前快照缺失/不含选中角色时才替换；
-        // 不按时间替换——刷新页面会写入只有自己（或当时队伍）的最小快照，它更新但人数可能更少
-        const directNames = listSnapshotPlayerNames(obj);
         const bestSnap = findBestTeamSnapshot(checkedProfile, currentLoginName);
-        if (bestSnap
-            && (!directNames.length
-                || directNames.length < bestSnap.names.length
-                || !directNames.includes(checkedProfile))) {
-            obj = bestSnap.obj;
-        }
+        const obj = bestSnap && bestSnap.obj;
 
         if (!obj) {
             button.textContent = isZH ? "错误：没有人物数据" : "Error: no character settings found";
             button.textContent += " team_battle_" + playerArr[0];
-            return;
+            return false;
         }
 
         const jsonObj = constructImportJsonObj_team(obj,checkedProfile);
+        if (!jsonObj || !jsonObj.players || !jsonObj.player_number) return false;
+        const importButton = document.querySelector("button#buttonImportSet");
+        if (!importButton) return false;
+        for (let i = 1; i <= jsonObj.player_number; i++) {
+            if (!document.querySelector("input#inputSetGroupCombatplayer" + i) || !document.querySelector("a#player" + i + "-tab")) return false;
+        }
 
         const teamNames = listSnapshotPlayerNames(obj);
         for(let i=1;i<=jsonObj.player_number;i++){
@@ -1258,13 +1359,14 @@
 
             document.querySelector(`a#player${i}-tab`).textContent = teamNames[i-1] || playerArr[i-1] || "";
         }
-        document.querySelector(`button#buttonImportSet`).click();
+        importButton.click();
 
         let timestamp = new Date(obj.combatStartTime).getTime();
         let now = new Date().getTime();
         button.textContent = isZH
             ? "已导入，人物数据更新时间：" + timeReadable(now - timestamp) + " 前"
         : "Character Imported, updated " + timeReadable(now - timestamp) + " ago";
+        return true;
     }
 
     async function importLoadoutsData(button,checkedProfile) {
@@ -1290,54 +1392,53 @@
     function generateComboList(profileArr) {
         const container = document.getElementById("profile-combo-container");
         if (!container) return;
-
-        if (profileArr.length <= 0) return;
-        // 同一队伍只显示一个入口：按队伍成员集合去重；
-        // 代表者取该队伍里登录时间最新的角色（其登录快照最新，导入时底档补齐/区域识别也最准）
-        const groups = {};
-        profileArr.forEach(item => {
-            let profile = GM_getValue("profile_"+ item);
+        const requested = simulatorTeamState.character || resolveSimulatorCharacter();
+        const requestedTeam = getCharacterSnapshot(requested) ? findBestTeamSnapshot(requested, "") : null;
+        const requestedKey = requestedTeam ? Array.from(new Set(requestedTeam.names)).sort().join("\u0000") : "";
+        const groups = new Map();
+        (Array.isArray(profileArr) ? profileArr : []).forEach(name => {
+            const profile = getCharacterSnapshot(name);
             if (!profile) return;
-            let playerInfo = null;
-            try { playerInfo = JSON.parse(profile); } catch (e) { return; }
-            let partyMember = [];
-            let labelText = item;
-            let groupKey;
-            if ( playerInfo?.partyInfo?.partySlotMap ){
-                labelText += " Party:";
-                Object.values(playerInfo.partyInfo.partySlotMap).forEach((value,key) => {
-                    const mate = playerInfo.partyInfo.sharableCharacterMap?.[value.characterID];
-                    if (value.characterID && mate) partyMember.push(mate.name);
-                });
-                labelText += partyMember.join(", ");
-                groupKey = "party|" + partyMember.slice().sort().join("|");
-            } else {
-                // 无队伍信息时按单人处理，各自独立入口
-                groupKey = "solo|" + item;
-            }
-
-            const ts = Number(playerInfo.currentTimestamp) || 0;
-            const g = groups[groupKey];
-            if (!g || ts > g.ts) groups[groupKey] = { ts: ts, name: item, label: labelText };
+            const best = findBestTeamSnapshot(name, "");
+            const members = Array.from(new Set(best && best.names.length ? best.names : [name]));
+            const key = members.slice().sort().join("\u0000");
+            const ts = Number(profile._mwiRosterUpdatedAt || profile.currentTimestamp) || 0;
+            const current = groups.get(key);
+            if (!current || ts > current.ts) groups.set(key, {name: name, members: members, ts: ts});
         });
-        Object.keys(groups).forEach((groupKey) => {
-            const g = groups[groupKey];
-            let option = document.createElement("option");
-            option.value = g.name;
-            option.textContent = g.label;
+        container.replaceChildren();
+        groups.forEach((group, key) => {
+            const option = document.createElement("option");
+            const name = key === requestedKey && getCharacterSnapshot(requested) ? requested : group.name;
+            option.value = name;
+            option.textContent = name + (group.members.length > 1 ? " Party: " + group.members.join(", ") : "");
+            option.dataset.members = JSON.stringify(group.members);
             container.appendChild(option);
-        })
+        });
+        // 选不到来源角色时留空，避免悄悄使用其他角色的队伍。
+        const match = Array.from(container.options).find(option => {
+            try {
+                const members = JSON.parse(option.dataset.members || "[]");
+                return requestedKey ? members.slice().sort().join("\u0000") === requestedKey : members.includes(requested);
+            } catch (_) { return false; }
+        });
+        if (match) container.value = match.value;
+        else container.selectedIndex = -1;
+        if (!container.dataset.mwiTeamSelectionBound) {
+            container.dataset.mwiTeamSelectionBound = "1";
+            container.addEventListener("change", () => {
+                simulatorTeamState.manual = true;
+                simulatorTeamState.character = container.value;
+                try { sessionStorage.setItem(IMPORTER_SIM_CHARACTER_KEY, container.value); } catch (_) {}
+            });
+        }
     }
 
 
     function constructImportJsonObj_team(obj,checkedProfile) {
         let init_character_obj = JSON.parse(GM_getValue("profile_"+ checkedProfile));
         // 当前登录角色的名字（无合并存档时回退登录快照用）
-        let loggedInName = "";
-        try {
-            let initRaw = GM_getValue("init_character_data");
-            if (initRaw) loggedInName = JSON.parse(initRaw).character.name;
-        } catch (e) {}
+        const loggedInName = getImportCharacterName(checkedProfile);
         let exportObj = {};
 
         exportObj.player_number=obj.players.length;
@@ -1366,7 +1467,7 @@
                 if (!(team_mate_obj.profile.characterSkills || []).length) {
                     let snap = null;
                     if (mateName == loggedInName) {
-                        try { snap = JSON.parse(GM_getValue("init_character_data")); } catch (e) {}
+                        snap = getCharacterSnapshot(mateName);
                     } else if (mateName == init_character_obj.character.name) {
                         snap = init_character_obj;
                     }
@@ -1380,7 +1481,7 @@
                 exportObj.players[player_num] = constructPlayerExportObjFromProfile(team_mate_obj);
             } else if (mateName == loggedInName) {
                 // 还没点开过自己的配装 → 回退登录快照
-                exportObj.players[player_num] = constructSelfPlayerExportObjFromInitCharacterData();
+                exportObj.players[player_num] = constructSelfPlayerExportObjFromInitCharacterData(getCharacterSnapshot(mateName));
             } else if (mateName == init_character_obj.character.name) {
                 // 下拉选中的角色（自己的小号）无存档 → 回退它的登录快照
                 exportObj.players[player_num] = constructSelfPlayerExportObjFromInitCharacterData(init_character_obj);
@@ -1619,12 +1720,8 @@
     // 组装单个角色的模拟器导入 JSON（数据来源优先级与《导入人物数据》完全一致）
     function buildSingleMemberExport(battleObj, checkedProfile, memberName) {
         let init_character_obj = JSON.parse(GM_getValue("profile_" + checkedProfile));
-        let loggedInName = "";
-        try {
-            let initRaw = GM_getValue("init_character_data");
-            if (initRaw) loggedInName = JSON.parse(initRaw).character.name;
-        } catch (e) {}
-        const member = (battleObj?.players || []).find(p => p?.character?.name === memberName);
+        const loggedInName = getImportCharacterName(checkedProfile);
+        const member = (battleObj?.players || []).find(p => (p?.character?.name || p?.name) === memberName);
         if (!member) throw new Error("队伍数据里没有该角色: " + memberName);
         let playerObj = null;
         let team_mate_str = GM_getValue(memberName, "");
@@ -1639,7 +1736,7 @@
             if (!(team_mate_obj.profile.characterSkills || []).length) {
                 let snap = null;
                 if (memberName == loggedInName) {
-                    try { snap = JSON.parse(GM_getValue("init_character_data")); } catch (e) {}
+                    snap = getCharacterSnapshot(memberName);
                 } else if (memberName == init_character_obj.character.name) {
                     snap = init_character_obj;
                 }
@@ -1652,7 +1749,7 @@
             }
             playerObj = constructPlayerExportObjFromProfile(team_mate_obj);
         } else if (memberName == loggedInName) {
-            playerObj = constructSelfPlayerExportObjFromInitCharacterData();
+            playerObj = constructSelfPlayerExportObjFromInitCharacterData(getCharacterSnapshot(memberName));
         } else if (memberName == init_character_obj.character.name) {
             playerObj = constructSelfPlayerExportObjFromInitCharacterData(init_character_obj);
         } else {
