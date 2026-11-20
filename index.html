@@ -219,6 +219,8 @@ h2 { font-size:16px; margin:10px 0 8px; color:var(--text-muted); }
 .battle-trial-stats .bts-label { flex:none; color:var(--text-faint); }
 .battle-trial-stats b { color:var(--text); font-weight:600; flex:none; }
 .battle-trial-stats .bts-id-select { width:92px; max-width:120px; min-width:0; padding:2px 4px; border:1px solid var(--border); border-radius:3px; background:var(--input-bg); color:var(--text-muted); font-size:12px; cursor:pointer; }
+.battle-trial-stats .bts-add { flex:none; padding:0 4px; border:1px solid var(--border); border-radius:3px; background:var(--input-bg); color:var(--accent); font-size:13px; line-height:18px; cursor:pointer; }
+.battle-trial-stats .bts-add:hover { border-color:var(--accent); }
 .battle-prof-picker { position:relative; display:flex; align-items:center; gap:2px; flex:1 1 auto; min-width:140px; max-width:100%; padding:2px 6px; border:1px solid var(--border); border-radius:4px; background:var(--input-bg); cursor:pointer; }
 .battle-prof-picker:hover { border-color:var(--accent); }
 .battle-prof-text { flex:1 1 auto; min-width:0; font-size:12px; color:var(--text); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
@@ -309,6 +311,8 @@ table.member-table td.name-cell { text-align:left; }
 #display-area td.display-debuff-name { position:relative; cursor:pointer; }
 #display-area td.display-debuff-name.has-debuff { background:repeating-linear-gradient(135deg,rgba(220,38,38,.24) 0 6px,rgba(220,38,38,.12) 6px 12px); box-shadow:inset 3px 0 #ef4444; }
 #display-area td.display-debuff-name.has-debuff::after { content:'DEBUFF'; position:absolute; right:4px; bottom:1px; font-size:9px; line-height:1; font-weight:800; letter-spacing:1px; color:#ef4444; opacity:.55; pointer-events:none; }
+#display-area td.display-debuff-name.has-buff { background:rgba(134,239,172,.25); box-shadow:inset 3px 0 #86cfa0; }
+#display-area td.display-debuff-name.has-buff::after { content:'BUFF'; position:absolute; right:4px; bottom:1px; font-size:9px; line-height:1; font-weight:800; letter-spacing:1px; color:#398653; opacity:.75; pointer-events:none; }
 table.member-table td input { width:100%; border:1px solid transparent; background:transparent; font-size:13px; padding:2px 4px; border-radius:3px; color:var(--text); }
 table.member-table td input:focus { border-color:var(--accent); background:var(--input-bg); outline:none; }
 table.member-table td.skill-input input { width:52px; text-align:center; }
@@ -1081,7 +1085,7 @@ const I18N = {
     calculate:'计算最优分配', assignCol:'生活', nameCol:'角色名', maxMembers:'人数上限',
     displayAssign:'展示分配', displaySettings:'展示设置',
     skillConfig:'技能配置', skillConfigTip:'点击下方图标，从全部技能图标中单选一个', skillConfigPick:'选择技能', skillConfigNoProf:'请先排刀',
-    auraConfig:'光环设置', auraCarrier:'光环携带者', debuffNameTip:'双击角色名称添加 debuff 标记；单击已标记名称删除', auraCarrierError:'光环战斗位置错误', auraCarrierNeed:'应参加', auraCarrierCurrent:'当前战斗',
+    auraConfig:'光环设置', auraCarrier:'光环携带者', debuffNameTip:'双击角色名称添加标记：当前出战职业含法力喷泉或水叉时为淡绿色 BUFF，其余为 DEBUFF；单击已标记名称删除', auraCarrierError:'光环战斗位置错误', auraCarrierNeed:'应参加', auraCarrierCurrent:'当前战斗',
     auraData:'光环数据',
     auraChanges:'光环更改：{n} 处',
     profMgrName:'职业名', profMgrCount:'成员数', profMgrOrder:'顺序',
@@ -1108,7 +1112,7 @@ const I18N = {
     evenSplitProfessions:'平均分配职业',
     battleStatTotal:'人数', battleStatHeal:'奶', battleStatFork:'绿叉', battleStatShield:'盾', battleStatBow:'弓',
     buffGroupTitle:'加成与约束', buffGroupTip:'点击折叠/展开：全局加成、公会建筑、公会神龛、进度约束',
-    clearBattleEdit:'清除单独修改', clearBattleEditTip:'清除所有成员的单独指定与 debuff 标记，战斗结果恢复按「职业是否属于出战职业」自动计算',
+    clearBattleEdit:'清除单独修改', clearBattleEditTip:'清除所有成员的单独指定与 BUFF/DEBUFF 标记，战斗结果恢复按「职业是否属于出战职业」自动计算',
     publishPlanBtn:'发布试炼', planDeadline:'截止时间', planDeadlineTip:'把每个人的生活分配、战斗分配、职业选择连同截止时间一起上传。截止前其他人点「获取」会读取该排刀；超过截止时间后不再读取并提示「排刀未发布」。',
     planNeedDeadline:'请先选择截止时间', planDeadlinePassed:'请注意，本次发布排刀的截止时间已过。', planPublished:'排刀已发布并上传（截止 {t}）',
     planNotPublished:'排刀未发布', planActive:'排刀生效中，截止 {t}', planExpired:'排刀已过期',
@@ -1242,7 +1246,7 @@ const I18N = {
     calculate:'Calculate', assignCol:'Skilling', nameCol:'Name', maxMembers:'Max',
     displayAssign:'Display', displaySettings:'Display Settings',
     skillConfig:'Skill Config', skillConfigTip:'Click an icon to pick one (aura slot lists auras only, skill slots list non-auras)', skillConfigPick:'Pick a skill',
-    auraConfig:'Aura Config', auraCarrier:'Aura carrier', debuffNameTip:'Double-click a name to add a debuff mark; click a marked name to remove it', auraCarrierError:'Aura battle assignment mismatch', auraCarrierNeed:'Required', auraCarrierCurrent:'Current battle',
+    auraConfig:'Aura Config', auraCarrier:'Aura carrier', debuffNameTip:'Double-click a name to mark it: Mana Fountain or Water Fork professions get a pale green BUFF; others get DEBUFF. Click a marked name to remove it', auraCarrierError:'Aura battle assignment mismatch', auraCarrierNeed:'Required', auraCarrierCurrent:'Current battle',
     auraData:'Aura Data',
     auraChanges:'Aura changes: {n}',
     profMgrName:'Profession', profMgrCount:'Members', profMgrOrder:'Order',
@@ -1271,7 +1275,7 @@ const I18N = {
     evenSplitProfessions:'Split Professions',
     battleStatTotal:'Members', battleStatHeal:'Heal', battleStatFork:'Blooming Trident', battleStatShield:'Shield', battleStatBow:'Bow',
     buffGroupTitle:'Buffs & Constraints', buffGroupTip:'Click to collapse/expand: Global Buffs, Guild Buildings, Guild Shrines, Progress Constraint',
-    clearBattleEdit:'Clear Manual', clearBattleEditTip:'Clear all manual overrides and debuff marks; battle results fall back to auto match by profession',
+    clearBattleEdit:'Clear Manual', clearBattleEditTip:'Clear all manual overrides and BUFF/DEBUFF marks; battle results fall back to auto match by profession',
     publishPlanBtn:'Publish Trial', planDeadline:'Deadline', planDeadlineTip:'Upload everyone\'s life assignment, battle assignment and profession with a deadline. Others can pull the plan before the deadline; after it expires it is no longer applied and "plan not published" is shown.',
     planNeedDeadline:'Please pick a deadline first', planDeadlinePassed:'The deadline has already passed, pick a new one', planPublished:'Plan published and uploaded (deadline {t})',
     planNotPublished:'Plan not published', planActive:'Plan active, deadline {t}', planExpired:'Plan expired',
@@ -5492,11 +5496,14 @@ function battleTrialStats(i) {
   return { total: total, heal: heal, fork: fork, shield: shield, bow: bow };
 }
 // 统计块：总人数只显示数量；奶/绿叉/盾/弓显示标签、数量和默认收起的 ID 下拉名单。
-function battleTrialStatBlock(label, names) {
+function battleTrialStatBlock(label, names, trialIndex, transferRole) {
   const n = names.length;
+  const canTransfer = transferRole === 'heal' || (transferRole === 'fork' && (state.displayEvenSplitProfessions || []).some(function(prof) { return prof.indexOf('绿叉') >= 0; }));
+  const transferTip = state.lang === 'en' ? 'Move one matching member from the other battle trial' : '从另一个战斗试炼调来一人';
   return '<span class="bts-item">'+
     '<span class="bts-label">'+escHtml(label)+'</span>'+
     '<b>'+n+'</b>'+
+    (canTransfer ? '<button type="button" class="bts-add" title="'+escHtml(transferTip)+'" aria-label="'+escHtml(label+' +1')+'" onclick="transferBattleTrialMember('+trialIndex+',\''+transferRole+'\',event)">+</button>' : '')+
     (n ? '<select class="bts-id-select" aria-label="'+escHtml(label+' ID')+'" title="'+escHtml(label+' ID')+'">'+
       '<option value="" selected disabled>ID</option>'+
       names.map(function(name, idx) { return '<option value="'+idx+'">'+escHtml(name)+'</option>'; }).join('')+
@@ -5507,11 +5514,29 @@ function battleTrialStatsHtml(i) {
   const s = battleTrialStats(i);
   return '<span class="battle-trial-stats">'+
     '<span class="bts-item"><span class="bts-label">'+escHtml(t('battleStatTotal'))+'</span><b>'+s.total+'</b></span>'+
-    battleTrialStatBlock(t('battleStatHeal'), s.heal)+
-    battleTrialStatBlock(t('battleStatFork'), s.fork)+
+    battleTrialStatBlock(t('battleStatHeal'), s.heal, i, 'heal')+
+    battleTrialStatBlock(t('battleStatFork'), s.fork, i, 'fork')+
     battleTrialStatBlock(t('battleStatShield'), s.shield)+
     battleTrialStatBlock(t('battleStatBow'), s.bow)+
   '</span>';
+}
+// 仅调动另一试炼的一人，复用单独修改以保留其他人的分配；不触发整体均分。
+function transferBattleTrialMember(trialIndex, role, ev) {
+  if (ev) ev.stopPropagation();
+  if ((trialIndex !== 0 && trialIndex !== 1) || (role !== 'heal' && role !== 'fork')) return;
+  if (displayPlanActive()) return; // 成员端生效排刀为只读，避免写入不可见的覆盖。
+  const targetIcon = state.displayBattleTrialIcons[trialIndex] || 0;
+  const sourceIcon = state.displayBattleTrialIcons[1 - trialIndex] || 0;
+  if (targetIcon === sourceIcon) return;
+  const splitProfs = state.displayEvenSplitProfessions || [];
+  const candidate = (state.members || []).find(function(member) {
+    const prof = displayMemberProfession(member);
+    if (role === 'heal' ? prof.indexOf('奶') < 0 : (prof.indexOf('绿叉') < 0 || splitProfs.indexOf(prof) < 0)) return false;
+    const icons = displayMemberBattleIcons(member);
+    return icons.indexOf(sourceIcon) >= 0 && icons.indexOf(targetIcon) < 0;
+  });
+  if (!candidate) return;
+  selectDisplayBattleIcon('bt' + candidate.id, targetIcon, ev);
 }
 // 展示设置第二行：战斗试炼1 / 战斗试炼2，各带两个下拉：
 //   1) 「仅图标可点击」的单选下拉：刺猬 / 虫群 / 变色龙 / 水母 / 獾
@@ -5803,7 +5828,7 @@ function displayAuraCarrierInfo(p) {
   }
   return { className: classes.join(' '), title: title };
 }
-// 展示页 debuff 仅作人工提示，按公会与角色名在本机保存，不改变计算数据。
+// 展示页 BUFF/DEBUFF 仅作人工提示，按公会与角色名保存；类型随当前出战职业显示。
 let displayDebuffGuild = null;
 let displayDebuffNames = new Set();
 const displayDebuffRemovedOnClick = new WeakSet();
@@ -5827,9 +5852,12 @@ function persistDisplayDebuffMarks() {
     else localStorage.removeItem(key);
   } catch(e) {}
 }
+function displayNameMarkClass(p) {
+  return /法力喷泉|水叉/.test(displayMemberProfession(p)) ? 'has-buff' : 'has-debuff';
+}
 function displayNameCellHtml(p, rowIdx) {
   const marked = displayDebuffMarks().has(String(p.name || '').trim());
-  return '<td class="name-cell display-debuff-name'+(marked ? ' has-debuff' : '')+'" data-debuff-name="'+escHtml(String(p.name || '').trim())+'" title="'+escHtml(t('debuffNameTip'))+'" onclick="onDisplayDebuffClick('+rowIdx+',event)" ondblclick="onDisplayDebuffDoubleClick('+rowIdx+',event)">'+escHtml(p.name)+'</td>';
+  return '<td class="name-cell display-debuff-name'+(marked ? ' ' + displayNameMarkClass(p) : '')+'" data-debuff-name="'+escHtml(String(p.name || '').trim())+'" title="'+escHtml(t('debuffNameTip'))+'" onclick="onDisplayDebuffClick('+rowIdx+',event)" ondblclick="onDisplayDebuffDoubleClick('+rowIdx+',event)">'+escHtml(p.name)+'</td>';
 }
 function setDisplayDebuffMark(p, marked) {
   if (!p || !p.name) return;
@@ -5838,7 +5866,11 @@ function setDisplayDebuffMark(p, marked) {
   persistDisplayDebuffMarks();
   // 只更新背景，保留名称节点，确保浏览器的 click / dblclick 序列不被重绘打断。
   document.querySelectorAll('#display-area td[data-debuff-name]').forEach(function(cell) {
-    if (cell.dataset.debuffName === name) cell.classList.toggle('has-debuff', marked);
+    if (cell.dataset.debuffName === name) {
+      const markClass = displayNameMarkClass(p);
+      cell.classList.toggle('has-debuff', marked && markClass === 'has-debuff');
+      cell.classList.toggle('has-buff', marked && markClass === 'has-buff');
+    }
   });
 }
 function onDisplayDebuffClick(rowIdx, ev) {
