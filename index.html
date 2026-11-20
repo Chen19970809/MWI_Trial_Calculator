@@ -5118,6 +5118,31 @@ function battleIconsFromMask(mask) {
   for (let i = 0; i < BATTLE_TRIAL_ICONS.length; i++) if (m & (1 << i)) out.push(i);
   return out;
 }
+// 新快照显式记录试炼1/2的图标顺序。旧快照没有顺序信息时保留本机可用映射，
+// 只补齐缺失的图标，绝不能按图标编号排序后重排两个试炼。
+function planBattleTrialIcons(plan) {
+  const valid = function(icon) { return Number.isInteger(icon) && icon >= 0 && icon < BATTLE_TRIAL_ICONS.length; };
+  if (plan && Array.isArray(plan.bi) && plan.bi.length === 2 && plan.bi.every(valid)) return plan.bi.slice();
+  const current = state.displayBattleTrialIcons || [];
+  const used = [];
+  Object.values((plan && plan.m) || {}).forEach(function(entry) {
+    if (!Array.isArray(entry)) return;
+    battleIconsFromMask(entry[1]).forEach(function(icon) { if (used.indexOf(icon) < 0) used.push(icon); });
+  });
+  // 多于两个图标可能包含单独指定的其它战斗，不能把它们擅自当作试炼1/2。
+  if (!used.length || used.length > 2) return [valid(current[0]) ? current[0] : 0, valid(current[1]) ? current[1] : 1];
+  const result = [0, 1].map(function(i) { return valid(current[i]) && used.indexOf(current[i]) >= 0 ? current[i] : null; });
+  const remaining = used.filter(function(icon) { return result.indexOf(icon) < 0; });
+  for (let i = 0; i < 2; i++) {
+    if (result[i] === null && remaining.length) result[i] = remaining.shift();
+  }
+  for (let i = 0; i < 2; i++) {
+    if (result[i] !== null) continue;
+    result[i] = valid(current[i]) && current[i] !== result[1 - i] ? current[i]
+      : [0, 1, 2, 3, 4].find(function(icon) { return valid(icon) && icon !== result[1 - i]; });
+  }
+  return result;
+}
 function formatPlanDeadline(iso) {
   const d = new Date(iso);
   if (isNaN(d.getTime())) return String(iso);
@@ -5149,7 +5174,8 @@ function buildDisplayPlan(deadlineIso) {
       if (p && p.name) au[String(p.name).trim()] = String(col.icon).replace(/^ability_/, '');
     });
   }
-  return { _ts: Date.now(), t: deadlineIso, m: m, s: s, k: k, au: au };
+  // bi：有序的 [战斗试炼1图标, 战斗试炼2图标]，0 同样是有效编号。
+  return { _ts: Date.now(), t: deadlineIso, m: m, s: s, k: k, au: au, bi: (state.displayBattleTrialIcons || [0, 1]).slice(0, 2) };
 }
 // ══ 截止时间：双击输入框展开自定义下拉，选项单击即生效（无需确定按钮）════
 let openPlanDeadlineDropdown = false;
@@ -5306,7 +5332,7 @@ async function adjustSkillAura() {
       if (p && p.name) au[String(p.name).trim()] = String(col.icon).replace(/^ability_/, '');
     });
   }
-  state.plan = { _ts: Date.now(), t: base.t, m: base.m, s: s, k: base.k, au: au };
+  state.plan = Object.assign({}, base, { _ts: Date.now(), s: s, au: au, bi: planBattleTrialIcons(base) });
   saveData();
   renderDisplaySettings();
   const ok = await uploadToServerAuto();
@@ -5356,7 +5382,11 @@ function importPlanForce() {
   }
   const next = !planForceOn();
   setPlanForce(next);
-  if (next) importLifeAssignmentLock(state.plan);
+  if (next) {
+    state.displayBattleTrialIcons = planBattleTrialIcons(state.plan);
+    try { localStorage.setItem('mwi_display_battle_trial_icons', JSON.stringify(state.displayBattleTrialIcons)); } catch(e) {}
+    importLifeAssignmentLock(state.plan);
+  }
   try { renderAll(); } catch(e) { console.error('renderAll failed:', e); }
   updatePlanStatusText();
   alert(t(next ? 'importPlanOn' : 'importPlanOff').replace('{t}', formatPlanDeadline(state.plan.t)));
@@ -5389,16 +5419,8 @@ function restorePlanToEditor() {
     }
     want[p.id] = battleIconsFromMask(e[1]);
   });
-  // 反推两个试炼的图标：快照不记录「试炼↔图标」映射（仅存本地），这里把快照中
-  // 出现过的图标按 BATTLE_TRIAL_ICONS 顺序依次分配给试炼1/2。单图标成员随后由
-  // 「单独修改」精确指定，不受该映射影响；只有双图标成员依赖它。
-  const usedIcons = [];
-  Object.keys(want).forEach(function(id) {
-    (want[id] || []).forEach(function(idx) { if (usedIcons.indexOf(idx) < 0) usedIcons.push(idx); });
-  });
-  usedIcons.sort(function(a, b) { return a - b; });
-  if (usedIcons.length >= 1) state.displayBattleTrialIcons[0] = usedIcons[0];
-  if (usedIcons.length >= 2) state.displayBattleTrialIcons[1] = usedIcons[1];
+  // 顺序以快照 bi 为准；旧快照兼容本地映射，避免把两个试炼按编号强行排序。
+  state.displayBattleTrialIcons = planBattleTrialIcons(state.plan);
   // 出战职业列表：按反推出的试炼图标，从位掩码反推该试炼包含的职业（覆盖双图标成员）
   for (let j = 0; j < 2; j++) {
     const icon = state.displayBattleTrialIcons[j] || 0;
