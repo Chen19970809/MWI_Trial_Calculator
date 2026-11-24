@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         [银河奶牛]生产制作计算器-预设版
-// @version      0.1.3
+// @version      0.1.5
 // @namespace    http://tampermonkey.net/
 // @description  银河奶牛计算器，自动计算需求缺口，一键跳转到制作、购买。Calculator for MilkyWayIdle，Automatically calculate supply-demand gaps and navigate to production or purchasing with a single click.
 // @author       RERoger、MonsterFC
@@ -12,6 +12,8 @@
 // @grant        GM_setValue
 // @grant        GM_getValue
 // @grant        GM_setClipboard
+// @grant        GM_xmlhttpRequest
+// @connect      clipboard.im
 // @run-at       document-body
 // @license      MIT
 // @require      https://cdn.jsdelivr.net/npm/lz-string@1.5.0/libs/lz-string.min.js
@@ -450,6 +452,286 @@
             this.chestRowElement?.remove();
             this.chestRowElement = null;
             this.chestRowSpan = null;
+        }
+    }
+    // 网络剪切板只传计算器配置，不传游戏登录信息、背包或请求凭据。
+    class MWI_Calculator_Clipboard {
+        static fields = ['TargetItems', 'TargetItemCategories', 'DetailsOpenState', 'Presets', 'AppliedPresets'];
+        static connectionKey(characterID) {
+            const id = MWI_Calculator_Calculator.normalizeCharacterID(characterID);
+            if (!id) throw new Error('角色ID无效，不能保存剪切板连接信息');
+            const server = location.hostname.toLowerCase().replace(/^www\./, '');
+            return 'MWI_Calculator_ClipboardConnection_' + server + '_' + id;
+        }
+        static loadConnection(characterID) {
+            try {
+                const raw = GM_getValue(this.connectionKey(characterID), '{}');
+                const saved = typeof raw === 'string' ? JSON.parse(raw) : raw;
+                return { address: typeof saved?.address === 'string' ? saved.address : '', password: typeof saved?.password === 'string' ? saved.password : '' };
+            } catch (_) { return { address: '', password: '' }; }
+        }
+        static saveConnection(characterID, address, password) {
+            try {
+                const key = this.connectionKey(characterID), value = JSON.stringify({ address, password });
+                GM_setValue(key, value);
+                if (GM_getValue(key) !== value) throw new Error('write mismatch');
+            } catch (_) { throw new Error('当前角色的剪切板地址和密码保存失败，请检查本地存储'); }
+        }
+        static parseAddress(input) {
+            let url;
+            try { url = new URL(/^https?:\/\//i.test(input.trim()) ? input.trim() : 'https://' + input.trim()); }
+            catch (_) { throw new Error('请输入完整的 clipboard.im 剪切板地址'); }
+            if (url.protocol !== 'https:' || url.hostname !== 'clipboard.im' || url.port || url.username || url.password) throw new Error('只支持 https://clipboard.im/ 下的剪切板地址');
+            let parts = url.pathname.split('/').filter(Boolean).map(decodeURIComponent);
+            if (parts.length === 2 && /^[a-z]{2}(?:-[A-Za-z]{2,4})?$/.test(parts[0])) parts.shift();
+            if (parts.length !== 1 || !/^[A-Za-z0-9]{5,32}$/.test(parts[0])) throw new Error('请填写具体剪切板地址，例如 https://clipboard.im/myitems；名称为5到32位字母或数字');
+            return { url: 'https://clipboard.im/' + encodeURIComponent(parts[0]), api: 'https://clipboard.im/api/clipboard/' + encodeURIComponent(parts[0]) };
+        }
+        static request(method, url, password, body, signal) {
+            return new Promise((resolve, reject) => {
+                if (signal?.aborted) { reject(new Error('操作已取消')); return; }
+                let handle, settled = false;
+                const finish = (fn, value) => { if (settled) return; settled = true; signal?.removeEventListener('abort', abort); fn(value); };
+                const abort = () => { handle?.abort(); finish(reject, new Error('操作已取消')); };
+                signal?.addEventListener('abort', abort, { once: true });
+                try {
+                    handle = GM_xmlhttpRequest({
+                        method, url, anonymous: true, timeout: 20000, redirect: 'error',
+                        headers: { Accept: 'application/json', ...(body === undefined ? {} : { 'Content-Type': 'application/json' }), ...(password ? { Authorization: 'Bearer ' + password } : {}) },
+                        ...(body === undefined ? {} : { data: JSON.stringify(body) }),
+                        onload: response => {
+                            const error = message => { const err = new Error(message); err.status = response.status; return err; };
+                            if (response.finalUrl && new URL(response.finalUrl).origin !== 'https://clipboard.im') return finish(reject, error('剪切板请求发生意外跳转，已停止'));
+                            if (response.status === 401 || response.status === 403) return finish(reject, error('剪切板密码错误或没有访问权限'));
+                            if (response.status < 200 || response.status >= 300) return finish(reject, error('剪切板请求失败（HTTP ' + response.status + '）'));
+                            try { finish(resolve, response.responseText ? JSON.parse(response.responseText) : {}); }
+                            catch (_) { finish(reject, error('剪切板服务返回的数据格式异常')); }
+                        },
+                        onerror: () => finish(reject, new Error('无法连接 clipboard.im，请检查网络及脚本访问权限')),
+                        ontimeout: () => finish(reject, new Error('连接 clipboard.im 超时，请稍后重试')),
+                        onabort: () => finish(reject, new Error('操作已取消')),
+                    });
+                } catch (_) { finish(reject, new Error('无法发起剪切板请求，请检查脚本权限或密码字符')); }
+            });
+        }
+        static async read(address, password, signal, allowMissing = false) {
+            let board;
+            try { board = await this.request('GET', address.api, password, undefined, signal); }
+            catch (error) { if (allowMissing && error.status === 404) return { missing: true, has_password: false, text_content: '' }; throw error; }
+            // 未创建的地址会返回随机地址；不能跟随跳转，把数据存到用户没填过的地方。
+            if (board.redirect) {
+                if (allowMissing) return { missing: true, has_password: false, text_content: '' };
+                throw new Error('这个剪切板尚无数据或地址已更改，请核对地址');
+            }
+            if (board.has_password && !Array.isArray(board.files)) throw new Error(password ? '剪切板密码错误' : '这个剪切板需要密码');
+            if (board.text_content == null && Array.isArray(board.files)) board.text_content = '';
+            if (typeof board.text_content !== 'string') throw new Error('无法读取剪切板文字，请核对地址和密码');
+            return board;
+        }
+        static async upload(address, password, text, guard, signal) {
+            const board = await this.read(address, password, signal, true);
+            guard();
+            if (!board.has_password && password) {
+                // 先保护地址，再写入配置；不得先把配置明文存入无密码的剪切板。
+                try { await this.request('POST', address.api + '/set-password', '', { password }, signal); }
+                catch (error) {
+                    if (!board.missing || error.status !== 404) throw error;
+                    guard();
+                    await this.request('PUT', address.api, '', { text_content: '', create_if_missing: true }, signal);
+                    guard();
+                    await this.request('POST', address.api + '/set-password', '', { password }, signal);
+                }
+                guard();
+            }
+            await this.request('PUT', address.api, password, { text_content: text, create_if_missing: true }, signal);
+            const saved = await this.read(address, password, signal);
+            if (saved.text_content !== text) throw new Error('保存后读取校验不一致，请重新导出；本地配置未更改');
+        }
+        static capture() {
+            const c = MWI_Calculator_Calculator, details = {};
+            for (const [prefix, map] of [['target', c.targetItemDetailsMap], ['shortage', c.shortageItemDetailsMap], ['required', c.requiredItemDetailsMap]]) map.forEach((element, key) => { details[prefix + '_' + key] = element.open; });
+            return {
+                TargetItems: [...c.targetItemsMap.values()].map(({ itemHrid, count, needCalc }) => ({ itemHrid, count, needCalc })),
+                TargetItemCategories: [...c.targetItemCategoryMap.values()].map(({ categoryHrid, needCalc }) => ({ categoryHrid, needCalc })),
+                DetailsOpenState: details,
+                Presets: [...c.presetMap].map(([name, preset]) => ({ name, items: preset.items.map(item => ({ itemHrid: item.itemHrid, count: item.count })), alertRatio: c.normalizeAlertRatio(preset.alertRatio) })),
+                AppliedPresets: [...c.presetAppliedMap].map(([name, applied]) => ({ name, manualFull: applied.manualFull === true, checkedItems: [...(applied.checkedItems || [])], open: applied.details.open, items: applied.rows.map(row => ({ itemHrid: row.item.itemHrid, count: row.item.count, checked: row.checked !== false })) })),
+            };
+        }
+        static validate(data) {
+            const invalid = () => { throw new Error('剪切板配置格式无效，当前数据未更改'); };
+            if (!data || typeof data !== 'object' || this.fields.some(field => !Object.prototype.hasOwnProperty.call(data, field))) invalid();
+            const array = (value, key, mapper) => {
+                if (!Array.isArray(value) || value.length > 20000) invalid();
+                const seen = new Set();
+                return value.map(item => {
+                    if (!item || typeof item !== 'object' || typeof item[key] !== 'string' || !item[key] || item[key].length > 300 || seen.has(item[key])) invalid();
+                    seen.add(item[key]); return mapper(item);
+                });
+            };
+            const count = value => { if (!Number.isFinite(value) || value < 0) invalid(); return value; };
+            const hrid = value => { if (typeof value !== 'string' || !/^\/(?:items|house_rooms|open_chests)\/[A-Za-z0-9_/-]+$/.test(value)) invalid(); return value; };
+            const bool = (value, fallback = true) => { if (value !== undefined && typeof value !== 'boolean') invalid(); return value ?? fallback; };
+            const targetItems = array(data.TargetItems, 'itemHrid', item => ({ itemHrid: hrid(item.itemHrid), count: count(item.count), needCalc: bool(item.needCalc) }));
+            const categories = array(data.TargetItemCategories, 'categoryHrid', item => ({ categoryHrid: item.categoryHrid, needCalc: bool(item.needCalc) }));
+            if (!data.DetailsOpenState || typeof data.DetailsOpenState !== 'object' || Array.isArray(data.DetailsOpenState)) invalid();
+            const details = {};
+            for (const [key, value] of Object.entries(data.DetailsOpenState)) { if (!/^(target|shortage|required)_/.test(key) || typeof value !== 'boolean') invalid(); details[key] = value; }
+            const presets = array(data.Presets, 'name', preset => {
+                const ratio = preset.alertRatio ?? 0;
+                if (!Number.isFinite(ratio) || ratio < 0 || ratio > 1) invalid();
+                return { name: preset.name, alertRatio: ratio, items: array(preset.items, 'itemHrid', item => ({ itemHrid: hrid(item.itemHrid), count: count(item.count) })) };
+            });
+            const presetNames = new Set(presets.map(preset => preset.name));
+            const applied = array(data.AppliedPresets, 'name', preset => {
+                if (!presetNames.has(preset.name) || preset.checkedItems !== undefined && (!Array.isArray(preset.checkedItems) || preset.checkedItems.some(item => typeof item !== 'string'))) invalid();
+                return { name: preset.name, manualFull: bool(preset.manualFull, false), open: bool(preset.open), checkedItems: [...new Set(preset.checkedItems || [])].map(hrid), items: array(preset.items, 'itemHrid', item => ({ itemHrid: hrid(item.itemHrid), count: count(item.count), checked: bool(item.checked) })) };
+            });
+            return { TargetItems: targetItems, TargetItemCategories: categories, DetailsOpenState: details, Presets: presets, AppliedPresets: applied };
+        }
+        static async digest(data) {
+            const bytes = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(JSON.stringify(data)));
+            return [...new Uint8Array(bytes)].map(byte => byte.toString(16).padStart(2, '0')).join('');
+        }
+        static async pack(data, characterID) {
+            const clean = this.validate(data);
+            const text = JSON.stringify({ format: 'MWI_CALCULATOR_CONFIG', version: 1, source: { characterID, server: location.hostname, exportedAt: new Date().toISOString() }, data: clean, sha256: await this.digest(clean) });
+            if (text.length > 2 * 1024 * 1024) throw new Error('配置超过2MB，请精简后再导出');
+            return text;
+        }
+        static async unpack(text) {
+            if (!text || text.length > 2 * 1024 * 1024) throw new Error('剪切板内容为空或过大');
+            let payload;
+            try { payload = JSON.parse(text); } catch (_) { throw new Error('剪切板文字不是有效配置，请确认已从计算器导出'); }
+            if (payload?.format !== 'MWI_CALCULATOR_CONFIG' || payload.version !== 1 || !MWI_Calculator_Calculator.normalizeCharacterID(payload.source?.characterID)) throw new Error('不是此计算器支持的完整配置或版本不兼容');
+            if (typeof payload.sha256 !== 'string' || payload.sha256 !== await this.digest(payload.data)) throw new Error('配置完整性校验失败，当前数据未更改');
+            return { source: payload.source, data: this.validate(payload.data) };
+        }
+        static merge(local, incoming) {
+            const union = (a, b, key) => {
+                const entries = new Map(a.map(item => [item[key], item]));
+                b.forEach(item => { if (!entries.has(item[key])) entries.set(item[key], item); });
+                return [...entries.values()];
+            };
+            const localNames = new Set(local.Presets.map(preset => preset.name));
+            return {
+                TargetItems: union(local.TargetItems, incoming.TargetItems, 'itemHrid'),
+                TargetItemCategories: union(local.TargetItemCategories, incoming.TargetItemCategories, 'categoryHrid'),
+                DetailsOpenState: { ...incoming.DetailsOpenState, ...local.DetailsOpenState },
+                Presets: union(local.Presets, incoming.Presets, 'name'),
+                AppliedPresets: [...local.AppliedPresets, ...incoming.AppliedPresets.filter(preset => !localNames.has(preset.name))],
+            };
+        }
+        static write(key, data) {
+            for (const field of this.fields) {
+                const storageKey = key.replace('TargetItems', field), value = JSON.stringify(data[field]);
+                GM_setValue(storageKey, value);
+                if (GM_getValue(storageKey) !== value) throw new Error('本地配置写入校验失败');
+            }
+        }
+        static reload() {
+            const c = MWI_Calculator_Calculator;
+            c.resetCharacterView();
+            c.presetMap.clear();
+            if (!c.loadCalculatorData()) throw new Error('配置无法加载，可能包含此游戏版本不支持的物品');
+            if (c.renderTimeout) { clearTimeout(c.renderTimeout); c.renderTimeout = null; }
+        }
+        static apply(incoming, mode, guard) {
+            guard();
+            if (mode !== 'overwrite' && mode !== 'merge') throw new Error('未知导入方式');
+            const c = MWI_Calculator_Calculator, key = c.getStorageKey(), before = this.validate(this.capture());
+            const next = mode === 'overwrite' ? incoming : this.merge(before, incoming);
+            try {
+                this.write(key, next);
+                this.reload();
+                this.write(key, this.validate(this.capture()));
+            } catch (error) {
+                try { this.write(key, before); this.reload(); this.write(key, before); }
+                catch (_) { c.characterDataLoaded = false; throw new Error('导入失败且本地存储异常，已暂停自动保存；请保留页面并检查存储空间'); }
+                throw new Error('导入失败，已恢复导入前配置：' + error.message);
+            }
+        }
+        static createButtons() {
+            const row = document.createElement('div');
+            row.className = 'mwi-clipboard-buttons';
+            row.style.cssText = 'display:flex;padding:4px;margin:2px;border-radius:4px;background:#2c2e45;gap:4px';
+            for (const [mode, label] of [['export', '导出'], ['import', '导入']]) {
+                const button = document.createElement('button');
+                button.type = 'button'; button.textContent = label;
+                button.title = label + '完整配置（网络剪切板）';
+                button.style.cssText = 'flex:1;min-width:0;padding:4px 2px;border:0;border-radius:4px;background:#1976D2;color:white;cursor:pointer';
+                button.addEventListener('click', () => this.openDialog(mode));
+                row.appendChild(button);
+            }
+            return row;
+        }
+        static openDialog(mode) {
+            const c = MWI_Calculator_Calculator;
+            if (this.dialogOpen) return;
+            if (!c.canUseCharacterData()) { alert('请等待当前角色数据加载完成'); return; }
+            this.dialogOpen = true;
+            const id = c.activeCharacterID, generation = c.characterGeneration;
+            const connection = this.loadConnection(id);
+            const controller = new AbortController();
+            const guard = () => { if (controller.signal.aborted) throw new Error('操作已取消'); if (!c.canUseCharacterData() || c.activeCharacterID !== id || c.characterGeneration !== generation) throw new Error('当前角色已变化，请关闭窗口后重新操作'); };
+            const overlay = document.createElement('div');
+            overlay.style.cssText = 'position:fixed;inset:0;z-index:2147483646;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center';
+            const box = c.createImportDialogBox();
+            box.style.width = 'min(440px,90vw)'; box.style.maxHeight = '85vh'; box.style.overflow = 'auto';
+            box.setAttribute('role', 'dialog'); box.setAttribute('aria-modal', 'true');
+            const title = document.createElement('h3');
+            title.textContent = (mode === 'export' ? '导出到网络剪切板' : '从网络剪切板导入') + ' · 角色 ' + id;
+            title.style.cssText = 'margin:0 0 12px;font-size:16px';
+            const addressLabel = document.createElement('label'); addressLabel.textContent = '剪切板地址';
+            const address = document.createElement('input'); address.type = 'url'; address.placeholder = 'https://clipboard.im/myitems'; address.value = connection.address; address.autocomplete = 'off';
+            const passwordLabel = document.createElement('label'); passwordLabel.textContent = '密码';
+            const password = document.createElement('input'); password.type = 'password'; password.autocomplete = 'off'; password.value = connection.password; password.placeholder = '无密码可留空；确定后按当前角色保存在本机';
+            for (const [label, input] of [[addressLabel, address], [passwordLabel, password]]) {
+                label.style.cssText = 'display:block;margin:10px 0 4px';
+                input.style.cssText = 'display:block;width:100%;box-sizing:border-box;padding:8px;border:1px solid #7084aa;border-radius:5px;color:#eef3ff;background:#101d38;font:inherit';
+                label.appendChild(input);
+            }
+            const note = document.createElement('div');
+            note.textContent = mode === 'export' ? '保存目标清单、分类、展开状态、自定义预设和已应用预设。确定后覆盖该剪切板的文字，保留文件。未设密码时会使用所填密码保护地址。' : '读取后可选择合并、覆盖或取消。合并保留本地已有同名物品和预设，覆盖还原整份配置。';
+            note.style.cssText = 'margin:12px 0;color:#bac9e6;font-size:12px';
+            const status = document.createElement('div'); status.setAttribute('role', 'status'); status.style.cssText = 'white-space:pre-wrap;overflow-wrap:anywhere;margin:10px 0;color:#f5d18c';
+            const actions = document.createElement('div'); actions.style.cssText = 'display:flex;gap:8px;justify-content:flex-end';
+            const cancel = document.createElement('button'); cancel.type = 'button'; cancel.textContent = '取消';
+            const confirm = document.createElement('button'); confirm.type = 'button'; confirm.textContent = '确定';
+            for (const button of [cancel, confirm]) button.style.cssText = 'border:0;border-radius:5px;padding:7px 15px;background:#344879;color:white;cursor:pointer';
+            confirm.style.background = '#1976D2';
+            const close = () => { controller.abort(); password.value = ''; overlay.remove(); this.dialogOpen = false; };
+            cancel.addEventListener('click', close);
+            overlay.addEventListener('keydown', event => { if (event.key === 'Escape') { event.stopPropagation(); close(); } });
+            confirm.addEventListener('click', async () => {
+                if (confirm.disabled) return;
+                confirm.disabled = true; address.disabled = true; password.disabled = true;
+                try {
+                    guard();
+                    const destination = this.parseAddress(address.value), secret = password.value;
+                    this.saveConnection(id, destination.url, secret);
+                    status.textContent = mode === 'export' ? '正在保存并校验…' : '正在读取并校验…';
+                    if (mode === 'export') {
+                        const text = await this.pack(this.capture(), id);
+                        guard();
+                        await this.upload(destination, secret, text, guard, controller.signal);
+                        status.textContent = '导出成功。请在另一台设备使用相同地址和密码导入。';
+                    } else {
+                        const board = await this.read(destination, secret, controller.signal);
+                        const payload = await this.unpack(board.text_content);
+                        guard();
+                        const choice = await c.showImportModeDialog(payload.source.characterID);
+                        if (!choice) { status.textContent = '已取消导入，当前配置未更改。'; return; }
+                        guard();
+                        this.apply(payload.data, choice, guard);
+                        status.textContent = choice === 'overwrite' ? '覆盖导入成功，已还原剪切板配置。' : '合并导入成功，已保留本地同名项并新增缺少项。';
+                    }
+                    cancel.textContent = '关闭';
+                } catch (error) { if (!controller.signal.aborted) status.textContent = error.message || '操作失败，当前配置未更改'; }
+                finally { confirm.disabled = false; address.disabled = false; password.disabled = false; }
+            });
+            for (const input of [address, password]) input.addEventListener('keydown', event => { if (event.key === 'Enter') { event.preventDefault(); confirm.click(); } });
+            actions.append(cancel, confirm); box.append(title, addressLabel, passwordLabel, note, status, actions); overlay.appendChild(box); document.body.appendChild(overlay); address.focus();
         }
     }
     class MWI_Calculator_Calculator {
@@ -1650,6 +1932,7 @@
             rightDiv.style.padding = '0px 2px';
             rightDiv.appendChild(MWI_Calculator_Calculator.createMaterialPlanningModeSelector());
             rightDiv.appendChild(MWI_Calculator_Calculator.createHouseAcquisitionModeSelector());
+            rightDiv.appendChild(MWI_Calculator_Clipboard.createButtons());
             rightDiv.appendChild(this.createDowngradeSection('downgrade',
                 MWI_Calculator_I18n.isChinese() ? '强化降级' : 'Enhancement downgrade'));
             rightDiv.appendChild(this.createDowngradeSection('inherit',
@@ -2141,6 +2424,8 @@
                 const data = [...this.presetAppliedMap.entries()].map(([appliedName, applied]) => ({
                     name: appliedName,
                     manualFull: applied.manualFull === true,
+                    checkedItems: [...(applied.checkedItems || [])],
+                    open: applied.details.open,
                     items: (applied.rows || []).map(row => ({
                         itemHrid: row.item.itemHrid,
                         count: row.item.count,
@@ -2173,8 +2458,15 @@
                         if (!item || typeof item.itemHrid !== 'string' || !Number.isFinite(item.count)) continue;
                         items.push({ itemHrid: item.itemHrid, count: item.count, checked: item.checked !== false });
                     }
-                    if (items.length > 0) this.applyPresetItems(entry.name, items, entry.manualFull === true);
+                    if (items.length > 0) {
+                        this.applyPresetItems(entry.name, items, entry.manualFull === true);
+                        const applied = this.presetAppliedMap.get(entry.name);
+                        if (applied && Array.isArray(entry.checkedItems)) applied.checkedItems = [...new Set(entry.checkedItems.filter(hrid => this.targetItemsMap.has(hrid)))];
+                        if (applied && typeof entry.open === 'boolean') applied.details.open = entry.open;
+                    }
                 }
+                // applyPresetItems 会即时保存；补存还原后的占位记录与展开状态，避免下次刷新丢失。
+                if (loaded.length > 0 && !this.saveAppliedPresets()) return false;
                 return true;
             }
             catch (error) {
