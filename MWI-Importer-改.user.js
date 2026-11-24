@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MWI-Importer-改配装导出
 // @namespace    http://tampermonkey.net/
-// @version      2.4.2
+// @version      2.4.8
 // @description  脚本基于Mooneycalc-Importer v5.3，增加了组队模拟功能，使用时请手动查看队友装备以获取数据。https://amvoidguy.github.io/MWICombatSimulatorTest/dist/index.html.
 // @match        https://www.milkywayidle.com/*
 // @match        https://www.milkywayidlecn.com/*
@@ -32,6 +32,7 @@
     const IMPORTER_GAME_CHARACTER_KEY = "mwi_importer_game_character_v1";
     const IMPORTER_SIM_CHARACTER_KEY = "mwi_importer_sim_character_v1";
     let currentTabCharacter = "";
+    let simulatorImportSequence = 0;
     const simulatorTeamState = {character: "", manual: false, initialized: false, attempts: 0};
     function parseCachedObject(key) {
         try {
@@ -138,7 +139,7 @@
         if (!selected || !name || !getCharacterSnapshot(selected)) {
             if (++simulatorTeamState.attempts < 10) {
                 setTimeout(() => { void initializeSimulatorTeam(button); }, 1000);
-            } else showTeamMemberToast(isZH ? "未找到登录角色的队伍，请刷新对应游戏页面，或手动选择队伍。" : "No team found for the current character. Refresh its game page or select a team manually.");
+            } else reportTeamImportStatus(isZH ? "未找到登录角色的队伍，请刷新对应游戏页面，或手动选择队伍。" : "No team found for the current character. Refresh its game page or select a team manually.");
             return;
         }
         simulatorTeamState.initialized = true;
@@ -155,7 +156,7 @@
                 console.warn("[MWI-Importer] 自动导入失败", error);
             }
         } else text += isZH ? "\n自动导入已关闭，可点击“单人/组队导入”。" : "\nAuto-import is off. Click the team import button to import.";
-        showTeamMemberToast(text);
+        reportTeamImportStatus(text);
     }
 
     const SCRIPT_SIMULATE_TIME = "24";//模拟时长
@@ -337,7 +338,173 @@
             }
         }
         cacheCurrentPartyRoster(obj);
+        cacheCurrentCombatTarget(obj);
         return message;
+    }
+
+    function normalizeCombatTarget(action) {
+        if (!action || typeof action.actionHrid !== "string" || !action.actionHrid.startsWith("/actions/combat/")) return null;
+        const raw = action.difficultyTier;
+        // 游戏的零值字段可能省略；战斗动作省略 difficultyTier 时就是 T0。
+        const tier = raw === null || raw === undefined ? 0 : raw === "" ? null : Number(raw);
+        return { actionHrid: action.actionHrid, difficultyTier: Number.isInteger(tier) && tier >= 0 ? tier : null };
+    }
+
+    function combatTargetFromProfile(profile, useCache = true) {
+        if (!profile) return null;
+        // 始终先读实际动作与队伍设置，旧版空缓存不能遮住有效的队伍目标。
+        if (profile.labyrinth && profile.labyrinth.isActive) return null;
+        const party = profile.partyInfo && profile.partyInfo.party;
+        const partyTarget = normalizeCombatTarget(party);
+        const actions = profile.characterActions;
+        const first = Array.isArray(actions) ? actions[0] : null;
+        const current = normalizeCombatTarget(first);
+        if (current) return current;
+        // 当前角色可在做生活技能，队伍也可处于招募/候战状态；仍需导入队伍已设置的模拟目标。
+        if (partyTarget) return partyTarget;
+        // 不把排在生活动作后面的战斗队列误当作当前目标。
+        if (first) return null;
+        const partyActions = Object.values(profile.partyInfo && profile.partyInfo.partyActionMap || {});
+        const targets = partyActions.map(normalizeCombatTarget).filter(Boolean);
+        const unique = new Map(targets.map(target => [target.actionHrid + "|" + target.difficultyTier, target]));
+        if (unique.size === 1) return unique.values().next().value;
+        // 已有明确动作/队伍快照时不复活旧目标；仅兼容缺少原始快照的新版缓存。
+        if (Array.isArray(profile.characterActions) || Object.prototype.hasOwnProperty.call(profile, "partyInfo")) return null;
+        return useCache && profile._mwiCombatTargetVersion === 3 ? normalizeCombatTarget(profile._mwiCombatTarget) : null;
+    }
+
+    function mergeCombatActionUpdates(actions, updates) {
+        let result = Array.isArray(actions) ? actions.slice() : [];
+        (updates || []).forEach(action => {
+            if (!action || action.id === undefined || action.id === null) return;
+            const at = result.findIndex(previous => String(previous.id) === String(action.id));
+            if (action.isDone) {
+                if (at >= 0) result.splice(at, 1);
+            } else if (at >= 0) result[at] = action;
+            else result.push(action);
+        });
+        // 与游戏动作队列一致：组队动作在前，其余按 ordinal 排序。
+        return result.sort((a, b) => Number(!!b.partyID) - Number(!!a.partyID) || (Number(a.ordinal) || 0) - (Number(b.ordinal) || 0));
+    }
+
+    function cacheCurrentCombatTarget(message) {
+        if (!currentTabCharacter) return;
+        const profile = getCharacterSnapshot(currentTabCharacter);
+        if (!profile) return;
+        let changed = false;
+        if (message.type === "init_character_data") {
+            profile.characterActions = message.characterActions || [];
+            profile.partyInfo = message.partyInfo || null;
+            profile.labyrinth = message.labyrinth || null;
+            changed = true;
+        } else if (message.type === "actions_updated" && Array.isArray(message.endCharacterActions)) {
+            profile.characterActions = mergeCombatActionUpdates(profile.characterActions, message.endCharacterActions);
+            changed = true;
+        } else if (Array.isArray(message.characterActions)) {
+            profile.characterActions = message.characterActions;
+            changed = true;
+        } else if (message.startCharacterAction && message.startCharacterAction.actionHrid) {
+            profile.characterActions = mergeCombatActionUpdates(profile.characterActions, [message.startCharacterAction]);
+            changed = true;
+        } else if (message.type === "action_completed" && message.endCharacterAction && message.endCharacterAction.actionHrid) {
+            profile.characterActions = mergeCombatActionUpdates(profile.characterActions, [message.endCharacterAction]);
+            changed = true;
+        } else if (message.type === "labyrinth_enter" || message.type === "labyrinth_update" || message.type === "labyrinth_updated" || message.type === "labyrinth_exit") {
+            if (message.labyrinth) profile.labyrinth = message.labyrinth;
+            else if (message.type === "labyrinth_enter") profile.labyrinth = { isActive: true };
+            else if (message.type === "labyrinth_exit") profile.labyrinth = null;
+            changed = true;
+        } else if (Object.prototype.hasOwnProperty.call(message, "partyInfo")) {
+            profile.partyInfo = message.partyInfo;
+            if (!message.partyInfo || message.partyInfo.party && message.partyInfo.party.status !== "battling") {
+                profile.characterActions = (profile.characterActions || []).filter(action => !action.partyID);
+            }
+            changed = true;
+        }
+        if (!changed) return;
+        profile._mwiCombatTarget = combatTargetFromProfile(profile, false);
+        // 队伍更新本身携带的目标比上一条动作队列更新更新；无需等待下一波战斗完成。
+        const party = message.partyInfo && message.partyInfo.party;
+        if (party && party.status === "battling") profile._mwiCombatTarget = normalizeCombatTarget(party) || profile._mwiCombatTarget;
+        profile._mwiCombatTargetVersion = 3;
+        profile._mwiCombatTargetUpdatedAt = Date.now();
+        GM_setValue("profile_" + currentTabCharacter, JSON.stringify(profile));
+    }
+
+    async function waitSimulatorCondition(test, isCurrent, timeout = 4000) {
+        const deadline = Date.now() + timeout;
+        do {
+            if (!isCurrent()) return null;
+            const result = test();
+            if (result) return result;
+            await new Promise(resolve => setTimeout(resolve, 100));
+        } while (Date.now() < deadline);
+        return null;
+    }
+
+    function simulatorChange(element, value, checkbox = false) {
+        const field = checkbox ? "checked" : "value";
+        if (element[field] === value) return;
+        element[field] = value;
+        element.dispatchEvent(new Event("input", { bubbles: true }));
+        element.dispatchEvent(new Event("change", { bubbles: true }));
+    }
+
+    async function applySimulatorTeamSetup(teamNames, target, isCurrent) {
+        const warnings = [];
+        let targetLabel = "";
+        const controls = await waitSimulatorCondition(() => {
+            const boxes = Array.from(document.querySelectorAll(".player-checkbox"));
+            return teamNames.every((_, i) => boxes.some(box => box.id === "player" + (i + 1))) && boxes.length ? boxes : null;
+        }, isCurrent);
+        if (!controls) return { warnings: [isZH ? "成员选择控件尚未就绪" : "Player selection is not ready"], targetLabel };
+        if (target && target.difficultyTier !== null) {
+            const match = await waitSimulatorCondition(() => {
+                for (const id of ["selectZone", "selectDungeon"]) {
+                    const select = document.getElementById(id);
+                    const option = select && Array.from(select.options).find(option => option.value === target.actionHrid && !option.disabled);
+                    if (option && document.getElementById("selectDifficulty") && document.getElementById("simDungeonToggle")) return { select, option, dungeon: id === "selectDungeon" };
+                }
+                return null;
+            }, isCurrent);
+            if (!isCurrent()) return { warnings, targetLabel };
+            if (match) {
+                const modeIds = ["simAllZoneToggle", "simAllSoloToggle", "simAllLabyrinthsToggle", "simLabyrinthToggle", "simDungeonToggle"];
+                const previousModes = modeIds.map(id => document.getElementById(id)).filter(Boolean).map(element => [element, element.checked]);
+                const previousValues = ["selectZone", "selectDungeon", "selectDifficulty"].map(id => document.getElementById(id)).filter(Boolean).map(element => [element, element.value]);
+                const restore = () => {
+                    previousModes.forEach(([element, checked]) => simulatorChange(element, checked, true));
+                    previousValues.forEach(([element, value]) => simulatorChange(element, value));
+                };
+                try {
+                    for (const [element] of previousModes) simulatorChange(element, element.id === "simDungeonToggle" && match.dungeon, true);
+                    simulatorChange(match.select, target.actionHrid);
+                    const difficulty = document.getElementById("selectDifficulty");
+                    const tier = String(target.difficultyTier);
+                    // 不能把不支持的难度悄悄降为 T0；模式不匹配时整体还原目标设置。
+                    const supported = Array.from(difficulty.options).some(option => option.value === tier && !option.disabled);
+                    if (!supported) throw new Error("unsupported tier");
+                    simulatorChange(difficulty, tier);
+                    if (match.select.value !== target.actionHrid || difficulty.value !== tier || document.getElementById("simDungeonToggle").checked !== match.dungeon) throw new Error("selection mismatch");
+                    targetLabel = match.option.textContent.trim() + " T" + tier;
+                } catch (_) {
+                    restore();
+                    warnings.push(isZH ? "目标区域或难度不受支持，已保留原设置" : "Unsupported zone or tier; previous settings kept");
+                }
+            } else warnings.push(isZH ? "模拟器未找到目标区域，已保留原设置" : "Target zone unavailable; previous settings kept");
+        } else warnings.push(isZH ? "缺少当前战斗区域或难度，已保留原设置" : "Current zone or tier missing; previous settings kept");
+        if (!isCurrent()) return { warnings, targetLabel };
+        // 最后设置成员，避免地下城模式的 change 事件把全部五人重新勾上。
+        const boxes = Array.from(document.querySelectorAll(".player-checkbox"));
+        boxes.forEach(box => {
+            const number = Number(box.id.replace(/^player/, ""));
+            simulatorChange(box, Number.isInteger(number) && number >= 1 && number <= teamNames.length, true);
+        });
+        teamNames.forEach((name, i) => document.querySelectorAll('label[for="player' + (i + 1) + '"]').forEach(label => { label.textContent = name; }));
+        const selected = boxes.filter(box => box.checked).map(box => box.id).sort().join(",");
+        const expected = teamNames.map((_, i) => "player" + (i + 1)).sort().join(",");
+        if (selected !== expected) warnings.push(isZH ? "成员勾选核对失败，请手动检查" : "Player selection mismatch; please check");
+        return { warnings, targetLabel };
     }
 
     // 把 loadout_shared 的战斗相关字段（装备/技能书/食物咖啡/trigger）覆盖进队友存档
@@ -1109,7 +1276,7 @@
 
                     let checkedProfile = getSelectedValue()
 
-                    showTeamMemberStatusToast(checkedProfile);
+                    reportTeamMemberStatus(checkedProfile);
 
                     importCombatSimData(button,checkedProfile);
                     return false;
@@ -1297,8 +1464,8 @@
         });
         return lines.join("\n");
     }
-    // 多行提示框：自动消失，不需要手动关闭
-    function showTeamMemberToast(text, duration = 6000) {
+    // 保留队伍切换及成员状态提示；导入完成摘要仅记录到控制台。
+    function reportTeamImportStatus(text, duration = 6000) {
         try {
             const el = document.createElement("div");
             el.textContent = text;
@@ -1309,12 +1476,14 @@
             setTimeout(() => el.remove(), duration);
         } catch (e) {}
     }
-    function showTeamMemberStatusToast(checkedProfile) {
+    function reportTeamMemberStatus(checkedProfile) {
         let text = buildTeamMemberStatusText(checkedProfile);
-        if (text) showTeamMemberToast(text);
+        if (text) reportTeamImportStatus(text);
     }
 
     async function importCombatSimData(button,checkedProfile) {
+        const sequence = ++simulatorImportSequence;
+        const isCurrent = () => sequence === simulatorImportSequence;
         let profileRaw = GM_getValue("profile_"+ checkedProfile);
         let playerInfo = null;
         try { playerInfo = JSON.parse(profileRaw); } catch (e) {
@@ -1328,7 +1497,10 @@
 
         let playerArr = [];
         if ( playerInfo.partyInfo ) {
-            Object.values(playerInfo.partyInfo.partySlotMap).forEach((value,key) => { if (value.characterID) playerArr.push(playerInfo.partyInfo.sharableCharacterMap[value.characterID].name); });
+            Object.values(playerInfo.partyInfo.partySlotMap || {}).forEach(value => {
+                const mate = playerInfo.partyInfo.sharableCharacterMap && playerInfo.partyInfo.sharableCharacterMap[value.characterID];
+                if (mate && mate.name) playerArr.push(mate.name);
+            });
         }else{
             playerArr.push(playerInfo.character.name)
         }
@@ -1345,14 +1517,24 @@
         }
 
         const jsonObj = constructImportJsonObj_team(obj,checkedProfile);
-        if (!jsonObj || !jsonObj.players || !jsonObj.player_number) return false;
+        if (!jsonObj || !jsonObj.players || !Number.isInteger(jsonObj.player_number) || jsonObj.player_number < 1 || jsonObj.player_number > 5) return false;
         const importButton = document.querySelector("button#buttonImportSet");
-        if (!importButton) return false;
+        const groupTab = document.getElementById("group-combat-tab");
+        if (!importButton || !groupTab) return false;
         for (let i = 1; i <= jsonObj.player_number; i++) {
             if (!document.querySelector("input#inputSetGroupCombatplayer" + i) || !document.querySelector("a#player" + i + "-tab")) return false;
         }
 
         const teamNames = listSnapshotPlayerNames(obj);
+        if (teamNames.length !== jsonObj.player_number) return false;
+        // 始终走组队导入入口；清除残留输入，避免上一次的整队 JSON 覆盖本次人物。
+        groupTab.click();
+        const allInput = document.getElementById("inputSetGroupCombatAll");
+        if (allInput) allInput.value = "";
+        for (let i = 1; i <= 5; i++) {
+            const input = document.getElementById("inputSetGroupCombatplayer" + i);
+            if (input) input.value = "";
+        }
         for(let i=1;i<=jsonObj.player_number;i++){
             const importInputElem = document.querySelector(`input#inputSetGroupCombatplayer`+i);
             importInputElem.value = JSON.stringify(jsonObj.players[i-1]);
@@ -1360,12 +1542,18 @@
             document.querySelector(`a#player${i}-tab`).textContent = teamNames[i-1] || playerArr[i-1] || "";
         }
         importButton.click();
+        const setup = await applySimulatorTeamSetup(teamNames, combatTargetFromProfile(playerInfo), isCurrent);
+        if (!isCurrent()) return false;
 
         let timestamp = new Date(obj.combatStartTime).getTime();
         let now = new Date().getTime();
         button.textContent = isZH
             ? "已导入，人物数据更新时间：" + timeReadable(now - timestamp) + " 前"
         : "Character Imported, updated " + timeReadable(now - timestamp) + " ago";
+        const summary = (isZH ? "已导入队伍：" : "Imported team: ") + teamNames.join(", ")
+            + (setup.warnings.length ? "；" + setup.warnings.join("；") : "");
+        console.info("[MWI-Importer]", summary);
+        if (setup.warnings.length) button.textContent += isZH ? "（部分设置需检查）" : " (check settings)";
         return true;
     }
 
@@ -1493,19 +1681,10 @@
             }
         }
         // Zone
-        let hasMap = false;
-        for (const action of init_character_obj.characterActions) {
-            if (
-                action &&
-                action.actionHrid.includes("/actions/combat/")
-            ) {
-                hasMap = true;
-                exportObj.zone = action.actionHrid;
-                break;
-            }
-        }
-        if (!hasMap) {
-            exportObj.zone = "/actions/combat/fly";
+        const target = combatTargetFromProfile(init_character_obj);
+        if (target) {
+            exportObj.zone = target.actionHrid;
+            if (target.difficultyTier !== null) exportObj.difficultyTier = target.difficultyTier;
         }
         // SimulationTime
         exportObj.simulationTime = SCRIPT_SIMULATE_TIME;
