@@ -117,18 +117,21 @@
             name: '铁牛计算器-预设版',
             url: 'https://raw.githubusercontent.com/Chen19970809/MWI_Trial_Calculator/refs/heads/main/mwi-calculator.user.js',
             content: '-在上面版本中额外做了预设\n'
-                + '-可以手动在预设中添加一系列物品\n'
-                + '-开启or关闭预设将一次性添加移除预设中包含的所有物品\n'
-                + '-可以在配装页面点击按钮自动生成配装预设(吃喝)\n'
-                + '-根据暴饮自动计算每天的消耗最大值\n'
-                + '-设置《监测比例》可以在预设中物品数量低于比例时自动添加缺口\n'
-                + '-注意:将丢失旧计算器数据,需手动重新添加(但可以通过UID复制本地其他角色,所以只需要重新添加一个角色就可以了)',
+                + '-预设\n'
+                + '-配装页面生成配装预设(吃喝)\n'
+                + '-可以按比例监测预设，低与比例提醒\n'
+                + '-配合剪切板云存储数据一键导入导出计算器缓存\n'
+                + '-新增代币计算所需箱子\n'
+                + '-新增“开箱关键字”\n',
         },
         {
             name: 'shykai战斗模拟器导入_改',
             url: 'https://raw.githubusercontent.com/Chen19970809/MWI_Trial_Calculator/refs/heads/main/MWI-Importer-%E6%94%B9.user.js',
             content: '-原插件功能：支持导入神龛、迷宫升级\n'
-                + '-魔改功能：配装页支持导出模拟数据',
+                + '-不用进战斗即可导入\n'
+                + '-支持导入选了配装的配装（即使他穿着生活装）\n'
+                + '-配装页面支持导出模拟数据\n'
+                + '-配装页面支持导入模拟数据\n',
         },
     ]);
 
@@ -4574,7 +4577,7 @@
         return (stats.base + stats.growth * (auraLevel - 1)) * (1 + (attrLevel || 0) * g);
     }
     // ── 光环优先级：5 个槽位可配置，队伍人数为 X 时按前 X 个光环推荐最优解 ──
-    const AURA_PRIORITY_DEFAULT = ['speed', 'critical', 'physical', '', ''];
+    const AURA_PRIORITY_DEFAULT = ['physical', 'speed', 'critical', 'invincible', 'guardian'];
     function auraPriorityList() {
         let arr = null;
         try { arr = readJsonCached(K_AURA_PRIORITY, null); } catch (_) {}

@@ -241,7 +241,10 @@
             this.initDisplayProperties();
         }
         initDisplayProperties() {
-            if ([...MWI_Calculator_ActionDetailPlus.processableItemMap.values()].includes(this.itemHrid)) {
+            if (this.itemHrid.endsWith('_refinement_shard')) {
+                this.categoryHrid = '/item_categories/refinement';
+            }
+            else if ([...MWI_Calculator_ActionDetailPlus.processableItemMap.values()].includes(this.itemHrid)) {
                 this.categoryHrid = '/item_categories/materials';
             }
             else if (this.itemHrid.endsWith('_tea')) {
@@ -3116,6 +3119,13 @@
             box.append(nameRow, guzzlingRow, searchRow, itemsList, buttonRow);
             overlay.appendChild(box);
             document.body.appendChild(overlay);
+            // 按原始实际高度翻倍，保留原宽度，且整个窗口不超过视口高度的 88%。
+            const initialHeight = box.getBoundingClientRect().height;
+            const boxStyle = getComputedStyle(box);
+            const verticalInsets = ['paddingTop', 'paddingBottom', 'borderTopWidth', 'borderBottomWidth']
+                .reduce((sum, property) => sum + (parseFloat(boxStyle[property]) || 0), 0);
+            box.style.maxHeight = `max(0px, calc(88vh - ${verticalInsets}px))`;
+            box.style.minHeight = `min(${Math.max(0, initialHeight * 2 - verticalInsets)}px, ${box.style.maxHeight})`;
             nameInput.focus();
         }
         // 创建大类添加框：选择物品大类后一次性加入该类全部物品
@@ -3268,9 +3278,12 @@
             let addedCount = 0;
             Object.entries(itemDetailMap).forEach(([itemHrid, detail]) => {
                 if (!itemHrid.startsWith('/items/')) return;
-                // 与 DisplayItem 保持一致：加工产物、茶和咖啡可能需要特殊归类
+                // 与 DisplayItem 保持一致：精炼碎片、加工产物、茶和咖啡特殊归类
                 let itemCategoryHrid = detail?.categoryHrid;
-                if ([...(MWI_Calculator_ActionDetailPlus.processableItemMap ?? new Map()).values()].includes(itemHrid)) {
+                if (itemHrid.endsWith('_refinement_shard')) {
+                    itemCategoryHrid = '/item_categories/refinement';
+                }
+                else if ([...(MWI_Calculator_ActionDetailPlus.processableItemMap ?? new Map()).values()].includes(itemHrid)) {
                     itemCategoryHrid = '/item_categories/materials';
                 }
                 else if (itemHrid.endsWith('_tea')) {
@@ -3997,38 +4010,7 @@
                 if (requiredDetails.hidden !== (requiredItemCount === 0)) requiredDetails.hidden = requiredItemCount === 0;
             });
         }
-        // 货币代币 → 对应宝箱定义（中英文本地化名称，运行时反查 hrid）。
-        static getTokenChestDefs() {
-            this.tokenChestDefs ||= [
-                { token: ['奇幻代币', 'Chimerical Token'], chest: ['奇幻宝箱', 'Chimerical Chest'], perChest: 462, perChestMax: 726 },
-                { token: ['阴森代币', 'Sinister Token'], chest: ['阴森宝箱', 'Sinister Chest'], perChest: 487.5, perChestMax: 767  },
-                { token: ['秘法代币', 'Enchanted Token'], chest: ['秘法宝箱', 'Enchanted Chest'], perChest: 487.5, perChestMax: 847  },
-                { token: ['海盗代币', 'Pirate Token'], chest: ['海盗宝箱', 'Pirate Chest'], perChest: 487.5, perChestMax: 877  },
-                { token: ['阴森精炼碎片', 'Sinister Refinement Shard'], chest: ['阴森精炼宝箱', 'Sinister Refinement Chest'], perChest: 1.875, perChestMax: 1.875  },
-                { token: ['奇幻精炼碎片', 'Chimerical Refinement Shard'], chest: ['奇幻精炼宝箱', 'Chimerical Refinement Chest'], perChest: 1.875, perChestMax: 1.875  },
-                { token: ['秘法精炼碎片', 'Enchanted Refinement Shard'], chest: ['秘法精炼宝箱', 'Enchanted Refinement Chest'], perChest: 1.875, perChestMax: 1.875  },
-                { token: ['海盗精炼碎片', 'Pirate Refinement Shard'], chest: ['海盗精炼宝箱', 'Pirate Refinement Chest'], perChest: 1.875, perChestMax: 1.875  },
-            ];
-            return this.tokenChestDefs;
-        }
-        // 代币/精炼碎片 → 宝箱映射（含每箱折合数量）；非映射物品或反查失败返回 null。
-        static getTokenChestPair(itemHrid) {
-            this.tokenChestCache ||= new Map();
-            if (this.tokenChestCache.has(itemHrid)) return this.tokenChestCache.get(itemHrid);
-            let pair = null;
-            const tokenName = MWI_Calculator_I18n.getItemName(itemHrid);
-            if (tokenName && tokenName !== itemHrid) {
-                const def = this.getTokenChestDefs().find(d => d.token.includes(tokenName));
-                if (def) {
-                    const chestHrid = MWI_Calculator_I18n.getHridByName(def.chest[0], 'itemNames')
-                        || MWI_Calculator_I18n.getHridByName(def.chest[1], 'itemNames');
-                    if (chestHrid) pair = { chestHrid, perChest: def.perChest, perChestMax: def.perChestMax };
-                }
-            }
-            this.tokenChestCache.set(itemHrid, pair);
-            return pair;
-        }
-        // 代币缺口行下方折算显示对应宝箱还需数量：ceil(缺口/每箱代币) - 现有宝箱。
+        // 代币缺口下方显示共需开启、已有和还需补充的宝箱数量。
         // 返回缺口清单中新的尾行元素（宝箱行或原代币行），保证后续缺口行插在其后。
         static updateTokenChestRow(requiredItem, lastElement) {
             const pair = this.getTokenChestPair(requiredItem.itemHrid);
@@ -4037,31 +4019,53 @@
             const perChest = pair
                 ? (this.materialPlanningMode === 'limit' ? (pair.perChestMax ?? pair.perChest) : pair.perChest)
                 : 0;
-            const need = pair && shortage > 0
-                ? Math.max(0, Math.ceil(shortage / perChest) - MWI_Calculator_ItemsMap.getCount(pair.chestHrid))
-                : 0;
-            if (!(need > 0)) {
+            const total = pair && shortage > 0 ? Math.ceil(shortage / perChest) : 0;
+            const owned = pair ? MWI_Calculator_ItemsMap.getCount(pair.chestHrid) : 0;
+            const need = Math.max(0, total - owned);
+            if (!(total > 0)) {
                 requiredItem.chestRowElement?.remove();
                 requiredItem.chestRowElement = null;
                 requiredItem.chestRowSpan = null;
                 return lastElement;
             }
+            // 宝箱仍有缺口时，代币尚不能通过现有库存补齐，不标记为绿色。
+            if (need > 0) requiredItem.shortageDisplayElement.style.background = '';
+            const zh = MWI_Calculator_I18n.isChinese();
+            const chestName = MWI_Calculator_I18n.getItemName(pair.chestHrid);
+            const labels = zh ? ['共需开', '已有', '还需'] : ['Open', 'Owned', 'Still need'];
             if (!requiredItem.chestRowElement) {
-                const displayItem = {
-                    itemHrid: pair.chestHrid,
-                    iconHref: MWI_Calculator_Utils.getIconHrefByItemHrid(pair.chestHrid),
-                    displayName: `└ ${MWI_Calculator_I18n.getItemName(pair.chestHrid)}`,
-                };
-                this.createShortageItemDisplayElement(displayItem, null);
-                const element = displayItem.shortageDisplayElement;
+                const element = document.createElement('div');
                 element.classList.add('mwi-token-chest-row');
                 element.style.marginLeft = '16px';
                 element.style.opacity = '0.85';
+                requiredItem.chestRowSpan = labels.map(() => {
+                    const displayItem = {
+                        itemHrid: pair.chestHrid,
+                        iconHref: MWI_Calculator_Utils.getIconHrefByItemHrid(pair.chestHrid),
+                        displayName: chestName,
+                    };
+                    this.createShortageItemDisplayElement(displayItem, null);
+                    const name = displayItem.itemJumpButton.querySelector('span');
+                    const branch = document.createElement('span');
+                    branch.textContent = '└';
+                    branch.style.flex = '0 0 auto';
+                    branch.style.marginRight = '4px';
+                    const itemContainer = displayItem.itemJumpButton.firstElementChild;
+                    itemContainer.insertBefore(branch, itemContainer.firstChild);
+                    element.appendChild(displayItem.shortageDisplayElement);
+                    return { count: displayItem.shortageSpan, name,
+                        element: displayItem.shortageDisplayElement };
+                });
                 requiredItem.chestRowElement = element;
-                requiredItem.chestRowSpan = displayItem.shortageSpan;
             }
-            const text = MWI_Calculator_Utils.formatNumber(need);
-            if (requiredItem.chestRowSpan.textContent !== text) requiredItem.chestRowSpan.textContent = text;
+            [total, owned, need].forEach((count, index) => {
+                const row = requiredItem.chestRowSpan[index];
+                const text = MWI_Calculator_Utils.formatNumber(count);
+                const name = `${labels[index]} ${chestName}`;
+                if (row.count.textContent !== text) row.count.textContent = text;
+                if (row.name.textContent !== name) row.name.textContent = name;
+                row.element.style.display = index === 2 && count === 0 ? 'none' : 'flex';
+            });
             const title = `缺口 ${MWI_Calculator_Utils.formatNumber(shortage)} ÷ ${perChest}/箱 - 现有宝箱，向上取整`;
             if (requiredItem.chestRowElement.title !== title) requiredItem.chestRowElement.title = title;
             lastElement.insertAdjacentElement('afterend', requiredItem.chestRowElement);
@@ -4289,8 +4293,10 @@
                         iconHref: MWI_Calculator_Utils.getIconHrefByItemHrid(item.itemHrid),
                         displayName: MWI_Calculator_I18n.getItemName(item.itemHrid),
                     };
-                    // 继承行无需跳转，空回调避免回退到默认制作/购买跳转。
-                    this.createShortageItemDisplayElement(displayItem, isInherit ? () => {} : () => this.gotoDowngradeEnhancing(item));
+                    // 显式交给集中规则处理降级跳转和继承行不响应。
+                    displayItem.navigationKind = isInherit ? 'inherit' : 'downgrade';
+                    displayItem.navigationItem = item;
+                    this.createShortageItemDisplayElement(displayItem);
                     if (isInherit) {
                         displayItem.itemJumpButton.title = MWI_Calculator_I18n.isChinese()
                             ? '作为升级基底使用，强化等级将被继承' : 'Used as upgrade base; enhancement is inherited';
@@ -4341,6 +4347,59 @@
             }
             details.hidden = sorted.length === 0;
         }
+        //#region 特殊物品跳转规则（代币/精炼碎片、降级/继承、糖→熊）
+        // 四种代币和四种精炼碎片的宝箱映射，同时用于跳转和数量折算。
+        static getTokenChestDefs() {
+            this.tokenChestDefs ||= [
+                { token: ['奇幻代币', 'Chimerical Token'], chest: ['奇幻宝箱', 'Chimerical Chest'], perChest: 462, perChestMax: 726 },
+                { token: ['阴森代币', 'Sinister Token'], chest: ['阴森宝箱', 'Sinister Chest'], perChest: 487.5, perChestMax: 767  },
+                { token: ['秘法代币', 'Enchanted Token'], chest: ['秘法宝箱', 'Enchanted Chest'], perChest: 487.5, perChestMax: 847  },
+                { token: ['海盗代币', 'Pirate Token'], chest: ['海盗宝箱', 'Pirate Chest'], perChest: 487.5, perChestMax: 877  },
+                { token: ['阴森精炼碎片', 'Sinister Refinement Shard'], chest: ['阴森精炼宝箱', 'Sinister Refinement Chest'], perChest: 1.875, perChestMax: 1.875  },
+                { token: ['奇幻精炼碎片', 'Chimerical Refinement Shard'], chest: ['奇幻精炼宝箱', 'Chimerical Refinement Chest'], perChest: 1.875, perChestMax: 1.875  },
+                { token: ['秘法精炼碎片', 'Enchanted Refinement Shard'], chest: ['秘法精炼宝箱', 'Enchanted Refinement Chest'], perChest: 1.875, perChestMax: 1.875  },
+                { token: ['海盗精炼碎片', 'Pirate Refinement Shard'], chest: ['海盗精炼宝箱', 'Pirate Refinement Chest'], perChest: 1.875, perChestMax: 1.875  },
+            ].map(def => ({ ...def,
+                tokenHrid: '/items/' + def.token[1].toLowerCase().replaceAll(' ', '_'),
+                chestHrid: '/items/' + def.chest[1].toLowerCase().replaceAll(' ', '_')
+            }));
+            return this.tokenChestDefs;
+        }
+        // 代币/精炼碎片 → 宝箱映射（含每箱折合数量），非映射物品返回 null。
+        static getTokenChestPair(itemHrid) {
+            this.tokenChestCache ||= new Map();
+            if (this.tokenChestCache.has(itemHrid)) return this.tokenChestCache.get(itemHrid);
+            // 优先匹配稳定 ID，覆盖全部四种代币和四种精炼碎片，不依赖当前语言。
+            const defs = this.getTokenChestDefs();
+            const def = defs.find(d => d.tokenHrid === itemHrid)
+                || defs.find(d => d.token.includes(MWI_Calculator_I18n.getItemName(itemHrid)));
+            const pair = def ? { chestHrid: def.chestHrid,
+                perChest: def.perChest, perChestMax: def.perChestMax } : null;
+            this.tokenChestCache.set(itemHrid, pair);
+            return pair;
+        }
+        // 特殊规则命中后即结束；没有宝箱也不回退到市场或制作。
+        static navigateShortageItem(item, onNavigate = null) {
+            if (onNavigate) return onNavigate();
+            if (item.navigationKind === 'inherit') return false;
+            if (item.navigationKind === 'downgrade') return this.gotoDowngradeEnhancing(item.navigationItem);
+            if (this.getTokenChestPair(item.itemHrid)) return this.gotoTokenChestInventory(item.itemHrid);
+            return this.houseAcquisitionMode === 'buy'
+                ? this.TryGotoMarketplaceByRequiredItem(item)
+                : this.TryGotoActionDetailByRequiredItem(item);
+        }
+        // 特殊附加按钮：糖→软糖熊，两种卷轴状态分别计算战斗次数。
+        static getSpecialNavigationActions(item) {
+            if (item.itemHrid !== '/items/sugar'
+                && MWI_Calculator_I18n.getItemName(item.itemHrid) !== '糖') return [];
+            return [
+                { label: '熊', title: '无卷轴，77.7糖/软糖熊', perBear: 77.7, background: '#4CAF50' },
+                { label: '熊', title: '战斗卷轴，86.7糖/软糖熊', perBear: 86.7, background: '#8d6e63' },
+            ].map(option => ({ ...option, navigate: () => {
+                const count = Math.ceil((item.shortageCount || 0) / option.perBear);
+                this.gotoGummyBearCombat(count > 0 ? count : null);
+            } }));
+        }
         static gotoDowngradeEnhancing(item) {
             if (!this.canUseCharacterData()) return false;
             const game = MWI_Calculator.getGameObject() || MWI_Calculator.gameObject;
@@ -4361,85 +4420,88 @@
             else console.warn('[MWI_Calculator] 强化跳转目标已不在库存或游戏接口未就绪');
             return false;
         }
-        // 创建缺口物品元素
-        static createShortageItemDisplayElement(requiredItem, onNavigate = null) {
-            const { container, itemContainer, leftDiv, rightDiv } = MWI_Calculator_Calculator.createBaseItemDisplayItem(requiredItem);
-            // 将图标和名称包裹在可点击按钮中，按“制作/购买”枚举跳转
-            const itemJumpButton = document.createElement('button');
-            itemJumpButton.type = 'button';
-            itemJumpButton.style.display = 'flex';
-            itemJumpButton.style.alignItems = 'center';
-            // 占据数量区域之前的全部剩余宽度，同时保留图标和名称的最小可见宽度
-            itemJumpButton.style.flex = '1 1 auto';
-            itemJumpButton.style.minWidth = '0';
-            itemJumpButton.style.maxWidth = 'none';
-            itemJumpButton.style.width = 'auto';
-            itemJumpButton.style.padding = '0';
-            itemJumpButton.style.margin = '0';
-            itemJumpButton.style.border = 'none';
-            itemJumpButton.style.background = 'transparent';
-            itemJumpButton.style.color = 'inherit';
-            itemJumpButton.style.font = 'inherit';
-            itemJumpButton.style.textAlign = 'left';
-            itemJumpButton.style.cursor = 'pointer';
-            itemJumpButton.title = MWI_Calculator_I18n.isChinese() ? '点击跳转' : 'Click to navigate';
-            itemContainer.style.cursor = 'pointer';
-            itemContainer.style.width = '100%';
-            itemContainer.style.minWidth = '0';
-            const displayNameSpan = itemContainer.querySelector('span');
-            if (displayNameSpan) {
-                displayNameSpan.style.flex = '1 1 auto';
-                displayNameSpan.style.minWidth = '0';
-                displayNameSpan.style.overflow = 'hidden';
-                displayNameSpan.style.textOverflow = 'ellipsis';
-            }
-            // 基础项中的空白占位仅用于非按钮项；缺口项由跳转按钮直接填充
-            leftDiv?.remove();
-            itemJumpButton.appendChild(itemContainer);
-            container.insertBefore(itemJumpButton, container.firstChild);
-            itemJumpButton.addEventListener('click', () => {
-                if (onNavigate) { onNavigate(); return; }
-                if (MWI_Calculator_Calculator.houseAcquisitionMode === 'buy') {
-                    MWI_Calculator_Calculator.TryGotoMarketplaceByRequiredItem(requiredItem);
+        // 只调整库存内部的滚动条，禁止 scrollIntoView 连带滚动游戏外层和整页。
+        static revealInventoryItem(element) {
+            const inventory = element?.closest('[class*="Inventory_inventory__"]');
+            if (!inventory) return;
+            for (let parent = element.parentElement; parent && inventory.contains(parent); parent = parent.parentElement) {
+                if (parent.scrollHeight > parent.clientHeight
+                    && /^(auto|scroll|overlay)$/.test(getComputedStyle(parent).overflowY)) {
+                    const itemRect = element.getBoundingClientRect();
+                    const parentRect = parent.getBoundingClientRect();
+                    const top = parentRect.top + parent.clientTop;
+                    const bottom = top + parent.clientHeight;
+                    let delta = 0;
+                    if (itemRect.top < top) delta = itemRect.top - top;
+                    else if (itemRect.bottom > bottom) delta = itemRect.bottom - bottom;
+                    if (delta) parent.scrollTop += delta;
+                    return;
                 }
-                else {
-                    MWI_Calculator_Calculator.TryGotoActionDetailByRequiredItem(requiredItem);
+                if (parent === inventory) break;
+            }
+        }
+        // 代币跳转到现有宝箱的原生操作菜单，只展示菜单，不执行开箱。
+        static gotoTokenChestInventory(itemHrid) {
+            if (!this.canUseCharacterData()) return false;
+            const pair = this.getTokenChestPair(itemHrid);
+            if (!pair) return false;
+            const game = MWI_Calculator.getGameObject() || MWI_Calculator.gameObject;
+            if (this.normalizeCharacterID(game?.state?.character?.id) !== this.activeCharacterID) return false;
+            const entry = [...(game?.state?.characterItemMap || [])].find(([, item]) =>
+                item.itemHrid === pair.chestHrid && item.count > 0
+                && item.itemLocationHrid === '/item_locations/inventory');
+            if (!entry) return false;
+            const [hash] = entry;
+            const getInventoryFiber = () => {
+                const element = document.querySelector('[class*="Inventory_inventory__"]');
+                const key = Reflect.ownKeys(element || {}).find(key =>
+                    typeof key === 'string' && key.startsWith('__reactFiber$'));
+                let fiber = key ? element[key] : null;
+                while (fiber) {
+                    if (typeof fiber.stateNode?.inventoryTabChanged === 'function') return fiber;
+                    fiber = fiber.return;
+                }
+                return null;
+            };
+            const inventory = getInventoryFiber()?.stateNode;
+            const inventoryButton = this.calculatorMount?.buttons.find(button =>
+                /^(库存|物品|inventory)$/i.test(button.textContent.trim()));
+            if (!inventory || !inventoryButton) return false;
+            inventoryButton.click();
+            // 清除搜索、切回全部物品并展开分类，保证目标宝箱可见。
+            inventory.setState({ itemFilterValue: '', itemFilter: null,
+                inventoryTabKey: 'all', collapsedCategoryDict: {} }, () => {
+                if (!this.canUseCharacterData()
+                    || this.normalizeCharacterID(game.state?.character?.id) !== this.activeCharacterID
+                    || !(game.state.characterItemMap.get(hash)?.count > 0)) return;
+                const root = getInventoryFiber();
+                const pending = root?.child ? [root.child] : [];
+                const seen = new Set();
+                while (pending.length && seen.size < 50000) {
+                    const fiber = pending.pop();
+                    if (!fiber || seen.has(fiber)) continue;
+                    seen.add(fiber);
+                    const host = fiber.stateNode;
+                    if (host?.props?.hash === hash && typeof host.handleItemClicked === 'function') {
+                        host.setState({ isActionMenuOpen: true, actionAmount: 1, isConfirmingSell: false }, () => {
+                            const nodes = fiber.child ? [fiber.child] : [];
+                            while (nodes.length) {
+                                const node = nodes.pop();
+                                if (node.stateNode?.nodeType === 1) {
+                                    this.revealInventoryItem(node.stateNode);
+                                    break;
+                                }
+                                if (node.child) nodes.push(node.child);
+                                if (node.sibling) nodes.push(node.sibling);
+                            }
+                        });
+                        return;
+                    }
+                    if (fiber.child) pending.push(fiber.child);
+                    if (fiber.sibling) pending.push(fiber.sibling);
                 }
             });
-            const shortageSpan = document.createElement('span');
-            // 缺口数量显示为纯数字（不再使用背景色块）
-            shortageSpan.style.marginLeft = '4px';
-            // 数量区域保持自身宽度，跳转按钮仅占据其左侧剩余空间
-            rightDiv.style.flex = '0 0 auto';
-            rightDiv.appendChild(shortageSpan);
-            // 糖的缺口专属按钮《熊》：点击事件暂留空
-            const isSugar = requiredItem.itemHrid === '/items/sugar'
-                || MWI_Calculator_I18n.getItemName(requiredItem.itemHrid) === '糖';
-            if (isSugar) {
-                // 两种卷轴状态的每只软糖熊产糖量：无卷轴 77.7，战斗卷轴 86.7
-                const bearOptions = [
-                    { title: '无卷轴，77.7糖/软糖熊', perBear: 77.7, background: '#4CAF50' },
-                    { title: '战斗卷轴，86.7糖/软糖熊', perBear: 86.7, background: '#8d6e63' },
-                ];
-                for (const option of bearOptions) {
-                    const bearButton = document.createElement('button');
-                    bearButton.type = 'button';
-                    bearButton.textContent = '熊';
-                    bearButton.title = option.title;
-                    bearButton.style.cssText = `color:#fff;border:none;border-radius:4px;padding:2px 6px;margin-left:4px;cursor:pointer;background:${option.background}`;
-                    bearButton.addEventListener('click', event => {
-                        event.preventDefault();
-                        event.stopPropagation();
-                        // 战斗次数 = 糖缺口 / 每只软糖熊产糖量（向上取整）
-                        const count = Math.ceil((requiredItem.shortageCount || 0) / option.perBear);
-                        MWI_Calculator_Calculator.gotoGummyBearCombat(count > 0 ? count : null);
-                    });
-                    rightDiv.insertBefore(bearButton, shortageSpan);
-                }
-            }
-            requiredItem.shortageDisplayElement = container;
-            requiredItem.shortageSpan = shortageSpan;
-            requiredItem.itemJumpButton = itemJumpButton;
+            return true;
         }
         // 熊按钮：跳转到 战斗-熊熊星球-软糖熊
         // 定位策略：本地化名称反查战斗动作（/actions/combat/...），尽力校验所属区域名；
@@ -4534,6 +4596,71 @@
                 if (attempts < 15) setTimeout(fill, 200);
             };
             setTimeout(fill, 300);
+        }
+        //#endregion
+        // 创建缺口物品元素
+        static createShortageItemDisplayElement(requiredItem, onNavigate = null) {
+            const { container, itemContainer, leftDiv, rightDiv } = MWI_Calculator_Calculator.createBaseItemDisplayItem(requiredItem);
+            // 将图标和名称包裹在可点击按钮中，按“制作/购买”枚举跳转
+            const itemJumpButton = document.createElement('button');
+            itemJumpButton.type = 'button';
+            itemJumpButton.style.display = 'flex';
+            itemJumpButton.style.alignItems = 'center';
+            // 占据数量区域之前的全部剩余宽度，同时保留图标和名称的最小可见宽度
+            itemJumpButton.style.flex = '1 1 auto';
+            itemJumpButton.style.minWidth = '0';
+            itemJumpButton.style.maxWidth = 'none';
+            itemJumpButton.style.width = 'auto';
+            itemJumpButton.style.padding = '0';
+            itemJumpButton.style.margin = '0';
+            itemJumpButton.style.border = 'none';
+            itemJumpButton.style.background = 'transparent';
+            itemJumpButton.style.color = 'inherit';
+            itemJumpButton.style.font = 'inherit';
+            itemJumpButton.style.textAlign = 'left';
+            itemJumpButton.style.cursor = 'pointer';
+            itemJumpButton.title = MWI_Calculator_I18n.isChinese() ? '点击跳转' : 'Click to navigate';
+            itemContainer.style.cursor = 'pointer';
+            itemContainer.style.width = '100%';
+            itemContainer.style.minWidth = '0';
+            const displayNameSpan = itemContainer.querySelector('span');
+            if (displayNameSpan) {
+                displayNameSpan.style.flex = '1 1 auto';
+                displayNameSpan.style.minWidth = '0';
+                displayNameSpan.style.overflow = 'hidden';
+                displayNameSpan.style.textOverflow = 'ellipsis';
+            }
+            // 基础项中的空白占位仅用于非按钮项；缺口项由跳转按钮直接填充
+            leftDiv?.remove();
+            itemJumpButton.appendChild(itemContainer);
+            container.insertBefore(itemJumpButton, container.firstChild);
+            itemJumpButton.addEventListener('click', () => {
+                MWI_Calculator_Calculator.navigateShortageItem(requiredItem, onNavigate);
+            });
+            const shortageSpan = document.createElement('span');
+            // 缺口数量显示为纯数字（不再使用背景色块）
+            shortageSpan.style.marginLeft = '4px';
+            // 数量区域保持自身宽度，跳转按钮仅占据其左侧剩余空间
+            rightDiv.style.flex = '0 0 auto';
+            rightDiv.appendChild(shortageSpan);
+            // 显示层只渲染按钮，匹配条件、参数和跳转行为集中管理。
+            for (const option of this.getSpecialNavigationActions(requiredItem)) {
+                const button = document.createElement('button');
+                button.type = 'button';
+                button.textContent = option.label;
+                button.title = option.title;
+                Object.assign(button.style, { color: '#fff', border: 'none', borderRadius: '4px',
+                    padding: '2px 6px', marginLeft: '4px', cursor: 'pointer', background: option.background });
+                button.addEventListener('click', event => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    option.navigate();
+                });
+                rightDiv.insertBefore(button, shortageSpan);
+            }
+            requiredItem.shortageDisplayElement = container;
+            requiredItem.shortageSpan = shortageSpan;
+            requiredItem.itemJumpButton = itemJumpButton;
         }
         // 创建需求物品元素
         static createRequiredItemDisplayElement(requiredItem) {
@@ -4902,6 +5029,7 @@
         '/item_categories/ability_book',
         '/item_categories/equipment',
         '/item_categories/materials',
+        '/item_categories/refinement',
         '/item_categories/resource'
     ];
     MWI_Calculator_Calculator.renderTimeout = null;
@@ -5859,6 +5987,8 @@
                         return MWI_Calculator_I18n.isChinese() ? '咖啡' : 'Coffee';
                     case '/item_categories/materials':
                         return MWI_Calculator_I18n.isChinese() ? '材料' : 'Materials';
+                    case '/item_categories/refinement':
+                        return MWI_Calculator_I18n.isChinese() ? '精炼' : 'Refinement';
                 }
             }
             const resources = MWI_Calculator.gameObject?.props?.i18n?.options?.resources || {};
