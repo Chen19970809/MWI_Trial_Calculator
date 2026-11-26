@@ -686,7 +686,7 @@
             title.textContent = (mode === 'export' ? '导出到网络剪切板' : '从网络剪切板导入') + ' · 角色 ' + id;
             title.style.cssText = 'margin:0 0 12px;font-size:16px';
             const addressLabel = document.createElement('label'); addressLabel.textContent = '剪切板地址';
-            const address = document.createElement('input'); address.type = 'url'; address.placeholder = 'https://clipboard.im/myitems'; address.value = connection.address; address.autocomplete = 'off';
+            const address = document.createElement('input'); address.type = 'text'; address.inputMode = 'url'; address.placeholder = 'https://clipboard.im/'; address.value = connection.address || 'https://clipboard.im/'; address.autocomplete = 'off'; address.spellcheck = false;
             const passwordLabel = document.createElement('label'); passwordLabel.textContent = '密码';
             const password = document.createElement('input'); password.type = 'password'; password.autocomplete = 'off'; password.value = connection.password; password.placeholder = '无密码可留空；确定后按当前角色保存在本机';
             for (const [label, input] of [[addressLabel, address], [passwordLabel, password]]) {
@@ -699,9 +699,20 @@
             note.style.cssText = 'margin:12px 0;color:#bac9e6;font-size:12px';
             const status = document.createElement('div'); status.setAttribute('role', 'status'); status.style.cssText = 'white-space:pre-wrap;overflow-wrap:anywhere;margin:10px 0;color:#f5d18c';
             const actions = document.createElement('div'); actions.style.cssText = 'display:flex;gap:8px;justify-content:flex-end';
+            const openClipboard = document.createElement('button'); openClipboard.type = 'button'; openClipboard.textContent = '打开剪切板';
             const cancel = document.createElement('button'); cancel.type = 'button'; cancel.textContent = '取消';
             const confirm = document.createElement('button'); confirm.type = 'button'; confirm.textContent = '确定';
-            for (const button of [cancel, confirm]) button.style.cssText = 'border:0;border-radius:5px;padding:7px 15px;background:#344879;color:white;cursor:pointer';
+            for (const button of [openClipboard, cancel, confirm]) button.style.cssText = 'border:0;border-radius:5px;padding:7px 15px;background:#344879;color:white;cursor:pointer';
+            openClipboard.style.marginRight = 'auto';
+            openClipboard.addEventListener('click', () => {
+                try {
+                    const input = address.value.trim();
+                    const destination = input === 'https://clipboard.im/' || input === 'https://clipboard.im'
+                        ? 'https://clipboard.im/' : this.parseAddress(input).url;
+                    window.open(destination, '_blank', 'noopener,noreferrer');
+                    status.textContent = '';
+                } catch (error) { status.textContent = error.message || '剪切板地址无效'; }
+            });
             confirm.style.background = '#1976D2';
             const close = () => { controller.abort(); password.value = ''; overlay.remove(); this.dialogOpen = false; };
             cancel.addEventListener('click', close);
@@ -734,7 +745,7 @@
                 finally { confirm.disabled = false; address.disabled = false; password.disabled = false; }
             });
             for (const input of [address, password]) input.addEventListener('keydown', event => { if (event.key === 'Enter') { event.preventDefault(); confirm.click(); } });
-            actions.append(cancel, confirm); box.append(title, addressLabel, passwordLabel, note, status, actions); overlay.appendChild(box); document.body.appendChild(overlay); address.focus();
+            actions.append(openClipboard, cancel, confirm); box.append(title, addressLabel, passwordLabel, note, status, actions); overlay.appendChild(box); document.body.appendChild(overlay); address.focus(); address.setSelectionRange(address.value.length, address.value.length);
         }
     }
     class MWI_Calculator_Calculator {
@@ -3119,13 +3130,20 @@
             box.append(nameRow, guzzlingRow, searchRow, itemsList, buttonRow);
             overlay.appendChild(box);
             document.body.appendChild(overlay);
-            // 按原始实际高度翻倍，保留原宽度，且整个窗口不超过视口高度的 88%。
-            const initialHeight = box.getBoundingClientRect().height;
+            // 使用固定的初始窗口高度，编辑已有预设时也不按物品数量放大。
             const boxStyle = getComputedStyle(box);
             const verticalInsets = ['paddingTop', 'paddingBottom', 'borderTopWidth', 'borderBottomWidth']
                 .reduce((sum, property) => sum + (parseFloat(boxStyle[property]) || 0), 0);
+            box.style.height = `max(0px, calc(min(550px, 88vh) - ${verticalInsets}px))`;
+            box.style.minHeight = '0';
             box.style.maxHeight = `max(0px, calc(88vh - ${verticalInsets}px))`;
-            box.style.minHeight = `min(${Math.max(0, initialHeight * 2 - verticalInsets)}px, ${box.style.maxHeight})`;
+            box.style.flex = '0 0 auto';
+            box.style.overflowY = 'hidden';
+            box.style.display = 'flex';
+            box.style.flexDirection = 'column';
+            for (const row of [nameRow, guzzlingRow, searchRow, buttonRow]) row.style.flexShrink = '0';
+            Object.assign(itemsList.style, { flex: '1 1 0', minHeight: '0', maxHeight: 'none', overflowY: 'auto' });
+            buttonRow.style.marginTop = 'auto';
             nameInput.focus();
         }
         // 创建大类添加框：选择物品大类后一次性加入该类全部物品
@@ -4010,7 +4028,7 @@
                 if (requiredDetails.hidden !== (requiredItemCount === 0)) requiredDetails.hidden = requiredItemCount === 0;
             });
         }
-        // 代币缺口下方显示共需开启、已有和还需补充的宝箱数量。
+        // 代币缺口下方显示待开箱和缺少的宝箱数量。
         // 返回缺口清单中新的尾行元素（宝箱行或原代币行），保证后续缺口行插在其后。
         static updateTokenChestRow(requiredItem, lastElement) {
             const pair = this.getTokenChestPair(requiredItem.itemHrid);
@@ -4032,39 +4050,63 @@
             if (need > 0) requiredItem.shortageDisplayElement.style.background = '';
             const zh = MWI_Calculator_I18n.isChinese();
             const chestName = MWI_Calculator_I18n.getItemName(pair.chestHrid);
-            const labels = zh ? ['共需开', '已有', '还需'] : ['Open', 'Owned', 'Still need'];
+            const labels = zh ? ['待开箱', '缺少'] : ['To open', 'Missing'];
             if (!requiredItem.chestRowElement) {
                 const element = document.createElement('div');
                 element.classList.add('mwi-token-chest-row');
                 element.style.marginLeft = '16px';
                 element.style.opacity = '0.85';
-                requiredItem.chestRowSpan = labels.map(() => {
+                requiredItem.chestRowSpan = labels.map((label, index) => {
                     const displayItem = {
                         itemHrid: pair.chestHrid,
                         iconHref: MWI_Calculator_Utils.getIconHrefByItemHrid(pair.chestHrid),
                         displayName: chestName,
+                        navigationKind: index === 0 ? 'pending-chest' : 'missing-chest',
                     };
                     this.createShortageItemDisplayElement(displayItem, null);
                     const name = displayItem.itemJumpButton.querySelector('span');
-                    const branch = document.createElement('span');
-                    branch.textContent = '└';
-                    branch.style.flex = '0 0 auto';
-                    branch.style.marginRight = '4px';
                     const itemContainer = displayItem.itemJumpButton.firstElementChild;
-                    itemContainer.insertBefore(branch, itemContainer.firstChild);
+                    // 紧凑排列：└待开箱/└缺少 → 宝箱图标 → 数量。
+                    itemContainer.insertBefore(name, itemContainer.firstChild);
+                    Object.assign(name.style, { flex: '0 0 auto', marginLeft: '0',
+                        whiteSpace: 'nowrap', overflow: 'visible', textOverflow: 'clip' });
+                    // 左侧文字保持原位，图标相对整行居中，数量贴齐右边缘。
+                    const row = displayItem.shortageDisplayElement;
+                    row.style.position = 'relative';
+                    itemContainer.style.width = '100%';
+                    itemContainer.style.position = 'static';
+                    displayItem.itemJumpButton.style.flex = '1 1 auto';
+                    displayItem.itemJumpButton.style.position = 'static';
+                    const icon = name.nextElementSibling;
+                    Object.assign(icon.style, { position: 'absolute', left: '50%', top: '50%',
+                        transform: 'translate(-50%, -50%)', marginLeft: '0' });
+                    displayItem.shortageSpan.parentElement.style.marginLeft = 'auto';
+                    displayItem.shortageSpan.style.textAlign = 'right';
+                    displayItem.itemJumpButton.title = index === 0
+                        ? (zh ? '添加' + chestName + '-开箱到战利品' : 'Add ' + chestName + '-Open to Loot')
+                        : chestName;
+                    const cursor = index === 0 ? 'pointer' : 'default';
+                    row.style.cursor = cursor;
+                    displayItem.itemJumpButton.style.cursor = cursor;
+                    itemContainer.style.cursor = cursor;
+                    // 数字区域也使用同一规则，按钮内的点击由原处理器处理，避免重复添加。
+                    row.addEventListener('click', event => {
+                        if (!displayItem.itemJumpButton.contains(event.target)) this.navigateShortageItem(displayItem);
+                    });
                     element.appendChild(displayItem.shortageDisplayElement);
                     return { count: displayItem.shortageSpan, name,
                         element: displayItem.shortageDisplayElement };
                 });
                 requiredItem.chestRowElement = element;
             }
-            [total, owned, need].forEach((count, index) => {
+            [owned, need].forEach((count, index) => {
                 const row = requiredItem.chestRowSpan[index];
                 const text = MWI_Calculator_Utils.formatNumber(count);
-                const name = `${labels[index]} ${chestName}`;
+                const name = `└${labels[index]}`;
                 if (row.count.textContent !== text) row.count.textContent = text;
                 if (row.name.textContent !== name) row.name.textContent = name;
-                row.element.style.display = index === 2 && count === 0 ? 'none' : 'flex';
+                row.element.style.display = index === 1 && count === 0 ? 'none' : 'flex';
+                row.element.style.background = index === 0 ? MWI_Calculator_UITheme.activeHeading : '';
             });
             const title = `缺口 ${MWI_Calculator_Utils.formatNumber(shortage)} ÷ ${perChest}/箱 - 现有宝箱，向上取整`;
             if (requiredItem.chestRowElement.title !== title) requiredItem.chestRowElement.title = title;
@@ -4381,12 +4423,25 @@
         // 特殊规则命中后即结束；没有宝箱也不回退到市场或制作。
         static navigateShortageItem(item, onNavigate = null) {
             if (onNavigate) return onNavigate();
-            if (item.navigationKind === 'inherit') return false;
+            if (item.navigationKind === 'inherit' || item.navigationKind === 'missing-chest') return false;
+            if (item.navigationKind === 'pending-chest') return this.addPendingChestOpenTarget(item.itemHrid);
             if (item.navigationKind === 'downgrade') return this.gotoDowngradeEnhancing(item.navigationItem);
             if (this.getTokenChestPair(item.itemHrid)) return this.gotoTokenChestInventory(item.itemHrid);
             return this.houseAcquisitionMode === 'buy'
                 ? this.TryGotoMarketplaceByRequiredItem(item)
                 : this.TryGotoActionDetailByRequiredItem(item);
+        }
+        // 待开箱行：按点击时的实时库存添加对应开箱目标，重复点击更新数量，不累加。
+        static addPendingChestOpenTarget(chestHrid) {
+            if (!this.canUseCharacterData()) return false;
+            const count = MWI_Calculator_ItemsMap.getCount(chestHrid);
+            if (!(count > 0)) return false;
+            const targetHrid = '/open_chests/' + chestHrid.split('/').pop();
+            this.addTargetChestOpenItem(targetHrid, count);
+            const category = this.targetItemsMap.get(targetHrid)?.categoryHrid;
+            const details = this.targetItemDetailsMap.get(category);
+            if (details) details.open = true;
+            return true;
         }
         // 特殊附加按钮：糖→软糖熊，两种卷轴状态分别计算战斗次数。
         static getSpecialNavigationActions(item) {
@@ -4968,7 +5023,7 @@
     MWI_Calculator_Calculator.BUILTIN_PRESETS = [
         {
             name: '生活咖啡',
-            alertRatio: 1,
+            alertRatio: 0.1,
             items: [
                 { itemHrid: '/items/gathering_tea', count: 1000 },
                 { itemHrid: '/items/processing_tea', count: 1000 },
@@ -4977,10 +5032,10 @@
                 { itemHrid: '/items/artisan_tea', count: 1000 },
                 { itemHrid: '/items/wisdom_tea', count: 1000 },
                 { itemHrid: '/items/gourmet_tea', count: 1000 },
-                { itemHrid: '/items/alchemy_tea', count: 300 },
-                { itemHrid: '/items/catalytic_tea', count: 300 },
-                { itemHrid: '/items/enhancing_tea', count: 300 },
-                { itemHrid: '/items/blessed_tea', count: 300 },
+                { itemHrid: '/items/alchemy_tea', count: 100 },
+                { itemHrid: '/items/catalytic_tea', count: 100 },
+                { itemHrid: '/items/enhancing_tea', count: 100 },
+                { itemHrid: '/items/blessed_tea', count: 100 },
             ],
         },
         {
@@ -5017,11 +5072,12 @@
     MWI_Calculator_Calculator.requiredItemDetailsMap = new Map();
     MWI_Calculator_Calculator.itemCategoryList = [
         '/item_categories/house_rooms',
+        '/item_categories/dungeon_key',
         '/item_categories/currency',
+        '/item_categories/refinement',
         '/item_categories/loot',
         '/item_categories/key',
         '/item_categories/labyrinth',
-        "/item_categories/dungeon_key",
         '/item_categories/food',
         '/item_categories/tea',
         '/item_categories/coffee',
@@ -5029,7 +5085,6 @@
         '/item_categories/ability_book',
         '/item_categories/equipment',
         '/item_categories/materials',
-        '/item_categories/refinement',
         '/item_categories/resource'
     ];
     MWI_Calculator_Calculator.renderTimeout = null;
