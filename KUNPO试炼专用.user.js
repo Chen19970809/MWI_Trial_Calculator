@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         KUNPO试炼专用
 // @namespace    https://www.milkywayidle.com/
-// @version      1.1.4
+// @version      1.1.5
 // @description  上传等级、成就、房屋、迷宫配装、神龛到计算器
 // @author       MonsterFC、MusoAlpha、KUNPO成员测试
 // @license      MIT
@@ -24,12 +24,13 @@
 (function () {
     'use strict';
 
-    const SCRIPT_VERSION = '1.1.4';
+    const SCRIPT_VERSION = '1.1.5';
     // Performance revision for the 1.1.1 release.
     const PERFORMANCE_REVISION = '2026-09-30.1';
 
     // ── 更新日志：key = 版本号，value = 中文更新内容；发新版本时在顶部加一条即可 ──
     const CHANGELOG = {
+        '1.1.5': '1. fix bug，非KUNPO角色误上传',
         '1.1.4': '1. 修复周四上传提醒偶发不展开：补充数据就绪、跨日及返回页面检查；按角色核对上传记录；自动静默不再挡住上传提醒\n'
             + '2.内嵌全部45个技能与光环图标，移除外部图标服务器依赖；图标异常时保留提示',
         '1.1.3': '1. 周四强制打开窗口提醒成员更新配装\n'
@@ -254,7 +255,7 @@
     // 是否走 COS：① 游戏内读到的公会是 KUNPO 且未被门控拦截（与「内置默认地址」同口径）
     //             ② 共享地址里的 guild 也是 KUNPO（避免别的公会误写进这个桶）
     function useCosBackend(cfg) {
-        if (guildRestricted()) return false;
+        if (!isKunpoMember() || guildRestricted()) return false;
         return String((cfg && cfg.guild) || '').trim().toUpperCase() === GUILD_DEFAULTS.name;
     }
     function cosGetUrl(cfg) {
@@ -1794,15 +1795,12 @@
             alert('请先在「⚙ 设置」里填写正确的 JSON 获取地址（需含 bin 与 pwd）。');
             return;
         }
-        // 非 KUNPO 成员禁止把数据传进 KUNPO 共享空间：上传目标（地址里的 guild）是 KUNPO、
-        // 而游戏内公会已读到且不是 KUNPO 时阻止，提示改填自己公会的地址；
-        // 填了自己公会的地址（guild=自己公会）则不受影响。公会信息未读到时不拦截（与门控同口径）。
-        const targetGuild = String((cfg && cfg.guild) || '').trim().toUpperCase();
-        if (targetGuild === String(GUILD_DEFAULTS.name).trim().toUpperCase()
-            && guildGate.known && !isKunpoMember()) {
-            setStatus('非 KUNPO 公会，已阻止上传', 'error');
-            alert('当前游戏内公会不是 KUNPO，已阻止上传到 KUNPO 共享空间。\n'
-                + '如需上传到你所在公会的共享空间，请在「⚙ 设置」里填写你公会的 JSON 获取地址（含 guild/bin/pwd）后再试。');
+        // 公会未知时禁止向 KUNPO 上传，不依赖先前缓存的公会识别结果。
+        try {
+            assertKunpoUploadAllowed(cfg);
+        } catch (e) {
+            setStatus(e.message, 'error');
+            alert(e.message);
             return;
         }
         setStatus('正在读取云端数据…', 'idle');
@@ -2413,8 +2411,33 @@
         }
         invalidateCloudRecordCache();   // 已写入新版本，旧缓存作废
     }
+    // 保护默认共享空间：修改 URL 中的 guild 也不能绕过对默认 bin 的检查。
+    function assertKunpoUploadAllowed(cfg) {
+        const targetGuild = String((cfg && cfg.guild) || '').trim().toUpperCase();
+        let defaultBin = '';
+        try { defaultBin = new URL(decodeCalcDefaultUrl()).searchParams.get('bin') || ''; } catch (_) {}
+        const targetBin = String((cfg && cfg.binId) || '').trim();
+        const protectedTarget = targetGuild === String(GUILD_DEFAULTS.name).trim().toUpperCase()
+            || !!(defaultBin && targetBin === defaultBin);
+        if (!protectedTarget) return;
+        // 每次检查都重新读取游戏状态；读不到时不使用旧角色的缓存身份。
+        const gs = getGameState();
+        const guild = detectedGameGuild(gs);
+        const name = String(guild.name || '').trim().toUpperCase();
+        const id = Number(guild.id) || 0;
+        if (!name && !id) {
+            throw new Error('尚未确认当前角色的公会，已阻止上传到 KUNPO。请等待公会信息加载后重试。');
+        }
+        const kunpoName = String(GUILD_DEFAULTS.name).trim().toUpperCase();
+        const kunpoId = Number(GUILD_DEFAULTS.id) || 0;
+        if ((name && name !== kunpoName) || (id && id !== kunpoId)) {
+            throw new Error('当前角色不是 KUNPO 公会成员，已阻止上传到 KUNPO。其他公会请配置自己的共享空间地址。');
+        }
+        updateGuildGate(gs);
+    }
     // 真正的网络写入（不带缓存处理）
     async function cloudPutRecordRaw(cfg, rec) {
+        assertKunpoUploadAllowed(cfg); // 异步读取/加密后、发送请求前再次校验，两个通道都受保护
         if (useCosBackend(cfg)) {
             if (!getCosApiBase()) throw new Error('未配置云函数地址：请点「⚙ 设置」填写「云函数地址」');
             const body = JSON.stringify({ action: 'put', guild: cfg.guild, bin: cfg.binId, d: rec.d });

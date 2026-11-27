@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         KUNPO试炼专用极简版
 // @namespace    https://www.milkywayidle.com/
-// @version      0.0.3
+// @version      0.0.4
 // @description  上传等级、成就、房屋、迷宫配装、神龛到计算器（内置功能）
 // @author       MonsterFC、MusoAlpha、KUNPO成员测试
 // @license      MIT
@@ -23,10 +23,11 @@
 (function () {
     'use strict';
 
-    const SCRIPT_VERSION = '0.0.3';
+    const SCRIPT_VERSION = '0.0.4';
 
     // ── 更新日志：key = 版本号，value = 中文更新内容；发新版本时在顶部加一条即可 ──
     const CHANGELOG = {
+        '0.0.4': '1. fix bug，非KUNPO角色误上传',
         '0.0.3': '修复周四上传提醒偶发不展开：补充数据就绪、跨日及返回页面检查；按角色核对上传记录；自动静默不再挡住上传提醒\n'
             + '2. 内嵌全部45个技能与光环图标，移除外部图标服务器依赖；图标异常时保留提示',
         '0.0.2': '1. 周四强制打开窗口提醒成员更新配装\n'
