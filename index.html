@@ -230,6 +230,8 @@ h2 { font-size:16px; margin:10px 0 8px; color:var(--text-muted); }
 .battle-prof-option.checked { color:var(--accent); }
 .battle-prof-option.disabled { opacity:.5; cursor:not-allowed; }
 .battle-prof-count { margin-left:auto; color:var(--text-muted); font-variant-numeric:tabular-nums; }
+.battle-prof-option.no-active-prof .battle-prof-name,
+.battle-prof-option.no-active-prof .battle-prof-count { color:var(--danger); }
 .battle-prof-owner { min-width:18px; color:var(--accent); text-align:right; }
 .battle-prof-check { width:12px; flex:none; color:var(--accent); }
 .battle-prof-empty { font-size:12px; color:var(--text-faint); padding:4px 8px; white-space:nowrap; }
@@ -5608,12 +5610,26 @@ function battleProfessionOptionHtml(name, index, group, counts) {
   const n = counts.get(name) || { active: 0, total: 0 };
   const title = name + ' ' + n.active + '/' + n.total + (marks ? ' [' + marks + ']' : '');
   const click = group === 2 ? 'toggleEvenSplitProfession('+index+',event)' : 'toggleBattleProfession('+group+','+index+',event)';
-  return '<span class="battle-prof-option'+(checked ? ' checked' : '')+(disabled ? ' disabled' : '')+'" role="checkbox" aria-checked="'+checked+'" aria-disabled="'+disabled+'" title="'+escHtml(title)+'" onclick="'+click+'">'+
+  return '<span class="battle-prof-option'+(checked ? ' checked' : '')+(disabled ? ' disabled' : '')+(n.total > 0 && n.active === 0 ? ' no-active-prof' : '')+'" role="checkbox" aria-checked="'+checked+'" aria-disabled="'+disabled+'" title="'+escHtml(title)+'" onclick="'+click+'">'+
     '<span class="battle-prof-check">'+(checked ? '✓' : '')+'</span>'+
-    '<span>'+escHtml(name)+'</span><span class="battle-prof-count">'+n.active+'/'+n.total+'</span>'+
+    '<span class="battle-prof-name">'+escHtml(name)+'</span><span class="battle-prof-count">'+n.active+'/'+n.total+'</span>'+
     '<span class="battle-prof-owner">'+escHtml(marks)+'</span></span>';
 }
+// 勾选职业会重建下拉 DOM；仅在同一下拉仍展开时恢复它的滚动位置。
+function captureBattleDropdownScroll() {
+  const key = openBattleDropdown;
+  const dropdown = key && document.getElementById('battle-dropdown-' + key);
+  return dropdown ? { key: key, top: dropdown.scrollTop, left: dropdown.scrollLeft } : null;
+}
+function restoreBattleDropdownScroll(scroll) {
+  if (!scroll || openBattleDropdown !== scroll.key) return;
+  const dropdown = document.getElementById('battle-dropdown-' + scroll.key);
+  if (!dropdown) return;
+  dropdown.scrollTop = scroll.top;
+  dropdown.scrollLeft = scroll.left;
+}
 function renderBattleTrialOptions() {
+  const dropdownScroll = captureBattleDropdownScroll();
   const names = battleTrialIconNames();
   const profs = professionList();
   // 战斗试炼1 → 第二行容器，战斗试炼2 → 第三行容器。
@@ -5653,6 +5669,7 @@ function renderBattleTrialOptions() {
         });
   renderEvenSplitOptions();
   positionBattleDropdown();
+  restoreBattleDropdownScroll(dropdownScroll);
 }
 // 第四行《平均分配》：职业多选下拉；勾选的职业按《所有职业》顺序均分到战斗试炼1/2。
 function evenSplitSummary() {
@@ -5660,6 +5677,7 @@ function evenSplitSummary() {
   return t('evenSplitProfessions') + '(' + sel.length + ')' + (sel.length ? '：' + sel.join('、') : '');
 }
 function renderEvenSplitOptions() {
+  const dropdownScroll = captureBattleDropdownScroll();
   const box = document.getElementById('ds-even-split-options');
   if (!box) return;
   const profs = professionList();
@@ -5679,6 +5697,7 @@ function renderEvenSplitOptions() {
       (openBattleDropdown === key ? '<span class="battle-trial-dropdown battle-prof-dropdown" id="battle-dropdown-'+key+'">'+options+'</span>' : '')+
     '</span>'+
   '</span>';
+  restoreBattleDropdownScroll(dropdownScroll);
 }
 // 勾选/取消一个职业后重新均分；下拉保持展开。
 function toggleEvenSplitProfession(pIdx, ev) {
