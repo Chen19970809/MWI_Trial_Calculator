@@ -5582,11 +5582,11 @@ function battleProfessionCanToggle(name, group) {
   const owners = battleProfessionOwners(name);
   return !owners.length || owners.indexOf(group) >= 0;
 }
-// 总人数按角色拥有的职业统计；出战人数按当前生效职业、实际战斗位置统计。
-function battleProfessionCounts(group) {
+// 总人数按角色拥有的职业统计；出战人数与职业管理的「出战职业」一致，不依赖 BOSS 分配或排刀快照。
+function battleProfessionCounts() {
   const counts = new Map();
   (state.members || []).forEach(function(member) {
-    const current = displayMemberProfession(member);
+    const current = displayMemberProfessionRaw(member);
     const available = new Set(profListByName(member.name) || []);
     if (current) available.add(current);
     available.forEach(function(name) {
@@ -5594,11 +5594,7 @@ function battleProfessionCounts(group) {
       counts.get(name).total++;
     });
     if (!current) return;
-    const icons = displayMemberBattleIcons(member);
-    const active = group === 2
-      ? [0, 1].some(function(i) { return icons.indexOf(state.displayBattleTrialIcons[i] || 0) >= 0; })
-      : icons.indexOf(state.displayBattleTrialIcons[group] || 0) >= 0;
-    if (active) counts.get(current).active++;
+    counts.get(current).active++;
   });
   return counts;
 }
@@ -5637,7 +5633,7 @@ function renderBattleTrialOptions() {
     const box = document.getElementById('ds-battle-trial-options-' + i);
     if (!box) return;
     const sel = state.displayBattleTrialIcons[i] || 0;
-    const counts = battleProfessionCounts(i);
+    const counts = battleProfessionCounts();
     const iconKey = 'icon' + i, profKey = 'prof' + i;
     const iconOptions = BATTLE_TRIAL_ICONS.map(function(k, kIdx) {
       const active = sel === kIdx;
@@ -5681,7 +5677,7 @@ function renderEvenSplitOptions() {
   const box = document.getElementById('ds-even-split-options');
   if (!box) return;
   const profs = professionList();
-  const counts = battleProfessionCounts(2);
+  const counts = battleProfessionCounts();
   const key = 'esplit';
   const options = profs.length
     ? profs.map(function(p, pIdx) {
